@@ -1,19 +1,19 @@
 {
-  "name": "igreen-autoflow-webhook",
+  "name": "igreen-autoflow-server",
   "version": "1.0.0",
-  "description": "Motor de Inteligência Artificial para leitura de faturas iGreen Energy",
+  "description": "Servidor automático para processamento de faturas iGreen",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
-  "author": "Luiz Jorge",
-  "license": "ISC",
   "dependencies": {
-    "axios": "^1.6.7",
     "express": "^4.18.2",
+    "axios": "^1.6.7",
     "firebase-admin": "^12.0.0"
   },
   "engines": {
     "node": ">=18.0.0"
-  }
+  },
+  "author": "Luiz Jorge",
+  "license": "ISC"
 }
