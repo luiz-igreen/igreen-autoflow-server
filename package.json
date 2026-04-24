@@ -1,7 +1,7 @@
 {
   "name": "igreen-autoflow-server",
   "version": "1.0.0",
-  "description": "Servidor automático para processamento de faturas iGreen",
+  "description": "Servidor IA para faturas iGreen",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
