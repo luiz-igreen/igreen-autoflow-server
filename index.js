@@ -12,10 +12,16 @@ app.post('/webhook/igreen', async (req, res) => {
   if (data.fromMe) return res.status(200).send("Ignored");
 
   const phone = data.phone;
+  const tipoReal = data.type; // <-- NOVO: Pega o tipo exato que a Z-API manda
   const isImage = data.type === 'image';
   const isPDF = data.type === 'document';
 
-  console.log(`[LOG] Mensagem de ${phone} | Imagem: ${isImage} | PDF: ${isPDF}`);
+  // Log Detetive Melhorado
+  console.log(`[LOG] Mensagem de ${phone} | TIPO RECEBIDO: ${tipoReal} | Imagem: ${isImage} | PDF: ${isPDF}`);
+
+  if (!isImage && !isPDF) {
+      console.log(`[AVISO] A mensagem chegou, mas a Z-API classificou como '${tipoReal}', por isso o robô ignorou.`);
+  }
 
   if (isImage || isPDF) {
     console.log(`[IA] Iniciando análise de fatura do cliente ${phone}...`);
@@ -35,7 +41,7 @@ async function enviarMensagem(phone, message) {
   const url = `https://api.z-api.io/instances/${instance}/token/${token}/send-text`;
   
   try {
-    // A MÁGICA AQUI: Limpa o número, remove espaços, sinais de + ou traços. Deixa só os números!
+    // A MÁGICA AQUI: Limpa o número
     const numeroLimpo = String(phone).replace(/\D/g, ''); 
     console.log(`[Z-API] A tentar responder para o número: ${numeroLimpo}`);
     
@@ -49,7 +55,6 @@ async function enviarMensagem(phone, message) {
     console.log(`[Z-API] MÁGICA FEITA! Mensagem enviada com sucesso.`);
     
   } catch (e) { 
-    // Se ainda der erro, vai imprimir o motivo EXATO na tela preta
     console.error("Erro Zap Detalhado:", e.response ? JSON.stringify(e.response.data) : e.message); 
   }
 }
