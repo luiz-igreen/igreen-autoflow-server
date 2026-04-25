@@ -4,22 +4,15 @@ const axios = require('axios');
 const app = express();
 app.use(express.json());
 
-// Rota principal do Webhook (O "Ouvido" do Robô)
+// A SUA CHAVE DA IA (Deve ser colocada no Render depois)
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+
 app.post('/webhook/igreen', async (req, res) => {
   const data = req.body;
-  
-  // 1. Resposta imediata: Essencial para a Z-API não ficar a repetir a mesma mensagem
-  res.status(200).send("OK");
+  res.status(200).send("OK"); // Corta o spam da Z-API
 
-  // 2. A CAMPAINHA: Isso vai imprimir TUDO o que chegar na tela preta
-  console.log(`\n🔔 [CAMPAINHA] A Z-API enviou dados!`);
-  console.log(`   -> Tipo: ${data.type || 'Desconhecido'}`);
-  console.log(`   -> Telefone: ${data.phone || 'Sem número'}`);
-  console.log(`   -> De mim (fromMe): ${data.fromMe}`);
-
-  // 3. FILTRO DE SEGURANÇA: Ignora recibos de entrega e mensagens suas
-  if (data.fromMe || data.type === 'ReceivedCallback' || data.type === 'DeliveryCallback' || data.type === 'ReadCallback' || data.type === 'MessageStatus' || data.type === 'PresenceCallback') {
-      console.log(`   [SILENCIADO] Era apenas um recibo do sistema. Ignorado.`);
+  // Filtro: Ignora recibos, status e mensagens suas
+  if (data.fromMe || data.type === 'ReceivedCallback' || data.type === 'DeliveryCallback' || data.type === 'ReadCallback' || data.type === 'MessageStatus') {
       return; 
   }
 
@@ -28,41 +21,78 @@ app.post('/webhook/igreen', async (req, res) => {
   const isPDF = data.type === 'document' || data.isDocument === true;
 
   if (isImage || isPDF) {
-    console.log(`\n📸 [SUCESSO] FATURA DETETADA! Cliente: ${phone}.`);
-    console.log(`   [IA] A preparar resposta automática...`);
+    console.log(`\n📸 [NOVA FATURA] Recebida de: ${phone}`);
+    console.log(`🧠 [IA] Iniciando Leitura Avançada (Imagem/PDF)...`);
     
-    // O Robô responde
-    await enviarMensagem(phone, "Recebi a sua fatura! 📄 Estou a analisá-la agora mesmo com a nossa Inteligência Artificial...");
-  } else {
-    console.log(`   [IGNORADO] Mensagem recebida, mas não é fatura (Tipo: ${data.type}).`);
+    await enviarMensagem(phone, "Recebi o seu documento! 📄 A nossa Inteligência Artificial está a ler os dados para calcular o seu desconto. Aguarde uns segundos...");
+
+    try {
+      // 1. Pega a URL da Imagem ou PDF que a Z-API enviou
+      const mediaUrl = data.image?.imageUrl || data.document?.documentUrl;
+      
+      // 2. Faz o download do arquivo
+      const fileResponse = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
+      const base64Data = Buffer.from(fileResponse.data, 'binary').toString('base64');
+      const mimeType = isPDF ? "application/pdf" : "image/jpeg";
+
+      // 3. Acorda a IA (Gemini) e manda ela ler tudo, mesmo cortado
+      const analise = await analisarComIA(base64Data, mimeType);
+      
+      console.log(`✅ [IA RESULTADO]:`, analise);
+
+      // 4. O Robô toma a decisão e responde ao cliente
+      if (analise.aprovado) {
+        const msgAprovado = `🎉 *Parabéns, ${analise.nome.split(' ')[0]}!*\n\nA nossa IA leu a sua fatura (Consumo: ${analise.consumo} kWh).\nVocê foi *APROVADO* para receber o desconto na conta de luz! ⚡\n\nO consultor Luiz Jorge vai gerar o seu termo de adesão em breve.`;
+        await enviarMensagem(phone, msgAprovado);
+      } else {
+        const msgRecusado = `Olá ${analise.nome.split(' ')[0]},\n\nA nossa IA analisou a fatura. O consumo identificado foi de ${analise.consumo} kWh.\nNo momento, para a sua região, exigimos um mínimo de 150 kWh para aplicar o desconto. 😔\nFicaremos com o seu contacto para futuras campanhas!`;
+        await enviarMensagem(phone, msgRecusado);
+      }
+
+    } catch (erro) {
+      console.error("❌ ERRO NA IA:", erro.message);
+      await enviarMensagem(phone, "Tive uma dificuldade em ler esta imagem. Pode tentar enviar uma foto mais nítida ou o PDF original, por favor? 🤖");
+    }
   }
 });
 
-// FUNÇÃO PARA O ROBÔ FALAR NO WHATSAPP VIA Z-API
+// MOTOR DA INTELIGÊNCIA ARTIFICIAL (GEMINI)
+async function analisarComIA(base64, mimeType) {
+  if (!GEMINI_API_KEY) throw new Error("Chave do Gemini não configurada no Render!");
+  
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
+  
+  const prompt = `
+    Aja como um auditor especialista em contas de energia.
+    Leia este documento (pode estar cortado ou bagunçado).
+    Extraia as seguintes informações e devolva APENAS um JSON válido:
+    1. "nome": Nome do titular da conta.
+    2. "consumo": O consumo em kWh (se tiver histórico, calcule a média. Se não, pegue o atual). Apenas o número.
+    3. "aprovado": true se o consumo for MAIOR ou IGUAL a 150, false se for menor.
+    
+    Exemplo de saída: {"nome": "João da Silva", "consumo": 180, "aprovado": true}
+  `;
+
+  const payload = {
+    contents: [{
+      parts: [{ text: prompt }, { inlineData: { mimeType: mimeType, data: base64 } }]
+    }],
+    generationConfig: { responseMimeType: "application/json" }
+  };
+
+  const resposta = await axios.post(url, payload);
+  return JSON.parse(resposta.data.candidates[0].content.parts[0].text);
+}
+
+// FUNÇÃO PARA ENVIAR MENSAGEM (Z-API)
 async function enviarMensagem(phone, message) {
   const instance = "3F14E2A7F66AC2180C0BBA4D31290A14";
   const token = "88F232A54C5DC27793994637";
   const url = `https://api.z-api.io/instances/${instance}/token/${token}/send-text`;
-  
-  try {
-    const numeroLimpo = String(phone).replace(/\D/g, ''); 
-    console.log(`   [Z-API] A responder para o número: ${numeroLimpo}`);
-    
-    await axios.post(url, { 
-      phone: numeroLimpo, 
-      message: String(message) 
-    }, {
-      headers: { 'Content-Type': 'application/json' }
-    });
-    
-    console.log(`   [Z-API] ✅ MÁGICA FEITA! Mensagem enviada pelo robô.`);
-  } catch (e) { 
-    console.error("   [ERRO Z-API]:", e.response ? JSON.stringify(e.response.data) : e.message); 
-  }
+  const numeroLimpo = String(phone).replace(/\D/g, ''); 
+  await axios.post(url, { phone: numeroLimpo, message: String(message) }, { headers: { 'Content-Type': 'application/json' } });
 }
 
-// LIGA O MOTOR DO SERVIDOR
-const port = process.env.PORT || 10000;
-app.listen(port, () => {
-  console.log(`\n🚀 Motor iGreen com CAMPAINHA LIGADO na porta ${port}!`);
-});
+app.listen(process.env.PORT || 10000, () => {
+  console.log(`\n🤖 MOTOR DE IA DEFINITIVO LIGADO!`);
+});  
