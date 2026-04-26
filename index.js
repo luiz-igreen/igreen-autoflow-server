@@ -8,25 +8,30 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 
 app.post('/webhook/igreen', async (req, res) => {
   const data = req.body;
+  
+  // Resposta imediata para não travar a Z-API
   res.status(200).send("OK"); 
 
-  // 🚨 RADAR ABSOLUTO: Imprime TUDO antes de qualquer filtro!
-  console.log(`\n🚨 [RADAR Z-API] Tipo: ${data.type || 'N/A'} | DeMim (fromMe): ${data.fromMe} | Fone: ${data.phone || 'N/A'}`);
+  // 🚨 O NOVO RADAR RAIO-X: Imprime o código completo (DNA) da mensagem!
+  console.log(`\n=========================================`);
+  console.log(`🚨 [RAIO-X Z-API] PACOTE RECEBIDO:`);
+  console.log(JSON.stringify(data, null, 2));
+  console.log(`=========================================\n`);
 
-  // Filtro (Alterado TEMPORARIAMENTE para permitir testar do seu próprio telemóvel Comercial)
-  // A trava "data.fromMe" foi removida para você poder mandar foto para si mesmo!
+  // Filtro
   if (data.type === 'ReceivedCallback' || data.type === 'DeliveryCallback' || data.type === 'ReadCallback' || data.type === 'MessageStatus') {
-      console.log(`   -> 🛑 SILENCIADO: Recibo de sistema.`);
+      console.log(`   -> 🛑 SILENCIADO PELO SISTEMA: Era apenas um recibo.`);
       return; 
   }
 
   const phone = data.phone;
-  const isImage = data.type === 'image' || data.isImage === true || data.type === 'photo';
-  const isPDF = data.type === 'document' || data.isDocument === true;
+  // Deteta imagens de várias formas diferentes (para o caso de a Z-API mudar o formato)
+  const isImage = data.type === 'image' || data.isImage === true || data.type === 'photo' || (data.image && data.image.imageUrl);
+  const isPDF = data.type === 'document' || data.isDocument === true || (data.document && data.document.documentUrl);
 
   if (isImage || isPDF) {
     console.log(`\n📸 [NOVA FATURA] Recebida de: ${phone}`);
-    console.log(`🧠 [IA] Iniciando Leitura Avançada (Imagem/PDF)...`);
+    console.log(`🧠 [IA] Iniciando Leitura Avançada...`);
     
     await enviarMensagem(phone, "Recebi o seu documento! 📄 A nossa Inteligência Artificial está a ler os dados para calcular o seu desconto. Aguarde uns segundos...");
 
@@ -52,8 +57,10 @@ app.post('/webhook/igreen', async (req, res) => {
       console.error("❌ ERRO NA IA:", erro.message);
       await enviarMensagem(phone, "Tive uma dificuldade em ler esta imagem. Pode tentar enviar uma foto mais nítida ou o PDF original, por favor? 🤖");
     }
+  } else if (data.text) {
+    console.log(`   -> [TEXTO RECEBIDO] Alguém enviou texto: "${data.text.message}"`);
   } else {
-    console.log(`   -> [IGNORADO] Não é uma fatura (Tipo: ${data.type})`);
+    console.log(`   -> [IGNORADO] Não é uma fatura.`);
   }
 });
 
@@ -91,5 +98,5 @@ async function enviarMensagem(phone, message) {
 }
 
 app.listen(process.env.PORT || 10000, () => {
-  console.log(`\n🤖 MOTOR DE IA DEFINITIVO LIGADO COM RADAR!`);
+  console.log(`\n🤖 MOTOR DE IA LIGADO COM RAIO-X!`);
 });
