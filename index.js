@@ -1,281 +1,334 @@
-const express = require('express');
-const axios = require('axios');
-const admin = require('firebase-admin');
+import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, query, onSnapshot, orderBy } from 'firebase/firestore';
+import { Search, Download, Database, Leaf, Zap, FileText, CheckCircle, Mic, Terminal, Bot } from 'lucide-react';
 
-const app = express();
-app.use(express.json());
+// Configuração do Firebase
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+  apiKey: "AIzaSyB4bGHVNGOmfJmyKhHJVL5csnr1twy2uhQ",
+  authDomain: "igreen-autoflow.firebaseapp.com",
+  projectId: "igreen-autoflow",
+  storageBucket: "igreen-autoflow.firebasestorage.app",
+  messagingSenderId: "1074994206249",
+  appId: "1:1074994206249:web:41dec2e150e137db11ae38"
+};
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'igreen-autoflow-v4';
 
-// Conexão segura com o Banco de Dados (Firestore)
-try {
-  const firebaseConfig = process.env.FIREBASE_CONFIG ? JSON.parse(process.env.FIREBASE_CONFIG) : null;
-  if (firebaseConfig) {
-    if (admin.apps.length === 0) {
-      admin.initializeApp({ credential: admin.credential.cert(firebaseConfig) });
-    }
-    console.log("✅ Banco de Dados conectado com sucesso!");
-  } else {
-    console.log("⚠️ Banco de Dados aguardando credenciais (FIREBASE_CONFIG).");
-  }
-} catch (e) {
-  console.error("Erro na base de dados:", e.message);
-}
-
-app.post('/webhook/igreen', async (req, res) => {
-  const data = req.body;
-  res.status(200).send("OK"); 
-
-  const phone = data.phone;
-  // Deteta se há uma imagem ou PDF, superando os bloqueios da Z-API
-  const isImage = data.type === 'image' || data.isImage === true || data.type === 'photo' || (data.image && data.image.imageUrl);
-  const isPDF = data.type === 'document' || data.isDocument === true || (data.document && data.document.documentUrl);
-
-  // IGNORA recibos SOMENTE se eles não trouxerem nenhuma foto escondida
-  if (!isImage && !isPDF && (data.type === 'ReceivedCallback' || data.type === 'DeliveryCallback' || data.type === 'ReadCallback' || data.type === 'MessageStatus' || data.type === 'PresenceCallback')) {
-      return; 
-  }
-
-  console.log(`\n=========================================`);
-  console.log(`📩 NOVA FATURA DE: ${phone} | TIPO: ${data.type}`);
+export default function DashboardPlanilha() {
+  const [user, setUser] = useState(null);
+  const [activeTab, setActiveTab] = useState('AUDITORIA_IGREEN');
+  const [searchTerm, setSearchTerm] = useState("");
   
-  if (isImage || isPDF) {
-    console.log(`📸 Documento detectado. Iniciando extração COMPLETA de dados...`);
-    
-    // 1. MENSAGEM INICIAL (TEXTO + VOZ)
-    const txtInicial = "Recebi a sua fatura! 📄 A nossa Inteligência Artificial está a fazer a auditoria completa dos seus dados para o sistema iGreen. Aguarde um instante...";
-    const vozInicial = "Olá! Recebi a sua fatura. A nossa Inteligência Artificial está fazendo a auditoria completa dos seus dados para o sistema i Green. Aguarde só um instante.";
-    
-    await enviarMensagem(phone, txtInicial);
-    await enviarAudio(phone, await gerarAudioGemini(vozInicial));
+  // Estados para as 4 coleções (Abas)
+  const [leads, setLeads] = useState([]);
+  const [historicoVoz, setHistoricoVoz] = useState([]);
+  const [filaRpa, setFilaRpa] = useState([]);
+  const [debugZapi, setDebugZapi] = useState([]);
 
-    try {
-      let mediaUrl = "";
-      if (isImage && data.image && data.image.imageUrl) mediaUrl = data.image.imageUrl;
-      else if (isPDF && data.document && data.document.documentUrl) mediaUrl = data.document.documentUrl;
-      else if (data.link) mediaUrl = data.link;
-
-      if (!mediaUrl) throw new Error("A Z-API não enviou o link do arquivo.");
-
-      const fileResponse = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
-      const base64Data = Buffer.from(fileResponse.data, 'binary').toString('base64');
-      const mimeType = isPDF ? "application/pdf" : "image/jpeg";
-
-      // Extrai os dados EXATAMENTE como na sua planilha antiga
-      const analise = await analisarComIA(base64Data, mimeType);
-      console.log(`✅ AUDITORIA CONCLUÍDA:`, JSON.stringify(analise, null, 2));
-
-      // SALVA NO BANCO DE DADOS APENAS SE FOR 100% ELEGÍVEL
-      if (analise.ELEGIVEL && admin.apps.length > 0) {
-          const db = admin.firestore();
-          await db.collection('leads').doc(phone).set({
-              DATA_PROCESSAMENTO: admin.firestore.FieldValue.serverTimestamp(),
-              STATUS_CADASTRO: 'NOVO',
-              TELEFONE: phone,
-              NOME_CLIENTE: analise.NOME_CLIENTE || "",
-              CPF: analise.CPF || "",
-              CNPJ: analise.CNPJ || "",
-              CEP: analise.CEP || "",
-              ENDERECO: analise.ENDERECO || "",
-              ESTADO: analise.ESTADO || "",
-              DISTRIBUIDORA: analise.DISTRIBUIDORA || "",
-              TIPO_LIGACAO: analise.TIPO_LIGACAO || "",
-              UC: analise.UC || "",
-              VALOR_FATURA: analise.VALOR_FATURA || 0,
-              ELEGIVEL: true,
-              MEDIA_CONSUMO: analise.MEDIA_CONSUMO || 0,
-              LINK_FATURA: mediaUrl,
-              CONSUMO_MES_1: analise.CONSUMO_MES_1 || 0,
-              CONSUMO_MES_2: analise.CONSUMO_MES_2 || 0,
-              CONSUMO_MES_3: analise.CONSUMO_MES_3 || 0,
-              CONSUMO_MES_4: analise.CONSUMO_MES_4 || 0,
-              CONSUMO_MES_5: analise.CONSUMO_MES_5 || 0,
-              CONSUMO_MES_6: analise.CONSUMO_MES_6 || 0
-          }, { merge: true });
-          console.log(`💾 Cliente ELEGÍVEL! Dados salvos no Cofre (Firestore) com sucesso!`);
-      } else if (!analise.ELEGIVEL) {
-          console.log(`❌ Cliente RECUSADO pelo motivo: ${analise.MOTIVO_RECUSA}. Os dados NÃO foram salvos no Banco.`);
-      }
-
-      // 2. RESPOSTA FINAL AO CLIENTE (TEXTO + VOZ)
-      const primeiroNome = analise.NOME_CLIENTE ? analise.NOME_CLIENTE.split(' ')[0] : "Cliente";
-
-      if (analise.ELEGIVEL) {
-        const txtAprovado = `🎉 *Parabéns, ${primeiroNome}!*\n\nA nossa IA concluiu a auditoria da sua UC (${analise.UC}). O seu consumo médio é de ${analise.MEDIA_CONSUMO} kWh.\n\nVocê foi *APROVADO* para receber o desconto na conta de luz da ${analise.DISTRIBUIDORA}! ⚡\n\nO consultor Luiz Jorge vai gerar o seu termo de adesão em breve.`;
-        const vozAprovado = `Parabéns, ${primeiroNome}! A nossa Inteligência Artificial concluiu a auditoria da sua conta. O seu consumo médio é de ${analise.MEDIA_CONSUMO} quilowatts-hora. Você foi aprovado para receber o desconto na conta de luz da ${analise.DISTRIBUIDORA}! O consultor Luiz Jorge vai gerar o seu termo de adesão em breve.`;
-        
-        await enviarMensagem(phone, txtAprovado);
-        await enviarAudio(phone, await gerarAudioGemini(vozAprovado));
-
-      } else {
-        const txtRecusado = `Olá ${primeiroNome},\n\nA nossa IA analisou a sua fatura. Infelizmente, no momento, ela não atende aos critérios da iGreen.\n\n*Motivo:* ${analise.MOTIVO_RECUSA}\n\nFicaremos com o seu contacto para futuras campanhas!`;
-        const vozRecusado = `Olá, ${primeiroNome}. A nossa Inteligência Artificial analisou a sua fatura. Infelizmente, no momento, ela não atende aos critérios da i Green. O motivo é: ${analise.MOTIVO_RECUSA}. Ficaremos com o seu contato para futuras campanhas. Um grande abraço!`;
-        
-        await enviarMensagem(phone, txtRecusado);
-        await enviarAudio(phone, await gerarAudioGemini(vozRecusado));
-      }
-
-    } catch (erro) {
-      console.error("❌ ERRO NO PROCESSAMENTO:", erro.message);
-      const txtErro = "Tive uma dificuldade em ler esta imagem. Pode tentar enviar uma foto mais nítida ou o PDF original, por favor?";
-      const vozErro = "Puxa, tive uma dificuldade em ler esta imagem. Você poderia tentar enviar uma foto com mais luz ou o arquivo em PDF original, por favor?";
-      
-      await enviarMensagem(phone, txtErro);
-      await enviarAudio(phone, await gerarAudioGemini(vozErro));
-    }
-  }
-});
-
-// MOTOR DA INTELIGÊNCIA ARTIFICIAL (GEMINI VISION)
-async function analisarComIA(base64, mimeType) {
-  if (!GEMINI_API_KEY) throw new Error("Chave do Gemini não configurada!");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
-  
-  const prompt = `
-    Aja como um auditor sênior de contas de energia.
-    Leia a fatura anexa e extraia todos os dados abaixo.
-    Devolva APENAS um JSON válido, usando exatamente estas chaves. Se não achar algo, use string vazia "" ou número 0.
-    
-    {
-      "NOME_CLIENTE": "Nome completo do titular da conta",
-      "CPF": "Apenas números do CPF (se for pessoa física)",
-      "CNPJ": "Apenas números do CNPJ (se for empresa)",
-      "CEP": "Apenas números do CEP da instalação",
-      "ENDERECO": "Rua, Número, Bairro, Cidade",
-      "ESTADO": "Sigla do estado (Ex: AL, MG, SP)",
-      "DISTRIBUIDORA": "Nome da concessionária (Ex: EQUATORIAL, CEMIG)",
-      "TIPO_LIGACAO": "MONOFÁSICO, BIFÁSICO ou TRIFÁSICO",
-      "UC": "Número da Unidade Consumidora / Instalação / Código do Cliente",
-      "VALOR_FATURA": 0.00 (Total a pagar em formato numérico),
-      "MEDIA_CONSUMO": 0 (Média de consumo em kWh do histórico),
-      "CONSUMO_MES_1": 0 (Consumo em kWh do mês mais recente no histórico),
-      "CONSUMO_MES_2": 0 (Consumo em kWh do mês anterior),
-      "CONSUMO_MES_3": 0 (Consumo em kWh de 3 meses atrás),
-      "CONSUMO_MES_4": 0,
-      "CONSUMO_MES_5": 0,
-      "CONSUMO_MES_6": 0,
-      "ELEGIVEL": true ou false,
-      "MOTIVO_RECUSA": "Se ELEGIVEL for false, diga o motivo de forma curta. Se true, deixe vazio."
-    }
-
-    REGRAS RÍGIDAS PARA "ELEGIVEL" ser true (Deve passar em TODAS):
-    1. Consumo/Média: Monofásico >= 130 kWh, Bifásico >= 150 kWh, Trifásico >= 200 kWh.
-    2. Titularidade: O nome NÃO pode conter "ESPÓLIO", "FALECIDO", "SUCESSÃO" ou "HERDEIROS".
-    3. Tarifa Social: NÃO pode ter benefício de Tarifa Social / Baixa Renda.
-    4. Grupo Tarifário: DEVE ser Grupo B (Baixa Tensão).
-    5. Geração Própria: NÃO pode ter Geração Distribuída (energia injetada).
-  `;
-
-  const payload = {
-    contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: mimeType, data: base64 } }] }],
-    generationConfig: { responseMimeType: "application/json" }
-  };
-
-  const resposta = await axios.post(url, payload);
-  return JSON.parse(resposta.data.candidates[0].content.parts[0].text);
-}
-
-// =========================================================================
-// MOTOR DE VOZ (GEMINI TTS) - TRANSFORMA TEXTO EM ÁUDIO HUMANO E CONVERTE PARA WAV
-// =========================================================================
-async function gerarAudioGemini(texto) {
-  if (!GEMINI_API_KEY) return null;
-  console.log(`🎙️ Gerando áudio: "${texto.substring(0, 30)}..."`);
-  
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${GEMINI_API_KEY}`;
-  
-  const payload = {
-    contents: [{ parts: [{ text: texto }] }],
-    generationConfig: {
-      responseModalities: ["AUDIO"],
-      speechConfig: {
-        voiceConfig: {
-          prebuiltVoiceConfig: { voiceName: "Kore" } // "Kore" é uma voz clara e agradável
+  // 1. Autenticação Segura
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
         }
+      } catch (error) {
+        console.error("Erro na autenticação:", error);
       }
-    },
-    model: "gemini-2.5-flash-preview-tts"
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  // 2. Busca de Dados em Tempo Real para TODAS as Abas
+  useEffect(() => {
+    if (!user) return;
+    
+    // Inscrição: AUDITORIA_IGREEN (leads)
+    const unsubLeads = onSnapshot(query(collection(db, 'artifacts', appId, 'public', 'data', 'leads')), 
+      (snapshot) => setLeads(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a,b) => (b.DATA_PROCESSAMENTO?.toMillis() || 0) - (a.DATA_PROCESSAMENTO?.toMillis() || 0))),
+      (error) => console.error("Erro Leads:", error)
+    );
+
+    // Inscrição: HISTORICO_VOZ
+    const unsubVoz = onSnapshot(query(collection(db, 'artifacts', appId, 'public', 'data', 'historico_voz')), 
+      (snapshot) => setHistoricoVoz(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a,b) => (b.DATA_HORA?.toMillis() || 0) - (a.DATA_HORA?.toMillis() || 0))),
+      (error) => console.error("Erro Voz:", error)
+    );
+
+    // Inscrição: FILA_RPA_IGREEN
+    const unsubRpa = onSnapshot(query(collection(db, 'artifacts', appId, 'public', 'data', 'fila_rpa')), 
+      (snapshot) => setFilaRpa(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a,b) => (b.DATA_INTEGRACAO?.toMillis() || 0) - (a.DATA_INTEGRACAO?.toMillis() || 0))),
+      (error) => console.error("Erro RPA:", error)
+    );
+
+    // Inscrição: DEBUG_ZAPI
+    const unsubDebug = onSnapshot(query(collection(db, 'artifacts', appId, 'public', 'data', 'debug_zapi')), 
+      (snapshot) => setDebugZapi(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a,b) => (b.DATA?.toMillis() || 0) - (a.DATA?.toMillis() || 0))),
+      (error) => console.error("Erro Debug:", error)
+    );
+    
+    return () => { unsubLeads(); unsubVoz(); unsubRpa(); unsubDebug(); };
+  }, [user]);
+
+  const formatDate = (timestamp) => {
+    if (!timestamp) return "-";
+    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+    return date.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
   };
 
-  try {
-    const resposta = await axios.post(url, payload);
-    const pcmBase64 = resposta.data.candidates[0].content.parts[0].inlineData.data;
-    
-    // O Gemini devolve áudio em formato PCM bruto (16-bit, 24kHz Mono).
-    // Para o WhatsApp tocar, precisamos colocar um "cabeçalho WAV" neste áudio.
-    const pcmBuffer = Buffer.from(pcmBase64, 'base64');
-    const wavBuffer = pcmToWav(pcmBuffer, 24000);
-    
-    return `data:audio/wav;base64,${wavBuffer.toString('base64')}`;
-  } catch (error) {
-    console.error("❌ ERRO NA GERAÇÃO DE VOZ:", error.message);
-    return null;
-  }
+  // Funções de Renderização das Abas
+  const renderAuditoria = () => {
+    const filtrados = leads.filter(l => (l.NOME_CLIENTE || "").toLowerCase().includes(searchTerm.toLowerCase()) || (l.UC || "").includes(searchTerm));
+    return (
+      <div className="overflow-x-auto pb-4">
+        <table className="w-full text-left whitespace-nowrap">
+          <thead>
+            <tr className="bg-slate-100 border-b border-slate-200 text-[10px] font-black uppercase tracking-wider text-slate-600">
+              <th className="p-3 sticky left-0 bg-slate-100 z-10 shadow-[1px_0_0_#e2e8f0]">DATA_PROCESSAMENTO</th>
+              <th className="p-3">STATUS_CADASTRO</th>
+              <th className="p-3">TELEFONE</th>
+              <th className="p-3">NOME_CLIENTE</th>
+              <th className="p-3">MASCARA_CPF</th>
+              <th className="p-3">CPF</th>
+              <th className="p-3">MASCARA_CNPJ</th>
+              <th className="p-3">CNPJ</th>
+              <th className="p-3">DATA_NASCIMENTO</th>
+              <th className="p-3">EMAIL</th>
+              <th className="p-3">CEP</th>
+              <th className="p-3">ENDERECO</th>
+              <th className="p-3">ENDERECO_NUMERO</th>
+              <th className="p-3">ESTADO</th>
+              <th className="p-3">DISTRIBUIDORA</th>
+              <th className="p-3">TIPO_LIGACAO</th>
+              <th className="p-3">UC</th>
+              <th className="p-3">VALOR_FATURA</th>
+              <th className="p-3">ELEGIVEL</th>
+              <th className="p-3">MEDIA_CONSUMO</th>
+              <th className="p-3 text-center">LINK_FATURA</th>
+              <th className="p-3 text-center">LINK_DOC_FRENTE</th>
+              <th className="p-3 text-center">LINK_DOC_VERSO</th>
+              {[...Array(12)].map((_, i) => <th key={i} className="p-3 text-center">CONSUMO_MES_{i+1}</th>)}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {filtrados.map((lead) => (
+              <tr key={lead.id} className="hover:bg-emerald-50/50 text-[11px] text-slate-700">
+                <td className="p-3 sticky left-0 bg-white shadow-[1px_0_0_#f1f5f9] whitespace-nowrap">{formatDate(lead.DATA_PROCESSAMENTO)}</td>
+                <td className="p-3 font-bold text-emerald-600">{lead.STATUS_CADASTRO || "NOVO"}</td>
+                <td className="p-3">{lead.TELEFONE || "-"}</td>
+                <td className="p-3 font-bold">{lead.NOME_CLIENTE || "-"}</td>
+                <td className="p-3 font-mono">{lead.MASCARA_CPF || "-"}</td>
+                <td className="p-3 font-mono">{lead.CPF || "-"}</td>
+                <td className="p-3 font-mono">{lead.MASCARA_CNPJ || "-"}</td>
+                <td className="p-3 font-mono">{lead.CNPJ || "-"}</td>
+                <td className="p-3">{lead.DATA_NASCIMENTO || "-"}</td>
+                <td className="p-3 text-blue-600">{lead.EMAIL || "-"}</td>
+                <td className="p-3">{lead.CEP || "-"}</td>
+                <td className="p-3 truncate max-w-[150px]">{lead.ENDERECO || "-"}</td>
+                <td className="p-3">{lead.ENDERECO_NUMERO || "-"}</td>
+                <td className="p-3">{lead.ESTADO || "-"}</td>
+                <td className="p-3">{lead.DISTRIBUIDORA || "-"}</td>
+                <td className="p-3">{lead.TIPO_LIGACAO || "-"}</td>
+                <td className="p-3 font-bold">{lead.UC || "-"}</td>
+                <td className="p-3">R$ {Number(lead.VALOR_FATURA || 0).toFixed(2)}</td>
+                <td className="p-3">{lead.ELEGIVEL ? "SIM" : "NÃO"}</td>
+                <td className="p-3 font-bold text-emerald-600">{lead.MEDIA_CONSUMO || "0,00"}</td>
+                
+                {/* Links */}
+                <td className="p-3 text-center">
+                  {lead.LINK_FATURA ? <a href={lead.LINK_FATURA} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">Abrir</a> : "-"}
+                </td>
+                <td className="p-3 text-center">
+                  {lead.LINK_DOC_FRENTE ? <a href={lead.LINK_DOC_FRENTE} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">Abrir</a> : "-"}
+                </td>
+                <td className="p-3 text-center">
+                  {lead.LINK_DOC_VERSO ? <a href={lead.LINK_DOC_VERSO} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">Abrir</a> : "-"}
+                </td>
+
+                {/* Consumos Meses 1 a 12 */}
+                {[...Array(12)].map((_, i) => (
+                  <td key={i} className="p-3 text-center bg-slate-50/50">{lead[`CONSUMO_MES_${i+1}`] || "-"}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  const renderHistoricoVoz = () => (
+    <div className="overflow-x-auto pb-4">
+      <table className="w-full text-left whitespace-nowrap">
+        <thead>
+          <tr className="bg-slate-100 border-b border-slate-200 text-[10px] font-black uppercase tracking-wider text-slate-600">
+            <th className="p-3">DATA_HORA</th>
+            <th className="p-3">UTILIZADOR</th>
+            <th className="p-3">VOZ</th>
+            <th className="p-3">TEXTO_GERADO</th>
+            <th className="p-3">FICHEIRO_GERADO</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {historicoVoz.length === 0 && <tr><td colSpan="5" className="p-4 text-center text-slate-400">Sem histórico de voz.</td></tr>}
+          {historicoVoz.map((voz) => (
+            <tr key={voz.id} className="hover:bg-emerald-50/50 text-[11px] text-slate-700">
+              <td className="p-3">{formatDate(voz.DATA_HORA)}</td>
+              <td className="p-3">{voz.UTILIZADOR || "ACESSO_DIRETO"}</td>
+              <td className="p-3 font-bold">{voz.VOZ || "Kore"}</td>
+              <td className="p-3 truncate max-w-[400px]" title={voz.TEXTO_GERADO}>{voz.TEXTO_GERADO || "-"}</td>
+              <td className="p-3 text-blue-600">{voz.FICHEIRO_GERADO || "-"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  const renderFilaRpa = () => (
+    <div className="overflow-x-auto pb-4">
+      <table className="w-full text-left whitespace-nowrap">
+        <thead>
+          <tr className="bg-slate-100 border-b border-slate-200 text-[10px] font-black uppercase tracking-wider text-slate-600">
+            <th className="p-3">DATA_INTEGRACAO</th>
+            <th className="p-3">TIPO_PERFIL</th>
+            <th className="p-3">DOCUMENTO_ID</th>
+            <th className="p-3">NOME_RAZAO_SOCIAL</th>
+            <th className="p-3">EMAIL</th>
+            <th className="p-3">WHATSAPP</th>
+            <th className="p-3">CEP</th>
+            <th className="p-3">DISTRIBUIDORA</th>
+            <th className="p-3">UC_INSTALACAO</th>
+            <th className="p-3">CONSUMO_MEDIO_KWH</th>
+            <th className="p-3 text-center">DOC_FATURA_LINK</th>
+            <th className="p-3 text-center">DOC_IDENTIDADE_FRENTE</th>
+            <th className="p-3 text-center">DOC_IDENTIDADE_VERSO</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {filaRpa.length === 0 && <tr><td colSpan="13" className="p-4 text-center text-slate-400">Fila RPA vazia.</td></tr>}
+          {filaRpa.map((rpa) => (
+            <tr key={rpa.id} className="hover:bg-emerald-50/50 text-[11px] text-slate-700">
+              <td className="p-3">{formatDate(rpa.DATA_INTEGRACAO)}</td>
+              <td className="p-3">{rpa.TIPO_PERFIL || "-"}</td>
+              <td className="p-3">{rpa.DOCUMENTO_ID || "-"}</td>
+              <td className="p-3 font-bold">{rpa.NOME_RAZAO_SOCIAL || "-"}</td>
+              <td className="p-3">{rpa.EMAIL || "-"}</td>
+              <td className="p-3">{rpa.WHATSAPP || "-"}</td>
+              <td className="p-3">{rpa.CEP || "-"}</td>
+              <td className="p-3">{rpa.DISTRIBUIDORA || "-"}</td>
+              <td className="p-3 font-bold text-blue-600">{rpa.UC_INSTALACAO || "-"}</td>
+              <td className="p-3 text-emerald-600 font-bold">{rpa.CONSUMO_MEDIO_KWH || "-"}</td>
+              <td className="p-3 text-center">{rpa.DOC_FATURA_LINK ? <a href={rpa.DOC_FATURA_LINK} target="_blank" rel="noreferrer" className="text-blue-500">Link</a> : "-"}</td>
+              <td className="p-3 text-center">{rpa.DOC_IDENTIDADE_FRENTE ? <a href={rpa.DOC_IDENTIDADE_FRENTE} target="_blank" rel="noreferrer" className="text-blue-500">Link</a> : "-"}</td>
+              <td className="p-3 text-center">{rpa.DOC_IDENTIDADE_VERSO ? <a href={rpa.DOC_IDENTIDADE_VERSO} target="_blank" rel="noreferrer" className="text-blue-500">Link</a> : "-"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  const renderDebugZapi = () => (
+    <div className="overflow-x-auto pb-4">
+      <table className="w-full text-left whitespace-nowrap">
+        <thead>
+          <tr className="bg-slate-100 border-b border-slate-200 text-[10px] font-black uppercase tracking-wider text-slate-600">
+            <th className="p-3 w-48">DATA</th>
+            <th className="p-3">LOG</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {debugZapi.length === 0 && <tr><td colSpan="2" className="p-4 text-center text-slate-400">Nenhum log Z-API registado.</td></tr>}
+          {debugZapi.map((log) => (
+            <tr key={log.id} className="hover:bg-slate-50 text-[11px] text-slate-700 font-mono">
+              <td className="p-3">{formatDate(log.DATA)}</td>
+              <td className="p-3 whitespace-normal break-all">{log.LOG || "-"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-slate-100 p-4 font-sans text-slate-800">
+      
+      {/* HEADER PRINCIPAL */}
+      <header className="max-w-[1800px] mx-auto mb-4 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+        <div className="flex items-center gap-4">
+          <div className="bg-emerald-600 p-3 rounded-xl shadow-lg shadow-emerald-200">
+            <Database className="text-white w-6 h-6" />
+          </div>
+          <div>
+            <h1 className="text-xl font-black tracking-tight text-slate-900">
+              Cloud Database <span className="text-emerald-600">iGreen AutoFlow</span>
+            </h1>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center mt-1">
+              <span className="w-2 h-2 bg-emerald-500 rounded-full mr-2 animate-pulse"></span>
+              Sincronização em Tempo Real (Substituindo Planilhas)
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-4">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 w-4 h-4" />
+            <input 
+              type="text" 
+              placeholder="Buscar por UC ou Nome..."
+              className="pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500 w-64"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+          <button className="flex items-center gap-2 bg-slate-800 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-slate-700 transition-all">
+            <Download className="w-4 h-4" /> Exportar (CSV)
+          </button>
+        </div>
+      </header>
+
+      {/* NAVEGAÇÃO DE ABAS (TABS) */}
+      <div className="max-w-[1800px] mx-auto mb-4 flex gap-2 overflow-x-auto pb-2">
+        <button 
+          onClick={() => setActiveTab('AUDITORIA_IGREEN')}
+          className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-xs font-black uppercase tracking-wider transition-all whitespace-nowrap ${activeTab === 'AUDITORIA_IGREEN' ? 'bg-emerald-600 text-white shadow-md' : 'bg-white text-slate-500 hover:bg-slate-50 border border-slate-200'}`}>
+          <Leaf className="w-4 h-4" /> AUDITORIA_IGREEN
+        </button>
+        <button 
+          onClick={() => setActiveTab('HISTORICO_VOZ')}
+          className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-xs font-black uppercase tracking-wider transition-all whitespace-nowrap ${activeTab === 'HISTORICO_VOZ' ? 'bg-blue-600 text-white shadow-md' : 'bg-white text-slate-500 hover:bg-slate-50 border border-slate-200'}`}>
+          <Mic className="w-4 h-4" /> HISTORICO_VOZ
+        </button>
+        <button 
+          onClick={() => setActiveTab('FILA_RPA_IGREEN')}
+          className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-xs font-black uppercase tracking-wider transition-all whitespace-nowrap ${activeTab === 'FILA_RPA_IGREEN' ? 'bg-indigo-600 text-white shadow-md' : 'bg-white text-slate-500 hover:bg-slate-50 border border-slate-200'}`}>
+          <Bot className="w-4 h-4" /> FILA_RPA_IGREEN
+        </button>
+        <button 
+          onClick={() => setActiveTab('DEBUG_ZAPI')}
+          className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-xs font-black uppercase tracking-wider transition-all whitespace-nowrap ${activeTab === 'DEBUG_ZAPI' ? 'bg-slate-800 text-white shadow-md' : 'bg-white text-slate-500 hover:bg-slate-50 border border-slate-200'}`}>
+          <Terminal className="w-4 h-4" /> DEBUG_ZAPI
+        </button>
+      </div>
+
+      {/* ÁREA DE RENDERIZAÇÃO DA TABELA (CONTEÚDO DA ABA ATIVA) */}
+      <main className="max-w-[1800px] mx-auto bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden relative min-h-[500px]">
+        {activeTab === 'AUDITORIA_IGREEN' && renderAuditoria()}
+        {activeTab === 'HISTORICO_VOZ' && renderHistoricoVoz()}
+        {activeTab === 'FILA_RPA_IGREEN' && renderFilaRpa()}
+        {activeTab === 'DEBUG_ZAPI' && renderDebugZapi()}
+      </main>
+
+    </div>
+  );
 }
-
-// FUNÇÃO AUXILIAR: Converte o áudio bruto da IA para formato WAV reproduzível no WhatsApp
-function pcmToWav(pcmDataBuffer, sampleRate = 24000) {
-  const numChannels = 1;
-  const bitsPerSample = 16;
-  const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
-  const blockAlign = numChannels * (bitsPerSample / 8);
-  const dataSize = pcmDataBuffer.length;
-  const buffer = Buffer.alloc(44 + dataSize);
-
-  buffer.write('RIFF', 0);
-  buffer.writeUInt32LE(36 + dataSize, 4);
-  buffer.write('WAVE', 8);
-  buffer.write('fmt ', 12);
-  buffer.writeUInt32LE(16, 16); // Subchunk1Size
-  buffer.writeUInt16LE(1, 20); // AudioFormat (1 = PCM)
-  buffer.writeUInt16LE(numChannels, 22);
-  buffer.writeUInt32LE(sampleRate, 24);
-  buffer.writeUInt32LE(byteRate, 28);
-  buffer.writeUInt16LE(blockAlign, 32);
-  buffer.writeUInt16LE(bitsPerSample, 34);
-  buffer.write('data', 36);
-  buffer.writeUInt32LE(dataSize, 40);
-  pcmDataBuffer.copy(buffer, 44);
-
-  return buffer;
-}
-
-// =========================================================================
-// FUNÇÕES DE ENVIO PARA O WHATSAPP (TEXTO E ÁUDIO)
-// =========================================================================
-async function enviarMensagem(phone, message) {
-    const instance = "3F14E2A7F66AC2180C0BBA4D31290A14";
-    const token = "88F232A54C5DC27793994637";
-    const url = `https://api.z-api.io/instances/${instance}/token/${token}/send-text`;
-    
-    try {
-        const numeroLimpo = String(phone).replace(/\D/g, ''); 
-        await axios.post(url, { phone: numeroLimpo, message: String(message) }, { headers: { 'Content-Type': 'application/json' } });
-    } catch (e) { 
-        console.error("[Z-API ERRO TEXTO]:", e.response ? JSON.stringify(e.response.data) : e.message); 
-    }
-}
-
-async function enviarAudio(phone, base64Audio) {
-    if (!base64Audio) return; // Se a IA de voz falhar, não tenta enviar
-    
-    const instance = "3F14E2A7F66AC2180C0BBA4D31290A14";
-    const token = "88F232A54C5DC27793994637";
-    const url = `https://api.z-api.io/instances/${instance}/token/${token}/send-audio`;
-    
-    try {
-        const numeroLimpo = String(phone).replace(/\D/g, ''); 
-        await axios.post(url, { 
-            phone: numeroLimpo, 
-            audio: base64Audio 
-        }, { headers: { 'Content-Type': 'application/json' } });
-        console.log(`[Z-API] 🔊 Áudio de voz enviado com sucesso!`);
-    } catch (e) { 
-        console.error("[Z-API ERRO ÁUDIO]:", e.response ? JSON.stringify(e.response.data) : e.message); 
-    }
-}
-
-const port = process.env.PORT || 10000;
-app.listen(port, () => {
-  console.log(`\n🚀 SERVIDOR IGREEN (TEXTO + VOZ IA + BANCO DE DADOS) LIGADO NA PORTA ${port}!`);
-});
