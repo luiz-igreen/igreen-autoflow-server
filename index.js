@@ -10,9 +10,7 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 // CHAVES DA Z-API CENTRALIZADAS
 const ZAPI_INSTANCE = "3F14E2A7F66AC2180C0BBA4D31290A14";
 const ZAPI_TOKEN = "88F232A54C5DC27793994637";
-
-// 🚨 TOKEN DE SEGURANÇA MASTER
-const ZAPI_CLIENT_TOKEN = "F177679f2434d425e9a3e58ddec1d4cf0S";
+const ZAPI_CLIENT_TOKEN = "F177679f2434d425e9a3e58ddec1d4cf0S"; // A sua senha master
 
 // Conexão segura com o Banco de Dados (Firestore)
 try {
@@ -29,26 +27,61 @@ try {
   console.error("Erro na base de dados:", e.message);
 }
 
+// =========================================================================
+// FUNÇÃO PARA SABER A HORA E DAR BOM DIA/BOA TARDE/BOA NOITE
+// =========================================================================
+function obterSaudacao() {
+    const horaAtual = new Date().toLocaleString("pt-BR", { timeZone: "America/Maceio", hour: "numeric", hour12: false });
+    const h = parseInt(horaAtual);
+    if (h >= 5 && h < 12) return "Bom dia";
+    if (h >= 12 && h < 18) return "Boa tarde";
+    return "Boa noite";
+}
+
 app.post('/webhook/igreen', async (req, res) => {
   const data = req.body;
   res.status(200).send("OK"); 
 
-  const phone = data.phone;
-  const isImage = data.type === 'image' || data.isImage === true || data.type === 'photo' || (data.image && data.image.imageUrl);
-  const isPDF = data.type === 'document' || data.isDocument === true || (data.document && data.document.documentUrl);
-
-  if (!isImage && !isPDF && (data.type === 'ReceivedCallback' || data.type === 'DeliveryCallback' || data.type === 'ReadCallback' || data.type === 'MessageStatus' || data.type === 'PresenceCallback')) {
+  // IGNORA recibos chatos de entrega da Z-API
+  if (data.type === 'ReceivedCallback' || data.type === 'DeliveryCallback' || data.type === 'ReadCallback' || data.type === 'MessageStatus' || data.type === 'PresenceCallback') {
       return; 
   }
 
+  const phone = data.phone;
+  const isImage = data.type === 'image' || data.isImage === true || data.type === 'photo' || (data.image && data.image.imageUrl);
+  const isPDF = data.type === 'document' || data.isDocument === true || (data.document && data.document.documentUrl);
+  const isTexto = data.text && data.text.message;
+
   console.log(`\n=========================================`);
-  console.log(`📩 NOVA FATURA DE: ${phone} | TIPO: ${data.type}`);
   
+  // TRAVA DE LOOP: Se a mensagem foi enviada pelo próprio robô, ele ignora.
+  if (data.fromMe) {
+      console.log(`🛑 [IGNORADO] Mensagem de sincronização ou enviada por si mesmo (fromMe: true) no número ${phone}`);
+      console.log(`=========================================\n`);
+      return;
+  }
+
+  const saudacao = obterSaudacao(); // Pega o Bom dia/tarde/noite
+
+  // CENÁRIO 1: O CLIENTE ENVIOU UM TEXTO ("Oi", "Olá", "Quero saber mais")
+  if (isTexto && !isImage && !isPDF) {
+      console.log(`💬 NOVA MENSAGEM DE TEXTO DE: ${phone} | Mensagem: "${data.text.message}"`);
+      
+      const txtBoasVindas = `${saudacao}! Seja muito bem-vindo à iGreen Energy! 🌿\n\nPara eu simular a sua economia hoje, preciso que me envie uma foto bem nítida ou o PDF da sua conta de luz mais recente.`;
+      const vozBoasVindas = `${saudacao}! Seja muito bem-vindo à i Green Energy! Para começarmos a sua simulação, por favor, me envie uma foto bem nítida ou o P D F da sua conta de luz.`;
+      
+      await enviarMensagem(phone, txtBoasVindas);
+      await enviarAudio(phone, await gerarAudioGemini(vozBoasVindas));
+      return;
+  }
+  
+  // CENÁRIO 2: O CLIENTE ENVIOU A FATURA (IMAGEM/PDF)
   if (isImage || isPDF) {
-    console.log(`📸 Documento detectado. Iniciando auditoria completa...`);
+    console.log(`📸 NOVA FATURA DETECTADA DE: ${phone}`);
+    console.log(`Iniciando auditoria completa...`);
     
-    const txtInicial = "Recebi a sua fatura! 📄 A nossa Inteligência Artificial está a fazer a auditoria completa dos seus dados para o sistema iGreen. Aguarde um instante...";
-    const vozInicial = "Olá! Recebi a sua fatura. A nossa Inteligência Artificial está fazendo a auditoria completa dos seus dados para o sistema i Green. Aguarde só um instante.";
+    const txtInicial = `${saudacao}! Recebi a sua fatura. 📄\n\nA nossa Inteligência Artificial está a fazer a auditoria completa dos seus dados para o sistema iGreen. Aguarde um instante...`;
+    const vozInicial = `${saudacao}! Recebi a sua fatura. A nossa Inteligência Artificial está fazendo a auditoria completa dos seus dados para o sistema i Green. Aguarde só um instante.`;
     
     await enviarMensagem(phone, txtInicial);
     await enviarAudio(phone, await gerarAudioGemini(vozInicial));
@@ -61,7 +94,6 @@ app.post('/webhook/igreen', async (req, res) => {
 
       if (!mediaUrl) throw new Error("A Z-API não enviou o link do arquivo.");
 
-      // Adicionamos o Header de segurança apenas se você preencheu o ZAPI_CLIENT_TOKEN
       const downloadHeaders = {};
       if (ZAPI_CLIENT_TOKEN) downloadHeaders['Client-Token'] = ZAPI_CLIENT_TOKEN;
 
@@ -75,6 +107,7 @@ app.post('/webhook/igreen', async (req, res) => {
       const analise = await analisarComIA(base64Data, mimeType);
       console.log(`✅ AUDITORIA CONCLUÍDA:`, JSON.stringify(analise, null, 2));
 
+      // SALVA NO BANCO DE DADOS
       if (analise.ELEGIVEL && admin.apps.length > 0) {
           const db = admin.firestore();
           const appId = process.env.RENDER_SERVICE_ID || 'igreen-autoflow-v4';
@@ -108,6 +141,7 @@ app.post('/webhook/igreen', async (req, res) => {
           console.log(`❌ Cliente RECUSADO pelo motivo: ${analise.MOTIVO_RECUSA}. Os dados NÃO foram salvos.`);
       }
 
+      // RESPOSTA FINAL AO CLIENTE (APROVADO / RECUSADO)
       const primeiroNome = analise.NOME_CLIENTE ? analise.NOME_CLIENTE.split(' ')[0] : "Cliente";
 
       if (analise.ELEGIVEL) {
@@ -127,7 +161,7 @@ app.post('/webhook/igreen', async (req, res) => {
     } catch (erro) {
       console.error("❌ ERRO NO PROCESSAMENTO:", erro.message);
       const txtErro = "Tive uma dificuldade em ler esta imagem. Pode tentar enviar uma foto mais nítida ou o PDF original, por favor?";
-      const vozErro = "Puxa, tive uma dificuldade em ler esta imagem. Você poderia tentar enviar uma foto com mais luz ou o arquivo em PDF original, por favor?";
+      const vozErro = "Puxa, tive uma dificuldade em ler esta imagem. Você poderia tentar enviar uma foto com mais luz ou o arquivo em P D F original, por favor?";
       
       await enviarMensagem(phone, txtErro);
       await enviarAudio(phone, await gerarAudioGemini(vozErro));
@@ -234,7 +268,6 @@ function pcmToWav(pcmDataBuffer, sampleRate = 24000) {
   return buffer;
 }
 
-// Envios com a trava de segurança (Client-Token) flexível
 async function enviarMensagem(phone, message) {
     const url = `https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`;
     const headers = { 'Content-Type': 'application/json' };
@@ -265,5 +298,5 @@ async function enviarAudio(phone, base64Audio) {
 
 const port = process.env.PORT || 10000;
 app.listen(port, () => {
-  console.log(`\n🚀 SERVIDOR IGREEN IA (Z-API CORRIGIDO) LIGADO NA PORTA ${port}!`);
+  console.log(`\n🚀 SERVIDOR IGREEN IA COM SAUDAÇÕES LIGADO NA PORTA ${port}!`);
 });
