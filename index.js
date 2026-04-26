@@ -26,17 +26,18 @@ app.post('/webhook/igreen', async (req, res) => {
   // Resposta imediata para a Z-API entender que recebemos
   res.status(200).send("OK"); 
 
-  // IGNORA ABSOLUTAMENTE TODOS os recibos chatos de entrega/leitura da Z-API
-  if (data.type === 'ReceivedCallback' || data.type === 'DeliveryCallback' || data.type === 'ReadCallback' || data.type === 'MessageStatus' || data.type === 'PresenceCallback') {
+  const phone = data.phone;
+  // Deteta se há uma imagem ou PDF, mesmo que a Z-API tente esconder!
+  const isImage = data.type === 'image' || data.isImage === true || data.type === 'photo' || (data.image && data.image.imageUrl);
+  const isPDF = data.type === 'document' || data.isDocument === true || (data.document && data.document.documentUrl);
+
+  // IGNORA recibos SOMENTE se eles não trouxerem nenhuma foto escondida
+  if (!isImage && !isPDF && (data.type === 'ReceivedCallback' || data.type === 'DeliveryCallback' || data.type === 'ReadCallback' || data.type === 'MessageStatus' || data.type === 'PresenceCallback')) {
       return; 
   }
 
-  const phone = data.phone;
-  const isImage = data.type === 'image' || data.isImage === true || data.type === 'photo';
-  const isPDF = data.type === 'document' || data.isDocument === true;
-
   console.log(`\n=========================================`);
-  console.log(`📩 NOVA MENSAGEM REAL DE: ${phone} | TIPO: ${data.type}`);
+  console.log(`📩 NOVA MENSAGEM DETETADA DE: ${phone} | TIPO ORIGINAL: ${data.type}`);
   
   if (isImage || isPDF) {
     console.log(`📸 Documento detectado. Iniciando robô de extração...`);
@@ -79,7 +80,7 @@ app.post('/webhook/igreen', async (req, res) => {
         const msgAprovado = `🎉 *Parabéns, ${analise.nome.split(' ')[0]}!*\n\nA nossa IA leu a sua fatura (Consumo: ${analise.consumo} kWh).\nVocê foi *APROVADO* para receber o desconto na conta de luz! ⚡\n\nO consultor Luiz Jorge vai gerar o seu termo de adesão em breve.`;
         await enviarMensagem(phone, msgAprovado);
       } else {
-        const msgRecusado = `Olá ${analise.nome.split(' ')[0]},\n\nO seu consumo identificado foi de ${analise.consumo} kWh. No momento, exigimos um mínimo de 150 kWh para aplicar o desconto. 😔\nFicaremos com o seu contacto!`;
+        const msgRecusado = `Olá ${analise.nome.split(' ')[0]},\n\nA nossa IA analisou a sua fatura (Consumo: ${analise.consumo} kWh). No momento, a fatura não atende a todos os critérios exigidos (como consumo mínimo, grupo tarifário, tarifa social ou titularidade ativa). 😔\nFicaremos com o seu contacto!`;
         await enviarMensagem(phone, msgRecusado);
       }
 
@@ -103,7 +104,12 @@ async function analisarComIA(base64, mimeType) {
     Extraia as seguintes informações e devolva APENAS um JSON válido:
     1. "nome": Nome completo do titular da conta.
     2. "consumo": O consumo em kWh (apenas o número).
-    3. "aprovado": true se o consumo for MAIOR ou IGUAL a 150, false se for menor.
+    3. "aprovado": Avalie as regras abaixo. Retorne true APENAS SE TODAS forem atendidas. Retorne false se falhar em qualquer uma:
+       - O consumo deve ser MAIOR ou IGUAL a 150 kWh.
+       - O grupo tarifário deve ser do tipo B (Baixa Tensão).
+       - NÃO pode ser cliente classificado como "Tarifa Social" ou "Baixa Renda".
+       - NÃO pode ter "Geração Distribuída" (energia injetada por sistema solar próprio).
+       - O titular DEVE estar vivo. Retorne false imediatamente se o nome do titular contiver termos como "ESPÓLIO DE", "FALECIDO", "SUCESSÃO DE" ou "HERDEIROS DE".
     Exemplo de saída: {"nome": "João da Silva", "consumo": 180, "aprovado": true}
   `;
 
@@ -127,4 +133,4 @@ async function enviarMensagem(phone, message) {
 
 app.listen(process.env.PORT || 10000, () => {
   console.log(`\n🚀 SERVIDOR IGREEN IA + BANCO DE DADOS LIGADO!`);
-});
+});  
