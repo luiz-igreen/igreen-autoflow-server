@@ -11,6 +11,9 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const ZAPI_INSTANCE = "3F14E2A7F66AC2180C0BBA4D31290A14";
 const ZAPI_TOKEN = "88F232A54C5DC27793994637";
 
+// 🚨 TOKEN DE SEGURANÇA MASTER
+const ZAPI_CLIENT_TOKEN = "F177679f2434d425e9a3e58ddec1d4cf0S";
+
 // Conexão segura com o Banco de Dados (Firestore)
 try {
   const firebaseConfig = process.env.FIREBASE_CONFIG ? JSON.parse(process.env.FIREBASE_CONFIG) : null;
@@ -34,7 +37,6 @@ app.post('/webhook/igreen', async (req, res) => {
   const isImage = data.type === 'image' || data.isImage === true || data.type === 'photo' || (data.image && data.image.imageUrl);
   const isPDF = data.type === 'document' || data.isDocument === true || (data.document && data.document.documentUrl);
 
-  // IGNORA recibos SOMENTE se eles não trouxerem nenhuma foto escondida
   if (!isImage && !isPDF && (data.type === 'ReceivedCallback' || data.type === 'DeliveryCallback' || data.type === 'ReadCallback' || data.type === 'MessageStatus' || data.type === 'PresenceCallback')) {
       return; 
   }
@@ -59,10 +61,13 @@ app.post('/webhook/igreen', async (req, res) => {
 
       if (!mediaUrl) throw new Error("A Z-API não enviou o link do arquivo.");
 
-      // CORREÇÃO DO ERRO 404: Passamos o Client-Token para a Z-API permitir o download da imagem
+      // Adicionamos o Header de segurança apenas se você preencheu o ZAPI_CLIENT_TOKEN
+      const downloadHeaders = {};
+      if (ZAPI_CLIENT_TOKEN) downloadHeaders['Client-Token'] = ZAPI_CLIENT_TOKEN;
+
       const fileResponse = await axios.get(mediaUrl, { 
           responseType: 'arraybuffer',
-          headers: { 'Client-Token': ZAPI_TOKEN } 
+          headers: downloadHeaders
       });
       const base64Data = Buffer.from(fileResponse.data, 'binary').toString('base64');
       const mimeType = isPDF ? "application/pdf" : "image/jpeg";
@@ -70,7 +75,6 @@ app.post('/webhook/igreen', async (req, res) => {
       const analise = await analisarComIA(base64Data, mimeType);
       console.log(`✅ AUDITORIA CONCLUÍDA:`, JSON.stringify(analise, null, 2));
 
-      // SALVA NO BANCO DE DADOS APENAS SE FOR 100% ELEGÍVEL
       if (analise.ELEGIVEL && admin.apps.length > 0) {
           const db = admin.firestore();
           const appId = process.env.RENDER_SERVICE_ID || 'igreen-autoflow-v4';
@@ -230,17 +234,15 @@ function pcmToWav(pcmDataBuffer, sampleRate = 24000) {
   return buffer;
 }
 
-// CORREÇÃO DO ERRO 'CLIENT-TOKEN': Injeção do token nos Headers
+// Envios com a trava de segurança (Client-Token) flexível
 async function enviarMensagem(phone, message) {
     const url = `https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`;
+    const headers = { 'Content-Type': 'application/json' };
+    if (ZAPI_CLIENT_TOKEN) headers['Client-Token'] = ZAPI_CLIENT_TOKEN;
+
     try {
         const numeroLimpo = String(phone).replace(/\D/g, ''); 
-        await axios.post(url, { phone: numeroLimpo, message: String(message) }, { 
-            headers: { 
-                'Content-Type': 'application/json',
-                'Client-Token': ZAPI_TOKEN 
-            } 
-        });
+        await axios.post(url, { phone: numeroLimpo, message: String(message) }, { headers });
     } catch (e) { 
         console.error("[Z-API ERRO TEXTO]:", e.response ? JSON.stringify(e.response.data) : e.message); 
     }
@@ -249,14 +251,12 @@ async function enviarMensagem(phone, message) {
 async function enviarAudio(phone, base64Audio) {
     if (!base64Audio) return; 
     const url = `https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-audio`;
+    const headers = { 'Content-Type': 'application/json' };
+    if (ZAPI_CLIENT_TOKEN) headers['Client-Token'] = ZAPI_CLIENT_TOKEN;
+
     try {
         const numeroLimpo = String(phone).replace(/\D/g, ''); 
-        await axios.post(url, { phone: numeroLimpo, audio: base64Audio }, { 
-            headers: { 
-                'Content-Type': 'application/json',
-                'Client-Token': ZAPI_TOKEN 
-            } 
-        });
+        await axios.post(url, { phone: numeroLimpo, audio: base64Audio }, { headers });
         console.log(`[Z-API] 🔊 Áudio enviado com sucesso!`);
     } catch (e) { 
         console.error("[Z-API ERRO ÁUDIO]:", e.response ? JSON.stringify(e.response.data) : e.message); 
