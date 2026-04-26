@@ -11,7 +11,9 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 try {
   const firebaseConfig = process.env.FIREBASE_CONFIG ? JSON.parse(process.env.FIREBASE_CONFIG) : null;
   if (firebaseConfig) {
-    admin.initializeApp({ credential: admin.credential.cert(firebaseConfig) });
+    if (admin.apps.length === 0) {
+      admin.initializeApp({ credential: admin.credential.cert(firebaseConfig) });
+    }
     console.log("✅ Banco de Dados conectado com sucesso!");
   } else {
     console.log("⚠️ Banco de Dados aguardando credenciais (FIREBASE_CONFIG).");
@@ -22,12 +24,10 @@ try {
 
 app.post('/webhook/igreen', async (req, res) => {
   const data = req.body;
-  
-  // Resposta imediata para a Z-API entender que recebemos
   res.status(200).send("OK"); 
 
   const phone = data.phone;
-  // Deteta se há uma imagem ou PDF, mesmo que a Z-API tente esconder!
+  // Deteta se há uma imagem ou PDF, superando os bloqueios da Z-API
   const isImage = data.type === 'image' || data.isImage === true || data.type === 'photo' || (data.image && data.image.imageUrl);
   const isPDF = data.type === 'document' || data.isDocument === true || (data.document && data.document.documentUrl);
 
@@ -37,15 +37,19 @@ app.post('/webhook/igreen', async (req, res) => {
   }
 
   console.log(`\n=========================================`);
-  console.log(`📩 NOVA MENSAGEM DETETADA DE: ${phone} | TIPO ORIGINAL: ${data.type}`);
+  console.log(`📩 NOVA FATURA DE: ${phone} | TIPO: ${data.type}`);
   
   if (isImage || isPDF) {
-    console.log(`📸 Documento detectado. Iniciando robô de extração...`);
+    console.log(`📸 Documento detectado. Iniciando extração COMPLETA de dados...`);
     
-    await enviarMensagem(phone, "Recebi a sua fatura! 📄 A nossa Inteligência Artificial está a ler os dados para avaliar o seu desconto. Aguarde uns segundos...");
+    // 1. MENSAGEM INICIAL (TEXTO + VOZ)
+    const txtInicial = "Recebi a sua fatura! 📄 A nossa Inteligência Artificial está a fazer a auditoria completa dos seus dados para o sistema iGreen. Aguarde um instante...";
+    const vozInicial = "Olá! Recebi a sua fatura. A nossa Inteligência Artificial está fazendo a auditoria completa dos seus dados para o sistema i Green. Aguarde só um instante.";
+    
+    await enviarMensagem(phone, txtInicial);
+    await enviarAudio(phone, await gerarAudioGemini(vozInicial));
 
     try {
-      // Pega o arquivo seja ele Imagem ou PDF
       let mediaUrl = "";
       if (isImage && data.image && data.image.imageUrl) mediaUrl = data.image.imageUrl;
       else if (isPDF && data.document && data.document.documentUrl) mediaUrl = data.document.documentUrl;
@@ -53,64 +57,113 @@ app.post('/webhook/igreen', async (req, res) => {
 
       if (!mediaUrl) throw new Error("A Z-API não enviou o link do arquivo.");
 
-      // Faz o download do arquivo
       const fileResponse = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
       const base64Data = Buffer.from(fileResponse.data, 'binary').toString('base64');
       const mimeType = isPDF ? "application/pdf" : "image/jpeg";
 
-      // Extrai os dados com a Inteligência Artificial
+      // Extrai os dados EXATAMENTE como na sua planilha antiga
       const analise = await analisarComIA(base64Data, mimeType);
-      console.log(`✅ DADOS EXTRAÍDOS COM SUCESSO:`, analise);
+      console.log(`✅ AUDITORIA CONCLUÍDA:`, JSON.stringify(analise, null, 2));
 
-      // SALVA NO BANCO DE DADOS (Substitui a antiga Planilha)
-      if (admin.apps.length > 0) {
+      // SALVA NO BANCO DE DADOS APENAS SE FOR 100% ELEGÍVEL
+      if (analise.ELEGIVEL && admin.apps.length > 0) {
           const db = admin.firestore();
           await db.collection('leads').doc(phone).set({
-              telefone: phone,
-              nome_cliente: analise.nome || "Não identificado",
-              consumo_kwh: analise.consumo || 0,
-              status: analise.aprovado ? 'APROVADO' : 'RECUSADO',
-              data_processamento: admin.firestore.FieldValue.serverTimestamp()
+              DATA_PROCESSAMENTO: admin.firestore.FieldValue.serverTimestamp(),
+              STATUS_CADASTRO: 'NOVO',
+              TELEFONE: phone,
+              NOME_CLIENTE: analise.NOME_CLIENTE || "",
+              CPF: analise.CPF || "",
+              CNPJ: analise.CNPJ || "",
+              CEP: analise.CEP || "",
+              ENDERECO: analise.ENDERECO || "",
+              ESTADO: analise.ESTADO || "",
+              DISTRIBUIDORA: analise.DISTRIBUIDORA || "",
+              TIPO_LIGACAO: analise.TIPO_LIGACAO || "",
+              UC: analise.UC || "",
+              VALOR_FATURA: analise.VALOR_FATURA || 0,
+              ELEGIVEL: true,
+              MEDIA_CONSUMO: analise.MEDIA_CONSUMO || 0,
+              LINK_FATURA: mediaUrl,
+              CONSUMO_MES_1: analise.CONSUMO_MES_1 || 0,
+              CONSUMO_MES_2: analise.CONSUMO_MES_2 || 0,
+              CONSUMO_MES_3: analise.CONSUMO_MES_3 || 0,
+              CONSUMO_MES_4: analise.CONSUMO_MES_4 || 0,
+              CONSUMO_MES_5: analise.CONSUMO_MES_5 || 0,
+              CONSUMO_MES_6: analise.CONSUMO_MES_6 || 0
           }, { merge: true });
-          console.log(`💾 Dados salvos na base de dados com sucesso!`);
+          console.log(`💾 Cliente ELEGÍVEL! Dados salvos no Cofre (Firestore) com sucesso!`);
+      } else if (!analise.ELEGIVEL) {
+          console.log(`❌ Cliente RECUSADO pelo motivo: ${analise.MOTIVO_RECUSA}. Os dados NÃO foram salvos no Banco.`);
       }
 
-      // Envia a resposta calculada para o WhatsApp do cliente
-      if (analise.aprovado) {
-        const msgAprovado = `🎉 *Parabéns, ${analise.nome.split(' ')[0]}!*\n\nA nossa IA leu a sua fatura (Consumo: ${analise.consumo} kWh).\nVocê foi *APROVADO* para receber o desconto na conta de luz! ⚡\n\nO consultor Luiz Jorge vai gerar o seu termo de adesão em breve.`;
-        await enviarMensagem(phone, msgAprovado);
+      // 2. RESPOSTA FINAL AO CLIENTE (TEXTO + VOZ)
+      const primeiroNome = analise.NOME_CLIENTE ? analise.NOME_CLIENTE.split(' ')[0] : "Cliente";
+
+      if (analise.ELEGIVEL) {
+        const txtAprovado = `🎉 *Parabéns, ${primeiroNome}!*\n\nA nossa IA concluiu a auditoria da sua UC (${analise.UC}). O seu consumo médio é de ${analise.MEDIA_CONSUMO} kWh.\n\nVocê foi *APROVADO* para receber o desconto na conta de luz da ${analise.DISTRIBUIDORA}! ⚡\n\nO consultor Luiz Jorge vai gerar o seu termo de adesão em breve.`;
+        const vozAprovado = `Parabéns, ${primeiroNome}! A nossa Inteligência Artificial concluiu a auditoria da sua conta. O seu consumo médio é de ${analise.MEDIA_CONSUMO} quilowatts-hora. Você foi aprovado para receber o desconto na conta de luz da ${analise.DISTRIBUIDORA}! O consultor Luiz Jorge vai gerar o seu termo de adesão em breve.`;
+        
+        await enviarMensagem(phone, txtAprovado);
+        await enviarAudio(phone, await gerarAudioGemini(vozAprovado));
+
       } else {
-        const msgRecusado = `Olá ${analise.nome.split(' ')[0]},\n\nA nossa IA analisou a sua fatura (Consumo: ${analise.consumo} kWh). No momento, a fatura não atende a todos os critérios exigidos (como consumo mínimo, grupo tarifário, tarifa social ou titularidade ativa). 😔\nFicaremos com o seu contacto!`;
-        await enviarMensagem(phone, msgRecusado);
+        const txtRecusado = `Olá ${primeiroNome},\n\nA nossa IA analisou a sua fatura. Infelizmente, no momento, ela não atende aos critérios da iGreen.\n\n*Motivo:* ${analise.MOTIVO_RECUSA}\n\nFicaremos com o seu contacto para futuras campanhas!`;
+        const vozRecusado = `Olá, ${primeiroNome}. A nossa Inteligência Artificial analisou a sua fatura. Infelizmente, no momento, ela não atende aos critérios da i Green. O motivo é: ${analise.MOTIVO_RECUSA}. Ficaremos com o seu contato para futuras campanhas. Um grande abraço!`;
+        
+        await enviarMensagem(phone, txtRecusado);
+        await enviarAudio(phone, await gerarAudioGemini(vozRecusado));
       }
 
     } catch (erro) {
       console.error("❌ ERRO NO PROCESSAMENTO:", erro.message);
-      await enviarMensagem(phone, "Tive uma dificuldade em ler esta imagem. Pode tentar enviar uma foto mais nítida ou o PDF original, por favor?");
+      const txtErro = "Tive uma dificuldade em ler esta imagem. Pode tentar enviar uma foto mais nítida ou o PDF original, por favor?";
+      const vozErro = "Puxa, tive uma dificuldade em ler esta imagem. Você poderia tentar enviar uma foto com mais luz ou o arquivo em PDF original, por favor?";
+      
+      await enviarMensagem(phone, txtErro);
+      await enviarAudio(phone, await gerarAudioGemini(vozErro));
     }
-  } else if (data.text) {
-    console.log(`💬 Texto ignorado: ${data.text.message}`);
   }
 });
 
-// MOTOR DA INTELIGÊNCIA ARTIFICIAL (GEMINI)
+// MOTOR DA INTELIGÊNCIA ARTIFICIAL (GEMINI VISION)
 async function analisarComIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave do Gemini não configurada!");
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
   
   const prompt = `
-    Aja como um auditor especialista em contas de energia.
-    Leia este documento com precisão militar.
-    Extraia as seguintes informações e devolva APENAS um JSON válido:
-    1. "nome": Nome completo do titular da conta.
-    2. "consumo": O consumo em kWh (apenas o número).
-    3. "aprovado": Avalie as regras abaixo. Retorne true APENAS SE TODAS forem atendidas. Retorne false se falhar em qualquer uma:
-       - O consumo deve ser MAIOR ou IGUAL a 150 kWh.
-       - O grupo tarifário deve ser do tipo B (Baixa Tensão).
-       - NÃO pode ser cliente classificado como "Tarifa Social" ou "Baixa Renda".
-       - NÃO pode ter "Geração Distribuída" (energia injetada por sistema solar próprio).
-       - O titular DEVE estar vivo. Retorne false imediatamente se o nome do titular contiver termos como "ESPÓLIO DE", "FALECIDO", "SUCESSÃO DE" ou "HERDEIROS DE".
-    Exemplo de saída: {"nome": "João da Silva", "consumo": 180, "aprovado": true}
+    Aja como um auditor sênior de contas de energia.
+    Leia a fatura anexa e extraia todos os dados abaixo.
+    Devolva APENAS um JSON válido, usando exatamente estas chaves. Se não achar algo, use string vazia "" ou número 0.
+    
+    {
+      "NOME_CLIENTE": "Nome completo do titular da conta",
+      "CPF": "Apenas números do CPF (se for pessoa física)",
+      "CNPJ": "Apenas números do CNPJ (se for empresa)",
+      "CEP": "Apenas números do CEP da instalação",
+      "ENDERECO": "Rua, Número, Bairro, Cidade",
+      "ESTADO": "Sigla do estado (Ex: AL, MG, SP)",
+      "DISTRIBUIDORA": "Nome da concessionária (Ex: EQUATORIAL, CEMIG)",
+      "TIPO_LIGACAO": "MONOFÁSICO, BIFÁSICO ou TRIFÁSICO",
+      "UC": "Número da Unidade Consumidora / Instalação / Código do Cliente",
+      "VALOR_FATURA": 0.00 (Total a pagar em formato numérico),
+      "MEDIA_CONSUMO": 0 (Média de consumo em kWh do histórico),
+      "CONSUMO_MES_1": 0 (Consumo em kWh do mês mais recente no histórico),
+      "CONSUMO_MES_2": 0 (Consumo em kWh do mês anterior),
+      "CONSUMO_MES_3": 0 (Consumo em kWh de 3 meses atrás),
+      "CONSUMO_MES_4": 0,
+      "CONSUMO_MES_5": 0,
+      "CONSUMO_MES_6": 0,
+      "ELEGIVEL": true ou false,
+      "MOTIVO_RECUSA": "Se ELEGIVEL for false, diga o motivo de forma curta. Se true, deixe vazio."
+    }
+
+    REGRAS RÍGIDAS PARA "ELEGIVEL" ser true (Deve passar em TODAS):
+    1. Consumo/Média: Monofásico >= 130 kWh, Bifásico >= 150 kWh, Trifásico >= 200 kWh.
+    2. Titularidade: O nome NÃO pode conter "ESPÓLIO", "FALECIDO", "SUCESSÃO" ou "HERDEIROS".
+    3. Tarifa Social: NÃO pode ter benefício de Tarifa Social / Baixa Renda.
+    4. Grupo Tarifário: DEVE ser Grupo B (Baixa Tensão).
+    5. Geração Própria: NÃO pode ter Geração Distribuída (energia injetada).
   `;
 
   const payload = {
@@ -122,15 +175,107 @@ async function analisarComIA(base64, mimeType) {
   return JSON.parse(resposta.data.candidates[0].content.parts[0].text);
 }
 
-// FUNÇÃO PARA ENVIAR MENSAGEM (Z-API)
-async function enviarMensagem(phone, message) {
-  const instance = "3F14E2A7F66AC2180C0BBA4D31290A14";
-  const token = "88F232A54C5DC27793994637";
-  const url = `https://api.z-api.io/instances/${instance}/token/${token}/send-text`;
-  const numeroLimpo = String(phone).replace(/\D/g, ''); 
-  await axios.post(url, { phone: numeroLimpo, message: String(message) }, { headers: { 'Content-Type': 'application/json' } });
+// =========================================================================
+// MOTOR DE VOZ (GEMINI TTS) - TRANSFORMA TEXTO EM ÁUDIO HUMANO E CONVERTE PARA WAV
+// =========================================================================
+async function gerarAudioGemini(texto) {
+  if (!GEMINI_API_KEY) return null;
+  console.log(`🎙️ Gerando áudio: "${texto.substring(0, 30)}..."`);
+  
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${GEMINI_API_KEY}`;
+  
+  const payload = {
+    contents: [{ parts: [{ text: texto }] }],
+    generationConfig: {
+      responseModalities: ["AUDIO"],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: { voiceName: "Kore" } // "Kore" é uma voz clara e agradável
+        }
+      }
+    },
+    model: "gemini-2.5-flash-preview-tts"
+  };
+
+  try {
+    const resposta = await axios.post(url, payload);
+    const pcmBase64 = resposta.data.candidates[0].content.parts[0].inlineData.data;
+    
+    // O Gemini devolve áudio em formato PCM bruto (16-bit, 24kHz Mono).
+    // Para o WhatsApp tocar, precisamos colocar um "cabeçalho WAV" neste áudio.
+    const pcmBuffer = Buffer.from(pcmBase64, 'base64');
+    const wavBuffer = pcmToWav(pcmBuffer, 24000);
+    
+    return `data:audio/wav;base64,${wavBuffer.toString('base64')}`;
+  } catch (error) {
+    console.error("❌ ERRO NA GERAÇÃO DE VOZ:", error.message);
+    return null;
+  }
 }
 
-app.listen(process.env.PORT || 10000, () => {
-  console.log(`\n🚀 SERVIDOR IGREEN IA + BANCO DE DADOS LIGADO!`);
-});  
+// FUNÇÃO AUXILIAR: Converte o áudio bruto da IA para formato WAV reproduzível no WhatsApp
+function pcmToWav(pcmDataBuffer, sampleRate = 24000) {
+  const numChannels = 1;
+  const bitsPerSample = 16;
+  const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+  const blockAlign = numChannels * (bitsPerSample / 8);
+  const dataSize = pcmDataBuffer.length;
+  const buffer = Buffer.alloc(44 + dataSize);
+
+  buffer.write('RIFF', 0);
+  buffer.writeUInt32LE(36 + dataSize, 4);
+  buffer.write('WAVE', 8);
+  buffer.write('fmt ', 12);
+  buffer.writeUInt32LE(16, 16); // Subchunk1Size
+  buffer.writeUInt16LE(1, 20); // AudioFormat (1 = PCM)
+  buffer.writeUInt16LE(numChannels, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(byteRate, 28);
+  buffer.writeUInt16LE(blockAlign, 32);
+  buffer.writeUInt16LE(bitsPerSample, 34);
+  buffer.write('data', 36);
+  buffer.writeUInt32LE(dataSize, 40);
+  pcmDataBuffer.copy(buffer, 44);
+
+  return buffer;
+}
+
+// =========================================================================
+// FUNÇÕES DE ENVIO PARA O WHATSAPP (TEXTO E ÁUDIO)
+// =========================================================================
+async function enviarMensagem(phone, message) {
+    const instance = "3F14E2A7F66AC2180C0BBA4D31290A14";
+    const token = "88F232A54C5DC27793994637";
+    const url = `https://api.z-api.io/instances/${instance}/token/${token}/send-text`;
+    
+    try {
+        const numeroLimpo = String(phone).replace(/\D/g, ''); 
+        await axios.post(url, { phone: numeroLimpo, message: String(message) }, { headers: { 'Content-Type': 'application/json' } });
+    } catch (e) { 
+        console.error("[Z-API ERRO TEXTO]:", e.response ? JSON.stringify(e.response.data) : e.message); 
+    }
+}
+
+async function enviarAudio(phone, base64Audio) {
+    if (!base64Audio) return; // Se a IA de voz falhar, não tenta enviar
+    
+    const instance = "3F14E2A7F66AC2180C0BBA4D31290A14";
+    const token = "88F232A54C5DC27793994637";
+    const url = `https://api.z-api.io/instances/${instance}/token/${token}/send-audio`;
+    
+    try {
+        const numeroLimpo = String(phone).replace(/\D/g, ''); 
+        await axios.post(url, { 
+            phone: numeroLimpo, 
+            audio: base64Audio 
+        }, { headers: { 'Content-Type': 'application/json' } });
+        console.log(`[Z-API] 🔊 Áudio de voz enviado com sucesso!`);
+    } catch (e) { 
+        console.error("[Z-API ERRO ÁUDIO]:", e.response ? JSON.stringify(e.response.data) : e.message); 
+    }
+}
+
+const port = process.env.PORT || 10000;
+app.listen(port, () => {
+  console.log(`\n🚀 SERVIDOR IGREEN (TEXTO + VOZ IA + BANCO DE DADOS) LIGADO NA PORTA ${port}!`);
+});
