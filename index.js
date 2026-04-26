@@ -13,9 +13,10 @@ app.post('/webhook/igreen', async (req, res) => {
   // 🚨 RADAR ABSOLUTO: Imprime TUDO antes de qualquer filtro!
   console.log(`\n🚨 [RADAR Z-API] Tipo: ${data.type || 'N/A'} | DeMim (fromMe): ${data.fromMe} | Fone: ${data.phone || 'N/A'}`);
 
-  // Filtro
-  if (data.fromMe || data.type === 'ReceivedCallback' || data.type === 'DeliveryCallback' || data.type === 'ReadCallback' || data.type === 'MessageStatus') {
-      console.log(`   -> 🛑 SILENCIADO: Recibo de sistema ou mensagem enviada por si.`);
+  // Filtro (Alterado TEMPORARIAMENTE para permitir testar do seu próprio telemóvel Comercial)
+  // A trava "data.fromMe" foi removida para você poder mandar foto para si mesmo!
+  if (data.type === 'ReceivedCallback' || data.type === 'DeliveryCallback' || data.type === 'ReadCallback' || data.type === 'MessageStatus') {
+      console.log(`   -> 🛑 SILENCIADO: Recibo de sistema.`);
       return; 
   }
 
