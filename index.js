@@ -85,13 +85,13 @@ app.post('/webhook/igreen', async (req, res) => {
   console.log(`\n📡 [RADAR] Cliente: ${phone} | Estado: [${status}] | Tipo Msg: ${data.type}`);
 
   if (textoIn.toLowerCase() === 'cancelar') {
-      await enviarFluxo(phone, TEXTOS.T13, "15");
+      await enviarFluxo(phone, TEXTOS.T13, "13");
       atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'CONFIRMANDO_CANCELAMENTO', PREV_STATUS: status });
       return;
   }
   
   if (textoIn.toLowerCase().match(/(atendente|humano|consultor|especialista|falar com alg)/)) {
-      await enviarFluxo(phone, TEXTOS.T20, "22");
+      await enviarFluxo(phone, TEXTOS.T20, "20");
       atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'TRANSBORDO_HUMANO' });
       return;
   }
@@ -128,12 +128,12 @@ app.post('/webhook/igreen', async (req, res) => {
               const analise = await auditarFaturaIA(base64Data, mimeType);
 
               if (!analise.VALIDO) {
-                  await enviarFluxo(phone, TEXTOS.T09, "11");
+                  await enviarFluxo(phone, TEXTOS.T09, "09");
                   return;
               }
 
               if (analise.TARIFA_SOCIAL) {
-                  await enviarFluxo(phone, TEXTOS.T10, "12");
+                  await enviarFluxo(phone, TEXTOS.T10, "10");
                   atualizarEstado(phone, leadRef, { ...analise, STATUS_CADASTRO: 'RECUSADO_TARIFA_SOCIAL' });
                   return;
               }
@@ -162,8 +162,9 @@ app.post('/webhook/igreen', async (req, res) => {
                   atualizarEstado(phone, leadRef, { ...analise, STATUS_CADASTRO: 'RECUSADO_CONSUMO' });
               }
           } catch (e) {
-              console.error("❌ ERRO FATURA:", e.message);
-              await enviarFluxo(phone, TEXTOS.T09, "11");
+              // Isto imprime na tela do Render o erro real do 404 caso algo de errado aconteça com a sua chave
+              console.error("❌ ERRO FATURA:", e.response ? JSON.stringify(e.response.data) : e.message);
+              await enviarFluxo(phone, TEXTOS.T09, "09");
           }
           break;
 
@@ -175,7 +176,7 @@ app.post('/webhook/igreen', async (req, res) => {
 
       case 'AGUARDANDO_DOC_FRENTE':
           if (!isImage) {
-              await enviarFluxo(phone, TEXTOS.T11, "13");
+              await enviarFluxo(phone, TEXTOS.T11, "11");
               return;
           }
           try {
@@ -187,16 +188,16 @@ app.post('/webhook/igreen', async (req, res) => {
                   atualizarEstado(phone, leadRef, { LINK_DOC_FRENTE: mediaUrlF, STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO' });
                   await enviarFluxo(phone, TEXTOS.T05, "05");
               } else {
-                  await enviarFluxo(phone, TEXTOS.T11, "13");
+                  await enviarFluxo(phone, TEXTOS.T11, "11");
               }
           } catch (e) {
-              await enviarFluxo(phone, TEXTOS.T11, "13");
+              await enviarFluxo(phone, TEXTOS.T11, "11");
           }
           break;
 
       case 'AGUARDANDO_DOC_VERSO':
           if (!isImage) {
-              await enviarFluxo(phone, TEXTOS.T11, "13");
+              await enviarFluxo(phone, TEXTOS.T11, "11");
               return;
           }
           try {
@@ -209,13 +210,13 @@ app.post('/webhook/igreen', async (req, res) => {
                   atualizarEstado(phone, leadRef, { LINK_DOC_VERSO: mediaUrlV, STATUS_CADASTRO: 'AGUARDANDO_EMAIL' });
                   
                   setTimeout(async () => {
-                      await enviarFluxo(phone, TEXTOS.T07, "09");
+                      await enviarFluxo(phone, TEXTOS.T07, "07");
                   }, 4000); 
               } else {
-                  await enviarFluxo(phone, TEXTOS.T11, "13");
+                  await enviarFluxo(phone, TEXTOS.T11, "11");
               }
           } catch (e) {
-              await enviarFluxo(phone, TEXTOS.T11, "13");
+              await enviarFluxo(phone, TEXTOS.T11, "11");
           }
           break;
 
@@ -224,9 +225,9 @@ app.post('/webhook/igreen', async (req, res) => {
           const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
           if (emailRegex.test(textoIn)) {
               atualizarEstado(phone, leadRef, { EMAIL: textoIn, STATUS_CADASTRO: 'CONCLUIDO' });
-              await enviarFluxo(phone, TEXTOS.T08, "10");
+              await enviarFluxo(phone, TEXTOS.T08, "08");
           } else {
-              await enviarFluxo(phone, TEXTOS.T12, "14");
+              await enviarFluxo(phone, TEXTOS.T12, "12");
           }
           break;
           
@@ -275,10 +276,10 @@ async function enviarFluxo(phone, texto, prefixoAudio) {
     }
 }
 
-// 🧠 A ÚNICA IA ESTÁVEL NO RENDER (2.5 FLASH) COM PROMPT BLINDADO
+// SOLUÇÃO 404: Mudado estritamente para o gemini-1.5-flash (O único 100% público e funcional)
 async function auditarFaturaIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
   
   const prompt = `
     Aja como um auditor rigoroso da iGreen.
@@ -287,7 +288,7 @@ async function auditarFaturaIA(base64, mimeType) {
     Se for apenas uma foto de pessoa ou paisagem, defina false.
     - Se a média de consumo for >= 150kWh, defina "ELEGIVEL" como true.
     
-    Responda EXATAMENTE com este objeto JSON (sem markdown, sem crases):
+    Responda EXATAMENTE com este objeto JSON (sem formatação ou markdown em volta):
     {
       "VALIDO": true,
       "TARIFA_SOCIAL": false,
@@ -307,9 +308,10 @@ async function auditarFaturaIA(base64, mimeType) {
   return JSON.parse(textoLimpo);
 }
 
+// SOLUÇÃO 404: Mudado estritamente para o gemini-1.5-flash
 async function validarDocumentoIA(base64) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
   const prompt = `
     A imagem anexa é uma foto válida de um RG (Identidade) ou CNH brasileiro (frente ou verso)? 
     Responda APENAS com este JSON (sem markdown):
@@ -326,28 +328,21 @@ async function enviarMensagem(phone, message) {
   await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, { phone: numeroLimpo, message: String(message) }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }).catch(()=>{});
 }
 
-// 🔈 O RASTREADOR DE ÁUDIOS INTELIGENTE
+// SOLUÇÃO DOS ÁUDIOS: Lê os arquivos soltos na tela principal (raiz) do GitHub
 async function enviarAudioDireto(phone, prefixo) {
     try {
-        const audiosDir = path.join(__dirname, 'audios');
+        // Agora ele procura os arquivos na RAIZ do seu projeto, onde você colocou
+        const files = fs.readdirSync(__dirname);
         
-        if (!fs.existsSync(audiosDir)) {
-            console.error(`[ERRO CRÍTICO] A pasta 'audios' não existe no servidor! O robô não conseguiu encontrar os ficheiros.`);
-            return;
-        }
-        
-        // Pega todos os arquivos na pasta audios
-        const files = fs.readdirSync(audiosDir);
-        
-        // Procura qualquer ficheiro que comece com o prefixo (Ex: "01")
+        // Busca qualquer arquivo que comece com "01", "02", etc e termine com ".mp3"
         const foundFile = files.find(f => f.startsWith(prefixo) && f.toLowerCase().endsWith('.mp3'));
         
         if (!foundFile) {
-            console.error(`[AVISO] Nenhum ficheiro começando com '${prefixo}' foi encontrado. Ficheiros presentes na pasta: ${files.join(', ')}`);
+            console.error(`[ERRO CRÍTICO] O áudio começando com '${prefixo}' não foi encontrado na pasta principal do GitHub!`);
             return;
         }
 
-        const filePath = path.join(audiosDir, foundFile);
+        const filePath = path.join(__dirname, foundFile);
         const base64Audio = fs.readFileSync(filePath, { encoding: 'base64' });
         const dataUri = `data:audio/mpeg;base64,${base64Audio}`;
         const numeroLimpo = String(phone).replace(/\D/g, ''); 
