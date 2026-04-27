@@ -102,15 +102,21 @@ app.post('/webhook/igreen', async (req, res) => {
   const appId = process.env.RENDER_SERVICE_ID || 'igreen-autoflow-v4';
   let leadRef = null;
   
-  // 1. OBTÉM O ESTADO DO CLIENTE (DB Cloud ou Memória Local)
-  let status = memoriaEstado.get(phone)?.STATUS_CADASTRO || 'NOVO';
-
+  // 1. SOLUÇÃO DA AMNÉSIA: OBTÉM O ESTADO (Confia primeiro na Memória Local!)
+  let status = 'NOVO';
+  const mem = memoriaEstado.get(phone);
+  
   if (db) {
       leadRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('leads').doc(phone);
+  }
+
+  if (mem && mem.STATUS_CADASTRO) {
+      status = mem.STATUS_CADASTRO; // Usa a memória ultra-rápida (não confunde etapas)
+  } else if (leadRef) {
       const doc = await leadRef.get();
       if (doc.exists) {
-          status = doc.data().STATUS_CADASTRO || status;
-          memoriaEstado.set(phone, doc.data()); // Atualiza a memória local
+          status = doc.data().STATUS_CADASTRO || 'NOVO';
+          memoriaEstado.set(phone, doc.data()); 
       }
   }
 
@@ -198,6 +204,7 @@ app.post('/webhook/igreen', async (req, res) => {
                   atualizarEstado(phone, leadRef, { ...analise, STATUS_CADASTRO: 'RECUSADO_CONSUMO' });
               }
           } catch (e) {
+              console.error("ERRO FATURA:", e.message);
               await enviarFluxo(phone, TEXTOS.T09_ERRO_FATURA, AUDIOS.A09_ERRO_FATURA);
           }
           break;
@@ -227,6 +234,7 @@ app.post('/webhook/igreen', async (req, res) => {
                   await enviarFluxo(phone, TEXTOS.T11_ERRO_DOC, AUDIOS.A11_ERRO_DOC);
               }
           } catch (e) {
+              console.error("ERRO DOC FRENTE:", e.message);
               await enviarFluxo(phone, TEXTOS.T11_ERRO_DOC, AUDIOS.A11_ERRO_DOC);
           }
           break;
@@ -253,6 +261,7 @@ app.post('/webhook/igreen', async (req, res) => {
                   await enviarFluxo(phone, TEXTOS.T11_ERRO_DOC, AUDIOS.A11_ERRO_DOC);
               }
           } catch (e) {
+              console.error("ERRO DOC VERSO:", e.message);
               await enviarFluxo(phone, TEXTOS.T11_ERRO_DOC, AUDIOS.A11_ERRO_DOC);
           }
           break;
@@ -313,33 +322,56 @@ async function enviarFluxo(phone, texto, audioFile) {
     }
 }
 
-// MOTOR IA: FATURA (Gemini 2.5 Flash)
+// MOTOR IA: FATURA 
+// SOLUÇÃO DO BUG: Limpador de formatação Markdown adicionado
 async function auditarFaturaIA(base64, mimeType) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
   const prompt = `
-    Analise a imagem da fatura. Retorne JSON:
+    Aja como auditor iGreen. Extraia dados em JSON da fatura anexa.
+    IMPORTANTE: Retorne APENAS um objeto JSON válido.
+    
+    Regras:
+    - Se a imagem for uma conta de luz (Equatorial, Cemig, Enel, etc), VALIDO = true. Se for foto de pessoa, identidade ou paisagem, VALIDO = false.
+    - Consumo >= 150kWh torna ELEGIVEL = true.
+
+    Retorne este formato exato:
     {
-      "VALIDO": booleano (false se for foto de pessoa, paisagem, ou ilegível),
-      "TARIFA_SOCIAL": booleano (true se tiver tarifa social/baixa renda),
-      "ELEGIVEL": booleano (true se consumo >= 150),
+      "VALIDO": true/false,
+      "TARIFA_SOCIAL": true/false,
+      "ELEGIVEL": true/false,
       "NOME_CLIENTE": "Nome",
       "CPF": "Apenas números",
-      "ENDERECO_NUMERO": "Número da casa (vazio se não achar)",
+      "ENDERECO_NUMERO": "Número da casa",
       "MEDIA_CONSUMO": 0
     }
   `;
   const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType, data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
   const res = await axios.post(url, payload);
-  return JSON.parse(res.data.candidates[0].content.parts[0].text);
+  
+  // Limpador (Garante que não haverá erro de Parsing se a IA usar Markdown)
+  let textoLimpo = res.data.candidates[0].content.parts[0].text;
+  textoLimpo = textoLimpo.replace(/```json/g, '').replace(/```/g, '').trim();
+  
+  return JSON.parse(textoLimpo);
 }
 
 // MOTOR IA: VALIDAÇÃO DE IDENTIDADE
+// SOLUÇÃO DO BUG: Limpador de formatação Markdown adicionado
 async function validarDocumentoIA(base64) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
-  const prompt = `A imagem é uma foto válida de RG ou CNH brasileiro? Retorne JSON: {"VALIDO": true/false}`;
+  const prompt = `
+    A imagem é uma foto válida de RG ou CNH brasileiro? 
+    IMPORTANTE: Retorne APENAS um objeto JSON válido.
+    {"VALIDO": true/false}
+  `;
   const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
   const res = await axios.post(url, payload);
-  return JSON.parse(res.data.candidates[0].content.parts[0].text).VALIDO;
+  
+  // Limpador
+  let textoLimpo = res.data.candidates[0].content.parts[0].text;
+  textoLimpo = textoLimpo.replace(/```json/g, '').replace(/```/g, '').trim();
+  
+  return JSON.parse(textoLimpo).VALIDO;
 }
 
 async function enviarMensagem(phone, message) {
