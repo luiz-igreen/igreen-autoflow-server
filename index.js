@@ -12,7 +12,7 @@ const ZAPI_INSTANCE = "3F14E2A7F66AC2180C0BBA4D31290A14";
 const ZAPI_TOKEN = "88F232A54C5DC27793994637";
 const ZAPI_CLIENT_TOKEN = "F177679f2434d425e9a3e58ddec1d4cf0S"; 
 
-// Conexão segura com o Banco de Dados (Firestore)
+// Conexão com o Banco de Dados (Firestore)
 try {
   const firebaseConfig = process.env.FIREBASE_CONFIG ? JSON.parse(process.env.FIREBASE_CONFIG) : null;
   if (firebaseConfig) {
@@ -41,13 +41,11 @@ app.post('/webhook/igreen', async (req, res) => {
   const data = req.body;
   res.status(200).send("OK"); 
 
-  // LOG DE ENTRADA
   console.log(`\n📡 [RADAR] SINAL RECEBIDO! Tipo: ${data.type} | De: ${data.phone}`);
 
-  if (data.fromMe) return; // Ignora o que o próprio robô escreve
+  if (data.fromMe) return;
 
   const phone = data.phone;
-  // Detecção robusta de imagem e documento
   const isImage = data.type === 'image' || data.isImage === true || data.type === 'photo' || (data.image && data.image.imageUrl) || (data.photo && data.photo.photoUrl);
   const isPDF = data.type === 'document' || data.isDocument === true || (data.document && data.document.documentUrl);
   const isTexto = data.text && data.text.message;
@@ -60,7 +58,7 @@ app.post('/webhook/igreen', async (req, res) => {
       const vozBoasVindas = `${saudacao}! Seja muito bem-vindo à i Green Energy! Para começarmos a sua simulação, por favor, me envie uma foto bem nítida ou o P D F da sua conta de luz.`;
       
       await enviarMensagem(phone, txtBoasVindas);
-      await enviarAudio(phone, await gerarAudioGemini(vozBoasVindas));
+      await enviarAudio(phone, await gerarAudio(vozBoasVindas));
       return; 
   }
   
@@ -71,7 +69,7 @@ app.post('/webhook/igreen', async (req, res) => {
     const vozInicial = `${saudacao}! Recebi a sua fatura. A nossa Inteligência Artificial está fazendo a auditoria completa. Aguarde só um instante.`;
     
     await enviarMensagem(phone, txtInicial);
-    await enviarAudio(phone, await gerarAudioGemini(vozInicial));
+    await enviarAudio(phone, await gerarAudio(vozInicial));
 
     try {
       let mediaUrl = data.link || 
@@ -80,12 +78,11 @@ app.post('/webhook/igreen', async (req, res) => {
                      (data.photo && data.photo.photoUrl) || "";
 
       if (!mediaUrl || !mediaUrl.startsWith('http')) {
-          throw new Error("Link da mídia não encontrado no webhook da Z-API.");
+          throw new Error("Link da mídia não encontrado.");
       }
 
-      console.log(`🔗 Preparando para baixar a foto do link oficial...`);
+      console.log(`🔗 Preparando para baixar a foto...`);
 
-      // SISTEMA ANTI-FALHA (RETRY LOOP) BLINDADO COM DISFARCE (USER-AGENT)
       let fileResponse = null;
       let tentativas = 5; 
       while (tentativas > 0) {
@@ -94,17 +91,16 @@ app.post('/webhook/igreen', async (req, res) => {
               fileResponse = await axios.get(mediaUrl, { 
                   responseType: 'arraybuffer',
                   headers: {
-                      // O disfarce perfeito para o firewall do Backblaze não bloquear a imagem (Erro 404/403)
                       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8'
                   }
               });
-              console.log(`✅ FOTO BAIXADA COM SUCESSO! Enviando para o Gemini IA...`);
+              console.log(`✅ FOTO BAIXADA COM SUCESSO!`);
               break; 
           } catch (err) {
               const statusErro = err.response ? err.response.status : 'Desconhecido';
-              console.log(`⚠️ O servidor de imagens bloqueou/atrasou (Erro ${statusErro}). Aguardando 3 segundos...`);
-              if (tentativas === 1) throw new Error("Falha definitiva ao tentar baixar a imagem após 5 tentativas.");
+              console.log(`⚠️ Servidor de imagens atrasou (Erro ${statusErro}). Aguardando 3 segundos...`);
+              if (tentativas === 1) throw new Error("Falha ao baixar imagem.");
               await new Promise(r => setTimeout(r, 3000));
               tentativas--;
           }
@@ -113,7 +109,7 @@ app.post('/webhook/igreen', async (req, res) => {
       const base64Data = Buffer.from(fileResponse.data, 'binary').toString('base64');
       const mimeType = isPDF ? "application/pdf" : "image/jpeg";
 
-      console.log(`🧠 Gemini IA a ler os dados...`);
+      console.log(`🧠 Gemini IA a ler os dados (Modelo 1.5 Estável)...`);
       const analise = await analisarComIA(base64Data, mimeType);
       console.log(`✅ LEITURA CONCLUÍDA! Resultado: Elegível? ${analise.ELEGIVEL}`);
 
@@ -134,52 +130,46 @@ app.post('/webhook/igreen', async (req, res) => {
         const txtAprovado = `🎉 *Parabéns, ${primeiroNome}!*\n\nSua conta foi *APROVADA*! O consumo lido foi de ${analise.MEDIA_CONSUMO} kWh.\nO consultor Luiz Jorge entrará em contato em breve.`;
         const vozAprovado = `Parabéns, ${primeiroNome}! Sua conta foi aprovada! O consultor Luiz Jorge entrará em contato em breve para gerar seu desconto.`;
         await enviarMensagem(phone, txtAprovado);
-        await enviarAudio(phone, await gerarAudioGemini(vozAprovado));
+        await enviarAudio(phone, await gerarAudio(vozAprovado));
       } else {
         const txtRecusado = `Olá ${primeiroNome}, sua fatura não atende aos critérios: ${analise.MOTIVO_RECUSA}`;
         const vozRecusado = `Olá ${primeiroNome}, sua fatura não atende aos critérios da i Green pelo seguinte motivo: ${analise.MOTIVO_RECUSA}`;
         await enviarMensagem(phone, txtRecusado);
-        await enviarAudio(phone, await gerarAudioGemini(vozRecusado));
+        await enviarAudio(phone, await gerarAudio(vozRecusado));
       }
       
       console.log(`🏁 ATENDIMENTO FINALIZADO PARA: ${phone}\n=========================================`);
 
     } catch (erro) {
-      console.error("❌ ERRO GRAVE NO FLUXO:", erro.message);
+      console.error("❌ ERRO NO FLUXO:", erro.message);
       const txtErro = "Tivemos uma falha temporária ao ler a sua imagem. Pode enviar a fatura novamente, por favor?";
       await enviarMensagem(phone, txtErro);
     }
   }
 });
 
-// MOTOR IA (Gemini)
+// MOTOR IA (Gemini Público Estável)
 async function analisarComIA(base64, mimeType) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
+  if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
+  // 🚨 CORREÇÃO DO ERRO 404: Mudamos para a versão pública e estável gemini-1.5-flash
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
   const prompt = `Aja como auditor iGreen. Extraia dados em JSON: NOME_CLIENTE, CPF, CNPJ, UC, MEDIA_CONSUMO (kWh), ELEGIVEL (true/false), MOTIVO_RECUSA. Regras: Grupo B, Consumo > 150kWh, Sem tarifa social, Titular vivo.`;
   const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType, data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
   const res = await axios.post(url, payload);
   return JSON.parse(res.data.candidates[0].content.parts[0].text);
 }
 
-// MOTOR DE VOZ
-async function gerarAudioGemini(texto) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${GEMINI_API_KEY}`;
-  const payload = { contents: [{ parts: [{ text: texto }] }], generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } } } } };
+// NOVO MOTOR DE VOZ (Público e Gratuito - Google Translate TTS)
+async function gerarAudio(texto) {
   try {
-    const res = await axios.post(url, payload);
-    const pcm = Buffer.from(res.data.candidates[0].content.parts[0].inlineData.data, 'base64');
-    return `data:audio/wav;base64,${pcmToWav(pcm).toString('base64')}`;
-  } catch { return null; }
-}
-
-function pcmToWav(pcm) {
-  const s = 24000, c = 1, b = 16;
-  const buf = Buffer.alloc(44 + pcm.length);
-  buf.write('RIFF', 0); buf.writeUInt32LE(36 + pcm.length, 4); buf.write('WAVE', 8); buf.write('fmt ', 12);
-  buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20); buf.writeUInt16LE(c, 22); buf.writeUInt32LE(s, 24);
-  buf.writeUInt32LE(s*c*b/8, 28); buf.writeUInt16LE(c*b/8, 32); buf.writeUInt16LE(b, 34); buf.write('data', 36);
-  buf.writeUInt32LE(pcm.length, 40); pcm.copy(buf, 44);
-  return buf;
+    const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=pt-BR&client=tw-ob&q=${encodeURIComponent(texto)}`;
+    const res = await axios.get(url, { responseType: 'arraybuffer' });
+    const base64Audio = Buffer.from(res.data, 'binary').toString('base64');
+    return `data:audio/mp3;base64,${base64Audio}`;
+  } catch (error) {
+    console.log("❌ Erro ao gerar voz:", error.message);
+    return null;
+  }
 }
 
 // ENVIOS Z-API
@@ -194,4 +184,4 @@ async function enviarAudio(phone, audio) {
   await axios.post(url, { phone: phone.replace(/\D/g,''), audio }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }).catch(e => console.log("Erro audio"));
 }
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON!`));  
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON!`));
