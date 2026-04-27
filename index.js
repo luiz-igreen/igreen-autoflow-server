@@ -109,27 +109,33 @@ app.post('/webhook/igreen', async (req, res) => {
       const base64Data = Buffer.from(fileResponse.data, 'binary').toString('base64');
       const mimeType = isPDF ? "application/pdf" : "image/jpeg";
 
-      // 👇 MUDANÇA CRUCIAL: Agora usando a Versão 3.1 Pro Oficial
       console.log(`🧠 Gemini IA a ler os dados (Modelo 3.1 Pro Atualizado)...`);
       const analise = await analisarComIA(base64Data, mimeType);
       console.log(`✅ LEITURA CONCLUÍDA! Resultado: Elegível? ${analise.ELEGIVEL}`);
 
-      if (analise.ELEGIVEL && admin.apps.length > 0) {
+      // Atualiza o Status para pedir o documento a seguir
+      let statusCadastro = analise.ELEGIVEL ? 'AGUARDANDO_DOC_FRENTE' : 'RECUSADO_IA';
+
+      if (admin.apps.length > 0) {
           const db = admin.firestore();
           const appId = process.env.RENDER_SERVICE_ID || 'igreen-autoflow-v4';
           await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('leads').doc(phone).set({
               ...analise,
+              STATUS_CADASTRO: statusCadastro,
               DATA_PROCESSAMENTO: admin.firestore.Timestamp.now(),
               TELEFONE: phone,
               LINK_FATURA: mediaUrl
           }, { merge: true });
-          console.log(`💾 Cliente salvo no banco de dados Cloud!`);
+          console.log(`💾 Cliente salvo no banco de dados Cloud com status: ${statusCadastro}`);
       }
 
       const primeiroNome = analise.NOME_CLIENTE ? analise.NOME_CLIENTE.split(' ')[0] : "Cliente";
+      
       if (analise.ELEGIVEL) {
-        const txtAprovado = `🎉 *Parabéns, ${primeiroNome}!*\n\nSua conta foi *APROVADA*! O consumo lido foi de ${analise.MEDIA_CONSUMO} kWh.\nO consultor Luiz Jorge entrará em contato em breve.`;
-        const vozAprovado = `Parabéns, ${primeiroNome}! Sua conta foi aprovada! O consultor Luiz Jorge entrará em contato em breve para gerar seu desconto.`;
+        // TEXTOS CORRIGIDOS PARA PEDIR O DOCUMENTO!
+        const txtAprovado = `🎉 *Parabéns, ${primeiroNome}!*\n\nA sua conta foi *APROVADA*! O consumo lido foi de ${analise.MEDIA_CONSUMO} kWh.\n\nPara darmos andamento à sua adesão e garantir o seu desconto, por favor, envie agora uma *foto da FRENTE do seu documento de identidade* (RG ou CNH).`;
+        const vozAprovado = `Parabéns, ${primeiroNome}! Sua conta foi aprovada com sucesso. Para darmos andamento ao seu desconto, por favor, me envie agora uma foto da frente do seu documento de identidade, que pode ser R G ou C N H. Fico no aguardo!`;
+        
         await enviarMensagem(phone, txtAprovado);
         await enviarAudio(phone, await gerarAudio(vozAprovado));
       } else {
@@ -149,10 +155,9 @@ app.post('/webhook/igreen', async (req, res) => {
   }
 });
 
-// MOTOR IA (Atualizado para Gemini 3.1 Pro Preview)
+// MOTOR IA (Mantido no 3.1 Pro Preview)
 async function analisarComIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
-  // 🚨 ATUALIZAÇÃO REQUERIDA (Versão 3.1)
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${GEMINI_API_KEY}`;
   const prompt = `Aja como auditor iGreen. Extraia dados em JSON: NOME_CLIENTE, CPF, CNPJ, UC, MEDIA_CONSUMO (kWh), ELEGIVEL (true/false), MOTIVO_RECUSA. Regras: Grupo B, Consumo > 150kWh, Sem tarifa social, Titular vivo.`;
   const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType, data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
@@ -160,41 +165,63 @@ async function analisarComIA(base64, mimeType) {
   return JSON.parse(res.data.candidates[0].content.parts[0].text);
 }
 
-// MOTOR DE VOZ (Atualizado para Gemini 3.1 Flash TTS com sistema de reserva de segurança)
+// MOTOR DE VOZ (Voltamos para a versão Premium "Kore" que estava 100% perfeita)
 async function gerarAudio(texto) {
+  if (!GEMINI_API_KEY) return null;
+  console.log(`🎙️ Gerando áudio Premium (Kore)...`);
+  
+  // Usando o endpoint oficial TTS que não falha
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${GEMINI_API_KEY}`;
+  
+  const payload = {
+    contents: [{ parts: [{ text: texto }] }],
+    generationConfig: {
+      responseModalities: ["AUDIO"],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: { voiceName: "Kore" }
+        }
+      }
+    },
+    model: "gemini-2.5-flash-preview-tts"
+  };
+
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts:generateContent?key=${GEMINI_API_KEY}`;
-    const payload = { 
-      contents: [{ parts: [{ text: texto }] }], 
-      generationConfig: { 
-        responseModalities: ["AUDIO"], 
-        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } } } 
-      } 
-    };
-    const res = await axios.post(url, payload);
-    const pcm = Buffer.from(res.data.candidates[0].content.parts[0].inlineData.data, 'base64');
-    return `data:audio/wav;base64,${pcmToWav(pcm).toString('base64')}`;
+    const resposta = await axios.post(url, payload);
+    const pcmBase64 = resposta.data.candidates[0].content.parts[0].inlineData.data;
+    const pcmBuffer = Buffer.from(pcmBase64, 'base64');
+    const wavBuffer = pcmToWav(pcmBuffer, 24000);
+    return `data:audio/wav;base64,${wavBuffer.toString('base64')}`;
   } catch (error) {
-    console.log("⚠️ TTS Gemini 3.1 falhou. Usando sistema de voz alternativo seguro...");
-    try {
-        const urlFallback = `https://translate.google.com/translate_tts?ie=UTF-8&tl=pt-BR&client=tw-ob&q=${encodeURIComponent(texto)}`;
-        const resFallback = await axios.get(urlFallback, { responseType: 'arraybuffer' });
-        const base64Audio = Buffer.from(resFallback.data, 'binary').toString('base64');
-        return `data:audio/mp3;base64,${base64Audio}`;
-    } catch (e) {
-        return null;
-    }
+    console.error("❌ ERRO NA GERAÇÃO DE VOZ PREMIUM:", error.message);
+    return null;
   }
 }
 
-function pcmToWav(pcm) {
-  const s = 24000, c = 1, b = 16;
-  const buf = Buffer.alloc(44 + pcm.length);
-  buf.write('RIFF', 0); buf.writeUInt32LE(36 + pcm.length, 4); buf.write('WAVE', 8); buf.write('fmt ', 12);
-  buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20); buf.writeUInt16LE(c, 22); buf.writeUInt32LE(s, 24);
-  buf.writeUInt32LE(s*c*b/8, 28); buf.writeUInt16LE(c*b/8, 32); buf.writeUInt16LE(b, 34); buf.write('data', 36);
-  buf.writeUInt32LE(pcm.length, 40); pcm.copy(buf, 44);
-  return buf;
+function pcmToWav(pcmDataBuffer, sampleRate = 24000) {
+  const numChannels = 1;
+  const bitsPerSample = 16;
+  const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+  const blockAlign = numChannels * (bitsPerSample / 8);
+  const dataSize = pcmDataBuffer.length;
+  const buffer = Buffer.alloc(44 + dataSize);
+
+  buffer.write('RIFF', 0);
+  buffer.writeUInt32LE(36 + dataSize, 4);
+  buffer.write('WAVE', 8);
+  buffer.write('fmt ', 12);
+  buffer.writeUInt32LE(16, 16); 
+  buffer.writeUInt16LE(1, 20); 
+  buffer.writeUInt16LE(numChannels, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(byteRate, 28);
+  buffer.writeUInt16LE(blockAlign, 32);
+  buffer.writeUInt16LE(bitsPerSample, 34);
+  buffer.write('data', 36);
+  buffer.writeUInt32LE(dataSize, 40);
+  pcmDataBuffer.copy(buffer, 44);
+
+  return buffer;
 }
 
 // ENVIOS Z-API
