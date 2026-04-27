@@ -162,8 +162,7 @@ app.post('/webhook/igreen', async (req, res) => {
                   atualizarEstado(phone, leadRef, { ...analise, STATUS_CADASTRO: 'RECUSADO_CONSUMO' });
               }
           } catch (e) {
-              // Isto imprime na tela do Render o erro real do 404 caso algo de errado aconteça com a sua chave
-              console.error("❌ ERRO FATURA:", e.response ? JSON.stringify(e.response.data) : e.message);
+              console.error("❌ ERRO FATURA (Verifique a tela preta):", e.message);
               await enviarFluxo(phone, TEXTOS.T09, "09");
           }
           break;
@@ -270,57 +269,93 @@ async function baixarArquivo(mediaUrl) {
 async function enviarFluxo(phone, texto, prefixoAudio) {
     await enviarMensagem(phone, texto);
     if (prefixoAudio) {
-        console.log(`⏱️ Pausa de 2s antes do áudio...`);
+        console.log(`⏱️ Pausa de 2s para enviar áudio...`);
         await new Promise(r => setTimeout(r, 2000));
         await enviarAudioDireto(phone, prefixoAudio);
     }
 }
 
-// SOLUÇÃO 404: Mudado estritamente para o gemini-1.5-flash (O único 100% público e funcional)
+// 🧠 SISTEMA ANTI-404: Tenta 4 modelos diferentes automaticamente até um funcionar!
 async function auditarFaturaIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
   
-  const prompt = `
-    Aja como um auditor rigoroso da iGreen.
-    ATENÇÃO MÁXIMA: O documento anexo PODE SER UMA FOTO DE UMA TELA DE COMPUTADOR. Isso é 100% VÁLIDO. 
-    Desde que a imagem contenha dados de energia de uma concessionária (Equatorial, Cemig, Enel, etc.), defina "VALIDO" como true.
-    Se for apenas uma foto de pessoa ou paisagem, defina false.
-    - Se a média de consumo for >= 150kWh, defina "ELEGIVEL" como true.
-    
-    Responda EXATAMENTE com este objeto JSON (sem formatação ou markdown em volta):
-    {
-      "VALIDO": true,
-      "TARIFA_SOCIAL": false,
-      "ELEGIVEL": true,
-      "NOME_CLIENTE": "Nome completo",
-      "CPF": "00000000000",
-      "CNPJ": "00000000000000",
-      "UC": "Numero da UC",
-      "ENDERECO_NUMERO": "Numero da porta",
-      "MEDIA_CONSUMO": 0
-    }
-  `;
-  
-  const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType, data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
-  const res = await axios.post(url, payload);
-  let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
-  return JSON.parse(textoLimpo);
+  const modelosParaTestar = [
+      "gemini-1.5-pro",
+      "gemini-1.5-flash-latest",
+      "gemini-1.5-pro-latest",
+      "gemini-2.5-flash-preview-09-2025"
+  ];
+
+  let ultimoErro = null;
+
+  for (const modelo of modelosParaTestar) {
+      try {
+          console.log(`[IA] Tentando ler fatura com: ${modelo}...`);
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent?key=${GEMINI_API_KEY}`;
+          
+          const prompt = `
+            Aja como um auditor rigoroso da iGreen.
+            ATENÇÃO MÁXIMA: O documento anexo PODE SER UMA FOTO DE UMA TELA DE COMPUTADOR. Isso é 100% VÁLIDO. 
+            Desde que a imagem contenha dados de energia de uma concessionária (Equatorial, Cemig, Enel, etc.), defina "VALIDO" como true.
+            Se for apenas uma foto de pessoa ou paisagem, defina false.
+            - Se a média de consumo for >= 150kWh, defina "ELEGIVEL" como true.
+            
+            Responda EXATAMENTE com este objeto JSON (sem formatação ou markdown em volta):
+            {
+              "VALIDO": true,
+              "TARIFA_SOCIAL": false,
+              "ELEGIVEL": true,
+              "NOME_CLIENTE": "Nome completo",
+              "CPF": "00000000000",
+              "CNPJ": "00000000000000",
+              "UC": "Numero da UC",
+              "ENDERECO_NUMERO": "Numero da porta",
+              "MEDIA_CONSUMO": 0
+            }
+          `;
+          
+          const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType, data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
+          const res = await axios.post(url, payload);
+          let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
+          
+          console.log(`[IA] Sucesso com o modelo ${modelo}!`);
+          return JSON.parse(textoLimpo);
+
+      } catch (e) {
+          ultimoErro = e;
+          if (e.response && e.response.status === 404) {
+              console.log(`[IA] Modelo ${modelo} deu Erro 404. Tentando o próximo...`);
+              continue; // Tenta o próximo modelo da lista
+          }
+          throw e; // Se for outro erro (ex: imagem ilegível), ele aborta
+      }
+  }
+  throw ultimoErro; // Se todos derem 404
 }
 
-// SOLUÇÃO 404: Mudado estritamente para o gemini-1.5-flash
+// SISTEMA ANTI-404 PARA VALIDAÇÃO DE DOCUMENTO
 async function validarDocumentoIA(base64) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-  const prompt = `
-    A imagem anexa é uma foto válida de um RG (Identidade) ou CNH brasileiro (frente ou verso)? 
-    Responda APENAS com este JSON (sem markdown):
-    {"VALIDO": true}
-  `;
-  const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
-  const res = await axios.post(url, payload);
-  let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
-  return JSON.parse(textoLimpo).VALIDO;
+  
+  const modelosParaTestar = ["gemini-1.5-pro", "gemini-1.5-flash-latest", "gemini-1.5-pro-latest", "gemini-2.5-flash-preview-09-2025"];
+  let ultimoErro = null;
+
+  for (const modelo of modelosParaTestar) {
+      try {
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent?key=${GEMINI_API_KEY}`;
+          const prompt = `A imagem anexa é uma foto válida de um RG (Identidade) ou CNH brasileiro (frente ou verso)? Responda APENAS com este JSON (sem markdown): {"VALIDO": true}`;
+          const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
+          
+          const res = await axios.post(url, payload);
+          let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
+          return JSON.parse(textoLimpo).VALIDO;
+      } catch (e) {
+          ultimoErro = e;
+          if (e.response && e.response.status === 404) continue;
+          throw e;
+      }
+  }
+  throw ultimoErro;
 }
 
 async function enviarMensagem(phone, message) {
@@ -328,21 +363,38 @@ async function enviarMensagem(phone, message) {
   await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, { phone: numeroLimpo, message: String(message) }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }).catch(()=>{});
 }
 
-// SOLUÇÃO DOS ÁUDIOS: Lê os arquivos soltos na tela principal (raiz) do GitHub
+// 🔈 O RASTREADOR UNIVERSAL DE ÁUDIOS (Procura em TODAS as pastas do seu GitHub)
+function buscarAudioRecursivo(diretorio, prefixo) {
+    let arquivos = fs.readdirSync(diretorio);
+    for (let arquivo of arquivos) {
+        if (arquivo === 'node_modules' || arquivo === '.git') continue; // Ignora pastas do sistema
+        
+        let caminhoCompleto = path.join(diretorio, arquivo);
+        let stat = fs.statSync(caminhoCompleto);
+        
+        if (stat.isDirectory()) {
+            let encontrado = buscarAudioRecursivo(caminhoCompleto, prefixo); // Procura dentro da subpasta
+            if (encontrado) return encontrado;
+        } else {
+            if (arquivo.startsWith(prefixo) && arquivo.toLowerCase().endsWith('.mp3')) {
+                return caminhoCompleto; // Encontrou!
+            }
+        }
+    }
+    return null;
+}
+
 async function enviarAudioDireto(phone, prefixo) {
     try {
-        // Agora ele procura os arquivos na RAIZ do seu projeto, onde você colocou
-        const files = fs.readdirSync(__dirname);
+        console.log(`[ÁUDIO] A vasculhar o GitHub à procura do áudio '${prefixo}'...`);
         
-        // Busca qualquer arquivo que comece com "01", "02", etc e termine com ".mp3"
-        const foundFile = files.find(f => f.startsWith(prefixo) && f.toLowerCase().endsWith('.mp3'));
+        const filePath = buscarAudioRecursivo(__dirname, prefixo);
         
-        if (!foundFile) {
-            console.error(`[ERRO CRÍTICO] O áudio começando com '${prefixo}' não foi encontrado na pasta principal do GitHub!`);
+        if (!filePath) {
+            console.error(`[ERRO CRÍTICO] O áudio '${prefixo}' NÃO EXISTE em nenhuma pasta do seu GitHub! Por favor, verifique se fez o upload.`);
             return;
         }
 
-        const filePath = path.join(__dirname, foundFile);
         const base64Audio = fs.readFileSync(filePath, { encoding: 'base64' });
         const dataUri = `data:audio/mpeg;base64,${base64Audio}`;
         const numeroLimpo = String(phone).replace(/\D/g, ''); 
@@ -351,9 +403,9 @@ async function enviarAudioDireto(phone, prefixo) {
             { phone: numeroLimpo, audio: dataUri }, 
             { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }
         );
-        console.log(`🔊 Áudio enviado perfeitamente: ${foundFile}`);
+        console.log(`🔊 Sucesso! Áudio encontrado em: ${filePath}`);
     } catch (e) {
-        console.error(`❌ Erro ao processar o envio do áudio ${prefixo}:`, e.message);
+        console.error(`❌ Erro ao enviar áudio ${prefixo}:`, e.message);
     }
 }
 
