@@ -41,7 +41,7 @@ app.post('/webhook/igreen', async (req, res) => {
   const data = req.body;
   res.status(200).send("OK"); 
 
-  // LOG DE ENTRADA (Para você ver na tela preta do Render se a Z-API enviou algo)
+  // LOG DE ENTRADA
   console.log(`\n📡 [RADAR] SINAL RECEBIDO! Tipo: ${data.type} | De: ${data.phone}`);
 
   if (data.fromMe) return; // Ignora o que o próprio robô escreve
@@ -75,9 +75,9 @@ app.post('/webhook/igreen', async (req, res) => {
       let mediaUrl = data.link || (data.image ? data.image.imageUrl : (data.document ? data.document.documentUrl : ""));
       if (!mediaUrl) throw new Error("Link da mídia não encontrado.");
 
+      // CORREÇÃO: Download simples sem o Header do Token, para evitar o erro 404 no servidor de arquivos
       const fileResponse = await axios.get(mediaUrl, { 
-          responseType: 'arraybuffer',
-          headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } 
+          responseType: 'arraybuffer'
       });
       const base64Data = Buffer.from(fileResponse.data, 'binary').toString('base64');
       const mimeType = isPDF ? "application/pdf" : "image/jpeg";
