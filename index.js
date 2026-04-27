@@ -275,18 +275,20 @@ async function enviarFluxo(phone, texto, prefixoAudio) {
     }
 }
 
-// 🧠 MOTOR IA DEFINITIVO E ATUALIZADO (gemini-2.5-pro)
+// 🧠 MOTOR IA DEFINITIVO COM EXTRAÇÃO PROFUNDA (gemini-2.5-pro)
 async function auditarFaturaIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
   
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${GEMINI_API_KEY}`;
   
   const prompt = `
-    Aja como um auditor rigoroso da iGreen.
-    ATENÇÃO MÁXIMA: O documento anexo PODE SER UMA FOTO DE UMA TELA DE COMPUTADOR. Isso é 100% VÁLIDO. 
-    Desde que a imagem contenha dados de energia de uma concessionária (Equatorial, Cemig, Enel, etc.), defina "VALIDO" como true.
-    Se for apenas uma foto de pessoa ou paisagem, defina false.
-    - Se a média de consumo for >= 150kWh, defina "ELEGIVEL" como true.
+    Aja como um auditor de dados rigoroso da iGreen.
+    ATENÇÃO: O documento anexo PODE SER UMA FOTO DE UMA TELA DE COMPUTADOR. Isso é 100% VÁLIDO. 
+    Desde que a imagem contenha dados de energia (Equatorial, Cemig, Enel, etc.), defina "VALIDO" como true.
+
+    Sua missão é extrair TODOS os dados disponíveis para alimentar o Dashboard Cloud.
+    - Média de Consumo >= 150kWh torna "ELEGIVEL" = true.
+    - Extraia o histórico de consumo dos meses disponíveis na fatura. Onde não houver, coloque 0.
     
     Responda EXATAMENTE com este objeto JSON (sem formatação ou markdown em volta):
     {
@@ -294,11 +296,32 @@ async function auditarFaturaIA(base64, mimeType) {
       "TARIFA_SOCIAL": false,
       "ELEGIVEL": true,
       "NOME_CLIENTE": "Nome completo",
+      "MASCARA_CPF": "000.000.000-00",
       "CPF": "00000000000",
-      "CNPJ": "00000000000000",
+      "MASCARA_CNPJ": "00.000.000/0000-00",
+      "CNPJ": "Apenas numeros",
+      "DATA_NASCIMENTO": "DD/MM/AAAA",
+      "CEP": "00000-000",
+      "ENDERECO": "Rua/Avenida, Bairro",
+      "ENDERECO_NUMERO": "Numero da casa ou apartamento",
+      "ESTADO": "Sigla do estado",
+      "DISTRIBUIDORA": "Nome da concessionaria",
+      "TIPO_LIGACAO": "Monofasico, Bifasico ou Trifasico",
       "UC": "Numero da UC",
-      "ENDERECO_NUMERO": "Numero da porta",
-      "MEDIA_CONSUMO": 0
+      "VALOR_FATURA": 0.00,
+      "MEDIA_CONSUMO": 0,
+      "CONSUMO_MES_1": 0,
+      "CONSUMO_MES_2": 0,
+      "CONSUMO_MES_3": 0,
+      "CONSUMO_MES_4": 0,
+      "CONSUMO_MES_5": 0,
+      "CONSUMO_MES_6": 0,
+      "CONSUMO_MES_7": 0,
+      "CONSUMO_MES_8": 0,
+      "CONSUMO_MES_9": 0,
+      "CONSUMO_MES_10": 0,
+      "CONSUMO_MES_11": 0,
+      "CONSUMO_MES_12": 0
     }
   `;
   
@@ -306,11 +329,11 @@ async function auditarFaturaIA(base64, mimeType) {
   const res = await axios.post(url, payload);
   let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
   
-  console.log(`[IA] Sucesso absoluto com gemini-2.5-pro!`);
+  console.log(`[IA] Sucesso absoluto na extração profunda!`);
   return JSON.parse(textoLimpo);
 }
 
-// 🧠 MOTOR IA DEFINITIVO E ATUALIZADO (Documento - gemini-2.5-pro)
+// 🧠 MOTOR IA PARA DOCUMENTOS
 async function validarDocumentoIA(base64) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
   
