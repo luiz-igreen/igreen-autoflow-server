@@ -158,7 +158,7 @@ app.post('/webhook/igreen', async (req, res) => {
                   
                   await enviarFluxo(phone, proximoTexto, proximoAudio);
               } else {
-                  await enviarMensagem(phone, "Sua fatura foi analisada, mas no momento o consumo está abaixo da média exigida.");
+                  await enviarMensagem(phone, `Sua fatura foi analisada, mas a sua média de consumo (${analise.MEDIA_CONSUMO} kWh) está abaixo do mínimo exigido no momento.`);
                   atualizarEstado(phone, leadRef, { ...analise, STATUS_CADASTRO: 'RECUSADO_CONSUMO' });
               }
           } catch (e) {
@@ -275,7 +275,7 @@ async function enviarFluxo(phone, texto, prefixoAudio) {
     }
 }
 
-// 🧠 MOTOR IA DEFINITIVO COM EXTRAÇÃO PROFUNDA (gemini-2.5-pro)
+// 🧠 MOTOR IA DEFINITIVO COM REGRA CORRETA PARA ALAGOAS E OUTROS ESTADOS
 async function auditarFaturaIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
   
@@ -287,8 +287,18 @@ async function auditarFaturaIA(base64, mimeType) {
     Desde que a imagem contenha dados de energia (Equatorial, Cemig, Enel, etc.), defina "VALIDO" como true.
 
     Sua missão é extrair TODOS os dados disponíveis para alimentar o Dashboard Cloud.
-    - Média de Consumo >= 150kWh torna "ELEGIVEL" = true.
-    - Extraia o histórico de consumo dos meses disponíveis na fatura. Onde não houver, coloque 0.
+    
+    🚨 REGRA ESTRITA DE CÁLCULO DA MÉDIA DE CONSUMO 🚨:
+    Você DEVE analisar o histórico de consumo na imagem e aplicar a seguinte regra de cálculo:
+    
+    1. ALAGOAS (Equatorial AL): Some ESTRITAMENTE os 06 (seis) primeiros meses do histórico (contando de cima para baixo) e divida por 6.
+    2. OUTROS ESTADOS: Some os 12 meses (se exigido pela concessionária local) e divida por 12.
+    3. REGRA DE PROPORCIONALIDADE (Imóvel novo/alugado): Se o cliente NÃO TIVER histórico suficiente (ex: a conta tem apenas 3 ou 4 meses registrados), você DEVE somar apenas os meses que existem e divida pelo número exato de meses existentes (ex: some os 4 e divida por 4). Nunca divida por 6 ou 12 se não houver dados para esses meses.
+    
+    Exemplo prático de ALAGOAS na foto: (174+167+174+179+162+140) = 996. Média = 996 / 6 = 166.
+    - O valor "MEDIA_CONSUMO" deve ser um número inteiro.
+    - Se a "MEDIA_CONSUMO" calculada for >= 150kWh (para AL) ou >= à regra local, defina "ELEGIVEL" = true.
+    - Extraia todo o histórico de consumo mês a mês para as variáveis CONSUMO_MES_1 a 12. Onde for vazio, coloque 0.
     
     Responda EXATAMENTE com este objeto JSON (sem formatação ou markdown em volta):
     {
@@ -329,7 +339,7 @@ async function auditarFaturaIA(base64, mimeType) {
   const res = await axios.post(url, payload);
   let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
   
-  console.log(`[IA] Sucesso absoluto na extração profunda!`);
+  console.log(`[IA] Extração profunda concluída com regras de Estado e Proporcionalidade!`);
   return JSON.parse(textoLimpo);
 }
 
@@ -351,12 +361,20 @@ async function validarDocumentoIA(base64) {
   return JSON.parse(textoLimpo).VALIDO;
 }
 
+// ENVIO DE TEXTO (COM LIMPEZA DE NÚMERO)
 async function enviarMensagem(phone, message) {
   const numeroLimpo = String(phone).replace(/\D/g, ''); 
-  await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, { phone: numeroLimpo, message: String(message) }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }).catch(()=>{});
+  try {
+      await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, { 
+          phone: numeroLimpo, 
+          message: String(message) 
+      }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } });
+  } catch (e) {
+      console.error("[Z-API ERRO]:", e.response ? JSON.stringify(e.response.data) : e.message); 
+  }
 }
 
-// O RASTREADOR UNIVERSAL DE ÁUDIOS
+// RASTREADOR UNIVERSAL DE ÁUDIOS
 function buscarAudioRecursivo(diretorio, prefixo) {
     let arquivos = fs.readdirSync(diretorio);
     for (let arquivo of arquivos) {
