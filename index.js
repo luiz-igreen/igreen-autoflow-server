@@ -1,423 +1,183 @@
-const express = require('express');
-const axios = require('axios');
-const admin = require('firebase-admin');
-const path = require('path');
-const fs = require('fs');
+import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, query, onSnapshot } from 'firebase/firestore';
+import { Search, Download, Database, Leaf, Mic, Terminal, Bot, Zap, AlertTriangle, CheckCircle2 } from 'lucide-react';
 
-const app = express();
-app.use(express.json());
-
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
-
-// CHAVES DA Z-API CENTRALIZADAS
-const ZAPI_INSTANCE = "3F14E2A7F66AC2180C0BBA4D31290A14";
-const ZAPI_TOKEN = "88F232A54C5DC27793994637";
-const ZAPI_CLIENT_TOKEN = "F177679f2434d425e9a3e58ddec1d4cf0S"; 
-
-// Conexão com o Banco de Dados (Firestore)
-try {
-  const firebaseConfig = process.env.FIREBASE_CONFIG ? JSON.parse(process.env.FIREBASE_CONFIG) : null;
-  if (firebaseConfig) {
-    if (admin.apps.length === 0) {
-      admin.initializeApp({ credential: admin.credential.cert(firebaseConfig) });
-    }
-    console.log("✅ Banco de Dados conectado com sucesso!");
-  } else {
-    console.log("⚠️ Banco de Dados aguardando credenciais (FIREBASE_CONFIG).");
-  }
-} catch (e) {
-  console.error("Erro na base de dados:", e.message);
-}
-
-const memoriaEstado = new Map();
-
-// OS TEXTOS EXTRAÍDOS RIGOROSAMENTE DOS SEUS ÁUDIOS
-const TEXTOS = {
-    T01: "Seja muito bem-vinda à iGreen Energy. Pra começarmos a sua simulação, por favor, me envie uma foto bem nítida ou o PDF da sua conta de luz.",
-    T02: "Estou analisando a sua fatura e a elegibilidade regional. Por favor, aguarde um instante.",
-    T03: "Fatura auditada com sucesso. Identifiquei o seu CEP, mas não encontrei o número da residência. Por favor, digite o número da sua casa ou apartamento pra prosseguirmos.",
-    T04: "Fatura auditada com sucesso. Pra darmos continuidade, por favor, envie uma foto nítida apenas da frente do seu RG ou CNH.",
-    T05: "Frente guardada. Agora, por favor, envie a foto do verso do documento, onde ficam o número de registro e o órgão emissor.",
-    T06: "Estou executando a leitura biométrica avançada, cruzando os dados da frente e do verso. Por favor, aguarde.",
-    T07: "Registrado. Pra finalizar, digite o seu melhor e-mail.",
-    T08: "Prontinho. O seu pré-cadastro foi concluído com sucesso. Os seus dados já foram enviados pro nosso sistema e muito em breve você receberá o seu link para assinatura. A iGreen Energy agradece a sua confiança.",
-    T09: "Aviso, este documento não parece ser uma fatura de energia, ou a imagem está cortada. Por favor, envie a foto correta e nítida da sua conta de luz.",
-    T10: "Atenção, identificamos que a sua conta possui a classificação de baixa renda ou tarifa social. Para proteger o seu benefício governamental, a iGreen não atende esta modalidade, pois a alteração poderia causar a perda do seu subsídio. O processo foi encerrado por segurança.",
-    T11: "Aviso, o documento está ilegível, ou não é um RG ou CNH brasileiro válido. Por favor, reenvie a foto com mais foco e sem reflexos de luz.",
-    T12: "E-mail inválido. Por favor, verifique se digitou corretamente, lembrando que deve conter a arroba, e envie novamente.",
-    T13: "Atenção, você solicitou o cancelamento. Tem certeza que deseja excluir todos os dados enviados até agora? Digite um para sim, cancelar tudo, ou dois para não, e continuar o cadastro.",
-    T20: "Entendido. Vou transferir o seu atendimento pra um de nossos consultores especialistas. Aguarde um instante, por favor."
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+  apiKey: "mock", authDomain: "mock", projectId: "mock"
 };
 
-// WEBHOOK PRINCIPAL (MÁQUINA DE ESTADOS)
-app.post('/webhook/igreen', async (req, res) => {
-  const data = req.body;
-  res.status(200).send("OK"); 
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'igreen-autoflow-v4';
 
-  if (data.fromMe) return;
-
-  const phone = data.phone;
-  const isImage = data.type === 'image' || data.isImage === true || data.type === 'photo' || (data.image && data.image.imageUrl) || (data.photo && data.photo.photoUrl);
-  const isPDF = data.type === 'document' || data.isDocument === true || (data.document && data.document.documentUrl);
-  const textoIn = data.text?.message?.trim() || "";
+export default function DashboardPlanilha() {
+  const [user, setUser] = useState(null);
+  const [activeTab, setActiveTab] = useState('AUDITORIA_IGREEN');
+  const [searchTerm, setSearchTerm] = useState("");
   
-  const db = admin.apps.length > 0 ? admin.firestore() : null;
-  const appId = process.env.RENDER_SERVICE_ID || 'igreen-autoflow-v4';
-  let leadRef = null;
-  
-  let status = 'NOVO';
-  const mem = memoriaEstado.get(phone);
-  
-  if (db) {
-      leadRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('leads').doc(phone);
-  }
+  const [leads, setLeads] = useState([]); 
+  const [debugZapi, setDebugZapi] = useState([]);
 
-  if (mem && mem.STATUS_CADASTRO) {
-      status = mem.STATUS_CADASTRO;
-  } else if (leadRef) {
-      const doc = await leadRef.get();
-      if (doc.exists) {
-          status = doc.data().STATUS_CADASTRO || 'NOVO';
-          memoriaEstado.set(phone, doc.data()); 
-      }
-  }
-
-  console.log(`\n📡 [RADAR] Cliente: ${phone} | Estado: [${status}] | Tipo Msg: ${data.type}`);
-
-  if (textoIn.toLowerCase() === 'cancelar') {
-      await enviarFluxo(phone, TEXTOS.T13, "13");
-      atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'CONFIRMANDO_CANCELAMENTO', PREV_STATUS: status });
-      return;
-  }
-  
-  if (textoIn.toLowerCase().match(/(atendente|humano|consultor|especialista|falar com alg)/)) {
-      await enviarFluxo(phone, TEXTOS.T20, "20");
-      atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'TRANSBORDO_HUMANO' });
-      return;
-  }
-  
-  if (status === 'CONFIRMANDO_CANCELAMENTO') {
-      if (textoIn === '1') {
-          if (leadRef) await leadRef.delete();
-          memoriaEstado.delete(phone);
-          await enviarMensagem(phone, "Cancelamento confirmado. Dados apagados.");
-      } else if (textoIn === '2') {
-          await enviarMensagem(phone, "Cancelamento abortado. Por favor, envie o documento solicitado anteriormente.");
-          const prev = memoriaEstado.get(phone)?.PREV_STATUS || 'NOVO';
-          atualizarEstado(phone, leadRef, { STATUS_CADASTRO: prev });
-      }
-      return;
-  }
-
-  switch (status) {
-      case 'NOVO':
-      case 'AGUARDANDO_FATURA':
-          if (!isImage && !isPDF) {
-              await enviarFluxo(phone, TEXTOS.T01, "01");
-              atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', TELEFONE: phone });
-              return;
-          }
-
-          await enviarFluxo(phone, TEXTOS.T02, "02");
-          
-          try {
-              let mediaUrl = obterMediaUrl(data);
-              const base64Data = await baixarArquivo(mediaUrl);
-              const mimeType = isPDF ? "application/pdf" : "image/jpeg";
-
-              const analise = await auditarFaturaIA(base64Data, mimeType);
-
-              if (!analise.VALIDO) {
-                  await enviarFluxo(phone, TEXTOS.T09, "09");
-                  return;
-              }
-
-              if (analise.TARIFA_SOCIAL) {
-                  await enviarFluxo(phone, TEXTOS.T10, "10");
-                  atualizarEstado(phone, leadRef, { ...analise, STATUS_CADASTRO: 'RECUSADO_TARIFA_SOCIAL' });
-                  return;
-              }
-
-              if (analise.ELEGIVEL) {
-                  let proximoStatus = 'AGUARDANDO_DOC_FRENTE';
-                  let proximoTexto = TEXTOS.T04;
-                  let proximoAudio = "04";
-
-                  if (!analise.ENDERECO_NUMERO || analise.ENDERECO_NUMERO.trim() === '') {
-                      proximoStatus = 'AGUARDANDO_CASA';
-                      proximoTexto = TEXTOS.T03;
-                      proximoAudio = "03";
-                  }
-
-                  atualizarEstado(phone, leadRef, {
-                      ...analise,
-                      STATUS_CADASTRO: proximoStatus,
-                      DATA_PROCESSAMENTO: admin.apps.length > 0 ? admin.firestore.Timestamp.now() : new Date(),
-                      LINK_FATURA: mediaUrl
-                  });
-                  
-                  await enviarFluxo(phone, proximoTexto, proximoAudio);
-              } else {
-                  await enviarMensagem(phone, `Sua fatura foi analisada, mas a sua média de consumo (${analise.MEDIA_CONSUMO} kWh) está abaixo do mínimo exigido no momento.`);
-                  atualizarEstado(phone, leadRef, { ...analise, STATUS_CADASTRO: 'RECUSADO_CONSUMO' });
-              }
-          } catch (e) {
-              console.error("❌ ERRO FATURA:", e.message);
-              await enviarFluxo(phone, TEXTOS.T09, "09");
-          }
-          break;
-
-      case 'AGUARDANDO_CASA':
-          if (!textoIn) return;
-          atualizarEstado(phone, leadRef, { ENDERECO_NUMERO: textoIn, STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE' });
-          await enviarFluxo(phone, TEXTOS.T04, "04");
-          break;
-
-      case 'AGUARDANDO_DOC_FRENTE':
-          if (!isImage) {
-              await enviarFluxo(phone, TEXTOS.T11, "11");
-              return;
-          }
-          try {
-              let mediaUrlF = obterMediaUrl(data);
-              const base64Frente = await baixarArquivo(mediaUrlF);
-              const isDocValido = await validarDocumentoIA(base64Frente);
-
-              if (isDocValido) {
-                  atualizarEstado(phone, leadRef, { LINK_DOC_FRENTE: mediaUrlF, STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO' });
-                  await enviarFluxo(phone, TEXTOS.T05, "05");
-              } else {
-                  await enviarFluxo(phone, TEXTOS.T11, "11");
-              }
-          } catch (e) {
-              await enviarFluxo(phone, TEXTOS.T11, "11");
-          }
-          break;
-
-      case 'AGUARDANDO_DOC_VERSO':
-          if (!isImage) {
-              await enviarFluxo(phone, TEXTOS.T11, "11");
-              return;
-          }
-          try {
-              let mediaUrlV = obterMediaUrl(data);
-              const base64Verso = await baixarArquivo(mediaUrlV);
-              const isDocValido = await validarDocumentoIA(base64Verso); 
-
-              if (isDocValido) {
-                  await enviarFluxo(phone, TEXTOS.T06, "06");
-                  atualizarEstado(phone, leadRef, { LINK_DOC_VERSO: mediaUrlV, STATUS_CADASTRO: 'AGUARDANDO_EMAIL' });
-                  
-                  setTimeout(async () => {
-                      await enviarFluxo(phone, TEXTOS.T07, "07");
-                  }, 4000); 
-              } else {
-                  await enviarFluxo(phone, TEXTOS.T11, "11");
-              }
-          } catch (e) {
-              await enviarFluxo(phone, TEXTOS.T11, "11");
-          }
-          break;
-
-      case 'AGUARDANDO_EMAIL':
-          if (!textoIn) return;
-          const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-          if (emailRegex.test(textoIn)) {
-              atualizarEstado(phone, leadRef, { EMAIL: textoIn, STATUS_CADASTRO: 'CONCLUIDO' });
-              await enviarFluxo(phone, TEXTOS.T08, "08");
-          } else {
-              await enviarFluxo(phone, TEXTOS.T12, "12");
-          }
-          break;
-          
-      case 'CONCLUIDO':
-          break;
-  }
-});
-
-async function atualizarEstado(phone, leadRef, dados) {
-    const atual = memoriaEstado.get(phone) || {};
-    memoriaEstado.set(phone, { ...atual, ...dados });
-    if (leadRef) {
-        await leadRef.set(dados, { merge: true }).catch(e => console.log("Aviso: Falha ao salvar no DB."));
-    }
-}
-
-function obterMediaUrl(data) {
-    const url = data.link || (data.image && data.image.imageUrl) || (data.document && data.document.documentUrl) || (data.photo && data.photo.photoUrl) || "";
-    if (!url || !url.startsWith('http')) throw new Error("Link não encontrado.");
-    return url;
-}
-
-async function baixarArquivo(mediaUrl) {
-    let tentativas = 3;
-    while (tentativas > 0) {
-        try {
-            const res = await axios.get(mediaUrl, { 
-                responseType: 'arraybuffer',
-                headers: { 'User-Agent': 'Mozilla/5.0' }
-            });
-            return Buffer.from(res.data, 'binary').toString('base64');
-        } catch (err) {
-            await new Promise(r => setTimeout(r, 2000));
-            tentativas--;
-        }
-    }
-    throw new Error("Falha ao baixar arquivo após 3 tentativas");
-}
-
-async function enviarFluxo(phone, texto, prefixoAudio) {
-    await enviarMensagem(phone, texto);
-    if (prefixoAudio) {
-        console.log(`⏱️ Pausa de 2s antes do áudio...`);
-        await new Promise(r => setTimeout(r, 2000));
-        await enviarAudioDireto(phone, prefixoAudio);
-    }
-}
-
-// 🧠 MOTOR IA DEFINITIVO COM REGRA CORRETA PARA ALAGOAS E OUTROS ESTADOS
-async function auditarFaturaIA(base64, mimeType) {
-  if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
-  
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${GEMINI_API_KEY}`;
-  
-  const prompt = `
-    Aja como um auditor de dados rigoroso da iGreen.
-    ATENÇÃO: O documento anexo PODE SER UMA FOTO DE UMA TELA DE COMPUTADOR. Isso é 100% VÁLIDO. 
-    Desde que a imagem contenha dados de energia (Equatorial, Cemig, Enel, etc.), defina "VALIDO" como true.
-
-    Sua missão é extrair TODOS os dados disponíveis para alimentar o Dashboard Cloud.
-    
-    🚨 REGRA ESTRITA DE CÁLCULO DA MÉDIA DE CONSUMO 🚨:
-    Você DEVE analisar o histórico de consumo na imagem e aplicar a seguinte regra de cálculo:
-    
-    1. ALAGOAS (Equatorial AL): Some ESTRITAMENTE os 06 (seis) primeiros meses do histórico (contando de cima para baixo) e divida por 6.
-    2. OUTROS ESTADOS: Some os 12 meses (se exigido pela concessionária local) e divida por 12.
-    3. REGRA DE PROPORCIONALIDADE (Imóvel novo/alugado): Se o cliente NÃO TIVER histórico suficiente (ex: a conta tem apenas 3 ou 4 meses registrados), você DEVE somar apenas os meses que existem e divida pelo número exato de meses existentes (ex: some os 4 e divida por 4). Nunca divida por 6 ou 12 se não houver dados para esses meses.
-    
-    Exemplo prático de ALAGOAS na foto: (174+167+174+179+162+140) = 996. Média = 996 / 6 = 166.
-    - O valor "MEDIA_CONSUMO" deve ser um número inteiro.
-    - Se a "MEDIA_CONSUMO" calculada for >= 150kWh (para AL) ou >= à regra local, defina "ELEGIVEL" = true.
-    - Extraia todo o histórico de consumo mês a mês para as variáveis CONSUMO_MES_1 a 12. Onde for vazio, coloque 0.
-    
-    Responda EXATAMENTE com este objeto JSON (sem formatação ou markdown em volta):
-    {
-      "VALIDO": true,
-      "TARIFA_SOCIAL": false,
-      "ELEGIVEL": true,
-      "NOME_CLIENTE": "Nome completo",
-      "MASCARA_CPF": "000.000.000-00",
-      "CPF": "00000000000",
-      "MASCARA_CNPJ": "00.000.000/0000-00",
-      "CNPJ": "Apenas numeros",
-      "DATA_NASCIMENTO": "DD/MM/AAAA",
-      "CEP": "00000-000",
-      "ENDERECO": "Rua/Avenida, Bairro",
-      "ENDERECO_NUMERO": "Numero da casa ou apartamento",
-      "ESTADO": "Sigla do estado",
-      "DISTRIBUIDORA": "Nome da concessionaria",
-      "TIPO_LIGACAO": "Monofasico, Bifasico ou Trifasico",
-      "UC": "Numero da UC",
-      "VALOR_FATURA": 0.00,
-      "MEDIA_CONSUMO": 0,
-      "CONSUMO_MES_1": 0,
-      "CONSUMO_MES_2": 0,
-      "CONSUMO_MES_3": 0,
-      "CONSUMO_MES_4": 0,
-      "CONSUMO_MES_5": 0,
-      "CONSUMO_MES_6": 0,
-      "CONSUMO_MES_7": 0,
-      "CONSUMO_MES_8": 0,
-      "CONSUMO_MES_9": 0,
-      "CONSUMO_MES_10": 0,
-      "CONSUMO_MES_11": 0,
-      "CONSUMO_MES_12": 0
-    }
-  `;
-  
-  const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType, data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
-  const res = await axios.post(url, payload);
-  let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
-  
-  console.log(`[IA] Extração profunda concluída com regras de Estado e Proporcionalidade!`);
-  return JSON.parse(textoLimpo);
-}
-
-// 🧠 MOTOR IA PARA DOCUMENTOS
-async function validarDocumentoIA(base64) {
-  if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
-  
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${GEMINI_API_KEY}`;
-  
-  const prompt = `
-    A imagem anexa é uma foto válida de um RG (Identidade) ou CNH brasileiro (frente ou verso)? 
-    Responda APENAS com este JSON (sem markdown):
-    {"VALIDO": true}
-  `;
-  
-  const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
-  const res = await axios.post(url, payload);
-  let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
-  return JSON.parse(textoLimpo).VALIDO;
-}
-
-// ENVIO DE TEXTO (COM LIMPEZA DE NÚMERO)
-async function enviarMensagem(phone, message) {
-  const numeroLimpo = String(phone).replace(/\D/g, ''); 
-  try {
-      await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, { 
-          phone: numeroLimpo, 
-          message: String(message) 
-      }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } });
-  } catch (e) {
-      console.error("[Z-API ERRO]:", e.response ? JSON.stringify(e.response.data) : e.message); 
-  }
-}
-
-// RASTREADOR UNIVERSAL DE ÁUDIOS
-function buscarAudioRecursivo(diretorio, prefixo) {
-    let arquivos = fs.readdirSync(diretorio);
-    for (let arquivo of arquivos) {
-        if (arquivo === 'node_modules' || arquivo === '.git') continue; 
-        
-        let caminhoCompleto = path.join(diretorio, arquivo);
-        let stat = fs.statSync(caminhoCompleto);
-        
-        if (stat.isDirectory()) {
-            let encontrado = buscarAudioRecursivo(caminhoCompleto, prefixo); 
-            if (encontrado) return encontrado;
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
         } else {
-            if (arquivo.startsWith(prefixo) && arquivo.toLowerCase().endsWith('.mp3')) {
-                return caminhoCompleto; 
-            }
+          await signInAnonymously(auth);
         }
-    }
-    return null;
+      } catch (error) {
+        console.error("Erro auth:", error);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  const formatDate = (timestamp) => {
+    if (!timestamp) return "-";
+    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+    if (isNaN(date.getTime())) return "-";
+    return date.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  };
+
+  const renderAuditoria = () => {
+    const filtrados = leads.filter(l => (l.NOME_CLIENTE || "").toLowerCase().includes(searchTerm.toLowerCase()) || (l.UC || "").includes(searchTerm));
+    
+    return (
+      <div className="overflow-x-auto pb-4">
+        <table className="w-full text-left whitespace-nowrap mt-4">
+          <thead>
+            <tr className="bg-slate-100 border-b border-slate-200 text-[10px] font-black uppercase tracking-wider text-slate-600">
+              <th className="p-3 sticky left-0 bg-slate-100 z-10 shadow-[1px_0_0_#e2e8f0]">DATA_PROCESSAMENTO</th>
+              <th className="p-3">STATUS_CADASTRO</th>
+              <th className="p-3">TELEFONE</th>
+              <th className="p-3">NOME_CLIENTE</th>
+              <th className="p-3">MASCARA_CPF</th>
+              <th className="p-3">CPF</th>
+              <th className="p-3">MASCARA_CNPJ</th>
+              <th className="p-3">CNPJ</th>
+              <th className="p-3">DATA_NASCIMENTO</th>
+              <th className="p-3">EMAIL</th>
+              <th className="p-3">CEP</th>
+              <th className="p-3">ENDERECO</th>
+              <th className="p-3">ENDERECO_NUMERO</th>
+              <th className="p-3">ESTADO</th>
+              <th className="p-3">DISTRIBUIDORA</th>
+              <th className="p-3">TIPO_LIGACAO</th>
+              <th className="p-3">UC</th>
+              <th className="p-3 text-center">VALOR_FATURA</th>
+              <th className="p-3 text-center">ELEGIVEL</th>
+              <th className="p-3 text-center">MEDIA_CONSUMO</th>
+              <th className="p-3 text-center">LINK_FATURA</th>
+              <th className="p-3 text-center">LINK_DOC_FRENTE</th>
+              <th className="p-3 text-center">LINK_DOC_VERSO</th>
+              {[...Array(12)].map((_, i) => <th key={i} className="p-3 text-center">CONSUMO_MES_{i+1}</th>)}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {filtrados.length === 0 && (
+              <tr><td colSpan="35" className="p-8 text-center text-slate-400">Nenhuma fatura encontrada.</td></tr>
+            )}
+            {filtrados.map((lead) => (
+              <tr key={lead.id} className="hover:bg-emerald-50/50 text-[11px] text-slate-700">
+                <td className="p-3 sticky left-0 bg-white shadow-[1px_0_0_#f1f5f9] font-mono">{formatDate(lead.DATA_PROCESSAMENTO)}</td>
+                <td className="p-3">
+                    {lead.STATUS_CADASTRO === 'CONCLUIDO' 
+                        ? <span className="bg-emerald-100 text-emerald-800 px-2 py-1 rounded-md font-bold flex items-center gap-1 w-max"><CheckCircle2 className="w-3 h-3"/> CONCLUÍDO</span>
+                        : <span className="bg-amber-100 text-amber-800 px-2 py-1 rounded-md font-bold">{lead.STATUS_CADASTRO || "NOVO"}</span>
+                    }
+                </td>
+                <td className="p-3 font-mono">{lead.TELEFONE || "-"}</td>
+                <td className="p-3 font-bold text-slate-900">{lead.NOME_CLIENTE || "-"}</td>
+                <td className="p-3 font-mono text-slate-500">{lead.MASCARA_CPF || "-"}</td>
+                <td className="p-3 font-mono">{lead.CPF || "-"}</td>
+                <td className="p-3 font-mono text-slate-500">{lead.MASCARA_CNPJ || "-"}</td>
+                <td className="p-3 font-mono">{lead.CNPJ || "-"}</td>
+                <td className="p-3 font-mono">{lead.DATA_NASCIMENTO || "-"}</td>
+                <td className="p-3 font-bold text-blue-600">{lead.EMAIL || "-"}</td>
+                <td className="p-3 font-mono">{lead.CEP || "-"}</td>
+                <td className="p-3 truncate max-w-[200px]" title={lead.ENDERECO}>{lead.ENDERECO || "-"}</td>
+                <td className="p-3 font-bold">{lead.ENDERECO_NUMERO || "-"}</td>
+                <td className="p-3 font-bold text-slate-800">{lead.ESTADO || "-"}</td>
+                <td className="p-3">{lead.DISTRIBUIDORA || "-"}</td>
+                <td className="p-3">{lead.TIPO_LIGACAO || "-"}</td>
+                <td className="p-3 font-bold text-indigo-600">{lead.UC || "-"}</td>
+                <td className="p-3 font-mono font-bold text-slate-800">R$ {lead.VALOR_FATURA || "0,00"}</td>
+                <td className="p-3 text-center">
+                  {lead.ELEGIVEL ? <span className="text-emerald-600 font-black flex items-center justify-center gap-1"><Zap className="w-3 h-3"/> SIM</span> : <span className="text-red-500 font-bold">NÃO</span>}
+                </td>
+                <td className="p-3 text-center font-black text-emerald-600 text-sm bg-emerald-50/50">{lead.MEDIA_CONSUMO || "0"}</td>
+                
+                <td className="p-3 text-center">
+                  {lead.LINK_FATURA ? <a href={lead.LINK_FATURA} target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-700 font-bold">Fatura</a> : "-"}
+                </td>
+                <td className="p-3 text-center">
+                  {lead.LINK_DOC_FRENTE ? <a href={lead.LINK_DOC_FRENTE} target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-700 font-bold">Frente RG</a> : "-"}
+                </td>
+                <td className="p-3 text-center">
+                  {lead.LINK_DOC_VERSO ? <a href={lead.LINK_DOC_VERSO} target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-700 font-bold">Verso RG</a> : "-"}
+                </td>
+
+                {[...Array(12)].map((_, i) => (
+                  <td key={i} className="p-3 text-center bg-slate-50 border-l border-slate-200/50 font-mono font-semibold text-slate-600">
+                    {lead[`CONSUMO_MES_${i+1}`] || "-"}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-100 p-4 font-sans text-slate-800">
+      <header className="max-w-[1800px] mx-auto mb-4 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+        <div className="flex items-center gap-4">
+          <div className="bg-emerald-600 p-3 rounded-xl shadow-lg shadow-emerald-200">
+            <Database className="text-white w-6 h-6" />
+          </div>
+          <div>
+            <h1 className="text-xl font-black tracking-tight text-slate-900">
+              Cloud Database <span className="text-emerald-600">iGreen AutoFlow</span>
+            </h1>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center mt-1">
+              <span className="w-2 h-2 bg-amber-500 rounded-full mr-2"></span>
+              Modo Demonstração Visual (Status Finalizado)
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-4">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 w-4 h-4" />
+            <input type="text" placeholder="Buscar..." className="pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs w-64" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+          </div>
+          <button className="flex items-center gap-2 bg-slate-800 text-white px-4 py-2 rounded-lg text-xs font-bold">
+            <Download className="w-4 h-4" /> Exportar
+          </button>
+        </div>
+      </header>
+
+      <div className="max-w-[1800px] mx-auto mb-4 flex gap-2 overflow-x-auto pb-2">
+        <button onClick={() => setActiveTab('AUDITORIA_IGREEN')} className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-xs font-black uppercase tracking-wider transition-all whitespace-nowrap ${activeTab === 'AUDITORIA_IGREEN' ? 'bg-emerald-600 text-white shadow-md' : 'bg-white text-slate-500'}`}><Leaf className="w-4 h-4" /> AUDITORIA_IGREEN</button>
+        <button onClick={() => setActiveTab('DEBUG_ZAPI')} className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-xs font-black uppercase tracking-wider transition-all whitespace-nowrap ${activeTab === 'DEBUG_ZAPI' ? 'bg-slate-800 text-white shadow-md' : 'bg-white text-slate-500'}`}><Terminal className="w-4 h-4" /> DEBUG_ZAPI</button>
+      </div>
+
+      <main className="max-w-[1800px] mx-auto bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden min-h-[500px]">
+        {activeTab === 'AUDITORIA_IGREEN' && renderAuditoria()}
+        {activeTab === 'DEBUG_ZAPI' && (
+          <div className="p-6">
+            <h3 className="font-bold text-slate-700 mb-4">Logs Recentes do Servidor:</h3>
+            {debugZapi.map(log => <p key={log.id} className="font-mono text-xs text-slate-500 mb-2 border-l-2 border-emerald-500 pl-3">{log.LOG}</p>)}
+          </div>
+        )}
+      </main>
+    </div>
+  );
 }
-
-async function enviarAudioDireto(phone, prefixo) {
-    try {
-        console.log(`[ÁUDIO] A vasculhar o GitHub à procura do áudio '${prefixo}'...`);
-        
-        const filePath = buscarAudioRecursivo(__dirname, prefixo);
-        
-        if (!filePath) {
-            console.error(`[ERRO CRÍTICO] O áudio '${prefixo}' NÃO EXISTE em nenhuma pasta do seu GitHub! Por favor, verifique se fez o upload.`);
-            return;
-        }
-
-        const base64Audio = fs.readFileSync(filePath, { encoding: 'base64' });
-        const dataUri = `data:audio/mpeg;base64,${base64Audio}`;
-        const numeroLimpo = String(phone).replace(/\D/g, ''); 
-        
-        await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-audio`, 
-            { phone: numeroLimpo, audio: dataUri }, 
-            { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }
-        );
-        console.log(`🔊 Sucesso! Áudio encontrado em: ${filePath}`);
-    } catch (e) {
-        console.error(`❌ Erro ao enviar áudio ${prefixo}:`, e.message);
-    }
-}
-
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON!`));
