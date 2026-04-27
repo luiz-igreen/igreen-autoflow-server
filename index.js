@@ -47,7 +47,8 @@ app.post('/webhook/igreen', async (req, res) => {
   if (data.fromMe) return; // Ignora o que o próprio robô escreve
 
   const phone = data.phone;
-  const isImage = data.type === 'image' || data.isImage === true || data.type === 'photo' || (data.image && data.image.imageUrl);
+  // Detecção robusta de imagem e documento
+  const isImage = data.type === 'image' || data.isImage === true || data.type === 'photo' || (data.image && data.image.imageUrl) || (data.photo && data.photo.photoUrl);
   const isPDF = data.type === 'document' || data.isDocument === true || (data.document && data.document.documentUrl);
   const isTexto = data.text && data.text.message;
   const saudacao = obterSaudacao();
@@ -60,11 +61,12 @@ app.post('/webhook/igreen', async (req, res) => {
       
       await enviarMensagem(phone, txtBoasVindas);
       await enviarAudio(phone, await gerarAudioGemini(vozBoasVindas));
+      return; // Sai do fluxo para não analisar texto como fatura
   }
   
   // CENÁRIO 2: O CLIENTE ENVIOU A FATURA
   if (isImage || isPDF) {
-    console.log(`📸 FATURA RECEBIDA. Analisando...`);
+    console.log(`📸 FATURA RECEBIDA. Iniciando processo...`);
     const txtInicial = `${saudacao}! Recebi a sua fatura. 📄 Aguarde um instante enquanto faço a auditoria...`;
     const vozInicial = `${saudacao}! Recebi a sua fatura. A nossa Inteligência Artificial está fazendo a auditoria completa. Aguarde só um instante.`;
     
@@ -72,43 +74,44 @@ app.post('/webhook/igreen', async (req, res) => {
     await enviarAudio(phone, await gerarAudioGemini(vozInicial));
 
     try {
-      let mediaUrl = "";
-      if (data.image && data.image.imageUrl) mediaUrl = data.image.imageUrl;
-      else if (data.document && data.document.documentUrl) mediaUrl = data.document.documentUrl;
+      let mediaUrl = data.link || 
+                     (data.image && data.image.imageUrl) || 
+                     (data.document && data.document.documentUrl) || 
+                     (data.photo && data.photo.photoUrl) || "";
 
       if (!mediaUrl || !mediaUrl.startsWith('http')) {
-          console.log("❌ Payload recebido:", JSON.stringify(data, null, 2));
-          throw new Error("Link da mídia não encontrado no webhook.");
+          throw new Error("Link da mídia não encontrado no webhook da Z-API.");
       }
 
-      console.log(`🔗 Baixando foto de: ${mediaUrl}`);
+      console.log(`🔗 Preparando para baixar a foto do link oficial...`);
 
-      // SISTEMA ANTI-FALHA (RETRY LOOP)
-      // O Node.js é tão rápido que tenta baixar a foto antes da Z-API terminar de salvá-la no servidor.
+      // SISTEMA ANTI-FALHA (RETRY LOOP) BLINDADO
       let fileResponse = null;
-      let tentativas = 4; // Vai tentar até 4 vezes
+      let tentativas = 5; 
       while (tentativas > 0) {
           try {
+              console.log(`➡️ Tentativa de download (${6 - tentativas}/5)...`);
               fileResponse = await axios.get(mediaUrl, { 
-                  responseType: 'arraybuffer',
-                  headers: ZAPI_CLIENT_TOKEN ? { 'Client-Token': ZAPI_CLIENT_TOKEN } : {}
+                  responseType: 'arraybuffer'
+                  // 🚨 CORREÇÃO DEFINITIVA: NENHUM HEADER AQUI!
+                  // Enviar o Client-Token aqui causava a rejeição e o Erro 404!
               });
-              break; // Conseguiu baixar! Sai do loop.
+              console.log(`✅ FOTO BAIXADA COM SUCESSO! Enviando para o Gemini IA...`);
+              break; 
           } catch (err) {
-              if (err.response && err.response.status === 404 && tentativas > 1) {
-                  console.log(`⚠️ Z-API ainda está a processar a foto (Erro 404). Aguardando 2 segundos... (${tentativas - 1} tentativas restantes)`);
-                  await new Promise(r => setTimeout(r, 2000));
-                  tentativas--;
-              } else {
-                  throw err; // Erro real ou acabaram as tentativas
-              }
+              console.log(`⚠️ O servidor de imagens ainda não disponibilizou o ficheiro. Aguardando 3 segundos...`);
+              if (tentativas === 1) throw new Error("Falha definitiva ao tentar baixar a imagem após 5 tentativas.");
+              await new Promise(r => setTimeout(r, 3000));
+              tentativas--;
           }
       }
 
       const base64Data = Buffer.from(fileResponse.data, 'binary').toString('base64');
       const mimeType = isPDF ? "application/pdf" : "image/jpeg";
 
+      console.log(`🧠 Gemini IA a ler os dados...`);
       const analise = await analisarComIA(base64Data, mimeType);
+      console.log(`✅ LEITURA CONCLUÍDA! Resultado: Elegível? ${analise.ELEGIVEL}`);
 
       if (analise.ELEGIVEL && admin.apps.length > 0) {
           const db = admin.firestore();
@@ -119,11 +122,12 @@ app.post('/webhook/igreen', async (req, res) => {
               TELEFONE: phone,
               LINK_FATURA: mediaUrl
           }, { merge: true });
+          console.log(`💾 Cliente salvo no banco de dados Cloud!`);
       }
 
       const primeiroNome = analise.NOME_CLIENTE ? analise.NOME_CLIENTE.split(' ')[0] : "Cliente";
       if (analise.ELEGIVEL) {
-        const txtAprovado = `🎉 *Parabéns, ${primeiroNome}!*\n\nSua conta foi *APROVADA*! O consultor Luiz Jorge entrará em contato em breve.`;
+        const txtAprovado = `🎉 *Parabéns, ${primeiroNome}!*\n\nSua conta foi *APROVADA*! O consumo lido foi de ${analise.MEDIA_CONSUMO} kWh.\nO consultor Luiz Jorge entrará em contato em breve.`;
         const vozAprovado = `Parabéns, ${primeiroNome}! Sua conta foi aprovada! O consultor Luiz Jorge entrará em contato em breve para gerar seu desconto.`;
         await enviarMensagem(phone, txtAprovado);
         await enviarAudio(phone, await gerarAudioGemini(vozAprovado));
@@ -133,8 +137,13 @@ app.post('/webhook/igreen', async (req, res) => {
         await enviarMensagem(phone, txtRecusado);
         await enviarAudio(phone, await gerarAudioGemini(vozRecusado));
       }
+      
+      console.log(`🏁 ATENDIMENTO FINALIZADO PARA: ${phone}\n=========================================`);
+
     } catch (erro) {
-      console.error("❌ ERRO:", erro.message);
+      console.error("❌ ERRO GRAVE NO FLUXO:", erro.message);
+      const txtErro = "Tivemos uma falha temporária ao ler a sua imagem. Pode enviar a fatura novamente, por favor?";
+      await enviarMensagem(phone, txtErro);
     }
   }
 });
