@@ -2,12 +2,16 @@ const express = require('express');
 const axios = require('axios');
 const admin = require('firebase-admin');
 const path = require('path');
+const fs = require('fs');
 
 const app = express();
 app.use(express.json());
 
-// Permite que a Z-API acesse a pasta "audios" do seu servidor para baixar os MP3
-app.use('/audios', express.static(path.join(__dirname, 'audios')));
+// Garante que a pasta "audios" existe no servidor para não dar erro
+const audiosDir = path.join(__dirname, 'audios');
+if (!fs.existsSync(audiosDir)) {
+    fs.mkdirSync(audiosDir);
+}
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 
@@ -15,9 +19,6 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const ZAPI_INSTANCE = "3F14E2A7F66AC2180C0BBA4D31290A14";
 const ZAPI_TOKEN = "88F232A54C5DC27793994637";
 const ZAPI_CLIENT_TOKEN = "F177679f2434d425e9a3e58ddec1d4cf0S"; 
-
-// O SEU LINK DO RENDER
-const RENDER_URL = process.env.RENDER_URL || "https://igreen-autoflow-server.onrender.com";
 
 // Conexão com o Banco de Dados (Firestore)
 try {
@@ -34,7 +35,10 @@ try {
   console.error("Erro na base de dados:", e.message);
 }
 
-// OS TEXTOS EXTRAÍDOS RIGOROSAMENTE DOS SEUS ÁUDIOS
+// Memória local anti-amnésia (Previne que o robô esqueça a etapa se o DB falhar)
+const memoriaEstado = new Map();
+
+// OS TEXTOS EXTRAÍDOS RIGOROSAMENTE DOS SEUS ÁUDIOS (1 a 20)
 const TEXTOS = {
     T01_BOAS_VINDAS: "Seja muito bem-vinda à iGreen Energy. Pra começarmos a sua simulação, por favor, me envie uma foto bem nítida ou o PDF da sua conta de luz.",
     T02_ANALISE_IA: "Estou analisando a sua fatura e a elegibilidade regional. Por favor, aguarde um instante.",
@@ -58,28 +62,28 @@ const TEXTOS = {
     T20_TRANSBORDO: "Entendido. Vou transferir o seu atendimento pra um de nossos consultores especialistas. Aguarde um instante, por favor."
 };
 
-// OS SEUS ÁUDIOS MP3 OFICIAIS (Apontando para a pasta do servidor)
+// MAPEAMENTO DIRETO PARA OS FICHEIROS MP3 LOCAIS
 const AUDIOS = {
-    A01_BOAS_VINDAS: `${RENDER_URL}/audios/01.mp3`,
-    A02_ANALISE_IA: `${RENDER_URL}/audios/02.mp3`,
-    A03_PEDIR_CASA: `${RENDER_URL}/audios/03.mp3`,
-    A04_PEDIR_FRENTE: `${RENDER_URL}/audios/04.mp3`,
-    A05_PEDIR_VERSO: `${RENDER_URL}/audios/05.mp3`,
-    A06_ANALISE_BIO: `${RENDER_URL}/audios/06.mp3`,
-    A07_PEDIR_EMAIL: `${RENDER_URL}/audios/07.mp3`,
-    A08_CONCLUSAO: `${RENDER_URL}/audios/08.mp3`,
-    A09_ERRO_FATURA: `${RENDER_URL}/audios/09.mp3`,
-    A10_TARIFA_SOCIAL: `${RENDER_URL}/audios/10.mp3`,
-    A11_ERRO_DOC: `${RENDER_URL}/audios/11.mp3`,
-    A12_ERRO_EMAIL: `${RENDER_URL}/audios/12.mp3`,
-    A13_CANCELAMENTO: `${RENDER_URL}/audios/13.mp3`,
-    A14_ENVIO_CONTRATO: `${RENDER_URL}/audios/14.mp3`,
-    A15_COBRANCA_ASSINATURA: `${RENDER_URL}/audios/15.mp3`,
-    A16_CONEXAO_APROVADA: `${RENDER_URL}/audios/16.mp3`,
-    A17_AVISO_BOLETO: `${RENDER_URL}/audios/17.mp3`,
-    A18_IGREEN_CLUB: `${RENDER_URL}/audios/18.mp3`,
-    A19_CASHBACK: `${RENDER_URL}/audios/19.mp3`,
-    A20_TRANSBORDO: `${RENDER_URL}/audios/20.mp3`
+    A01_BOAS_VINDAS: "01.mp3",
+    A02_ANALISE_IA: "02.mp3",
+    A03_PEDIR_CASA: "03.mp3",
+    A04_PEDIR_FRENTE: "04.mp3",
+    A05_PEDIR_VERSO: "05.mp3",
+    A06_ANALISE_BIO: "06.mp3",
+    A07_PEDIR_EMAIL: "07.mp3",
+    A08_CONCLUSAO: "08.mp3",
+    A09_ERRO_FATURA: "09.mp3",
+    A10_TARIFA_SOCIAL: "10.mp3",
+    A11_ERRO_DOC: "11.mp3",
+    A12_ERRO_EMAIL: "12.mp3",
+    A13_CANCELAMENTO: "13.mp3",
+    A14_ENVIO_CONTRATO: "14.mp3",
+    A15_COBRANCA_ASSINATURA: "15.mp3",
+    A16_CONEXAO_APROVADA: "16.mp3",
+    A17_AVISO_BOLETO: "17.mp3",
+    A18_IGREEN_CLUB: "18.mp3",
+    A19_CASHBACK: "19.mp3",
+    A20_TRANSBORDO: "20.mp3"
 };
 
 // WEBHOOK PRINCIPAL (MÁQUINA DE ESTADOS)
@@ -96,53 +100,60 @@ app.post('/webhook/igreen', async (req, res) => {
   
   const db = admin.apps.length > 0 ? admin.firestore() : null;
   const appId = process.env.RENDER_SERVICE_ID || 'igreen-autoflow-v4';
-  let leadRef = null, leadData = null, status = 'NOVO';
+  let leadRef = null;
+  
+  // 1. OBTÉM O ESTADO DO CLIENTE (DB Cloud ou Memória Local)
+  let status = memoriaEstado.get(phone)?.STATUS_CADASTRO || 'NOVO';
 
   if (db) {
       leadRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('leads').doc(phone);
       const doc = await leadRef.get();
       if (doc.exists) {
-          leadData = doc.data();
-          status = leadData.STATUS_CADASTRO || 'NOVO';
+          status = doc.data().STATUS_CADASTRO || status;
+          memoriaEstado.set(phone, doc.data()); // Atualiza a memória local
       }
   }
+
+  console.log(`\n📡 [RADAR] Cliente: ${phone} | Estado Atual: [${status}] | Tipo: ${data.type}`);
 
   // INTERCEPTAR CANCELAMENTO
   if (textoIn.toLowerCase() === 'cancelar') {
       await enviarFluxo(phone, TEXTOS.T13_CANCELAMENTO, AUDIOS.A13_CANCELAMENTO);
-      if (leadRef) await leadRef.set({ STATUS_CADASTRO: 'CONFIRMANDO_CANCELAMENTO' }, { merge: true });
+      atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'CONFIRMANDO_CANCELAMENTO', PREV_STATUS: status });
       return;
   }
   
   // INTERCEPTAR TRANSBORDO HUMANO
   if (textoIn.toLowerCase().match(/(atendente|humano|consultor|especialista|falar com alg)/)) {
       await enviarFluxo(phone, TEXTOS.T20_TRANSBORDO, AUDIOS.A20_TRANSBORDO);
-      if (leadRef) await leadRef.set({ STATUS_CADASTRO: 'TRANSBORDO_HUMANO' }, { merge: true });
+      atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'TRANSBORDO_HUMANO' });
       return;
   }
   
   if (status === 'CONFIRMANDO_CANCELAMENTO') {
       if (textoIn === '1') {
           if (leadRef) await leadRef.delete();
+          memoriaEstado.delete(phone);
           await enviarMensagem(phone, "Cancelamento confirmado. Dados apagados.");
       } else if (textoIn === '2') {
           await enviarMensagem(phone, "Cancelamento abortado. Por favor, envie o documento solicitado anteriormente.");
-          if (leadRef) await leadRef.set({ STATUS_CADASTRO: leadData.PREV_STATUS || 'NOVO' }, { merge: true });
+          const prev = memoriaEstado.get(phone)?.PREV_STATUS || 'NOVO';
+          atualizarEstado(phone, leadRef, { STATUS_CADASTRO: prev });
       }
       return;
   }
 
-  // MÁQUINA DE ESTADOS DO FUNIL
+  // MÁQUINA DE ESTADOS DO FUNIL (Blindada)
   switch (status) {
       case 'NOVO':
       case 'AGUARDANDO_FATURA':
           if (!isImage && !isPDF) {
               await enviarFluxo(phone, TEXTOS.T01_BOAS_VINDAS, AUDIOS.A01_BOAS_VINDAS);
-              if (leadRef) await leadRef.set({ STATUS_CADASTRO: 'AGUARDANDO_FATURA', TELEFONE: phone }, { merge: true });
+              atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', TELEFONE: phone });
               return;
           }
 
-          // Recebeu a fatura
+          // Recebeu a FATURA
           await enviarFluxo(phone, TEXTOS.T02_ANALISE_IA, AUDIOS.A02_ANALISE_IA);
           
           try {
@@ -159,7 +170,7 @@ app.post('/webhook/igreen', async (req, res) => {
 
               if (analise.TARIFA_SOCIAL) {
                   await enviarFluxo(phone, TEXTOS.T10_TARIFA_SOCIAL, AUDIOS.A10_TARIFA_SOCIAL);
-                  if (leadRef) await leadRef.set({ ...analise, STATUS_CADASTRO: 'RECUSADO_TARIFA_SOCIAL' }, { merge: true });
+                  atualizarEstado(phone, leadRef, { ...analise, STATUS_CADASTRO: 'RECUSADO_TARIFA_SOCIAL' });
                   return;
               }
 
@@ -174,18 +185,17 @@ app.post('/webhook/igreen', async (req, res) => {
                       proximoAudio = AUDIOS.A03_PEDIR_CASA;
                   }
 
-                  if (leadRef) {
-                      await leadRef.set({
-                          ...analise,
-                          STATUS_CADASTRO: proximoStatus,
-                          DATA_PROCESSAMENTO: admin.firestore.Timestamp.now(),
-                          LINK_FATURA: mediaUrl
-                      }, { merge: true });
-                  }
+                  atualizarEstado(phone, leadRef, {
+                      ...analise,
+                      STATUS_CADASTRO: proximoStatus,
+                      DATA_PROCESSAMENTO: admin.apps.length > 0 ? admin.firestore.Timestamp.now() : new Date(),
+                      LINK_FATURA: mediaUrl
+                  });
+                  
                   await enviarFluxo(phone, proximoTexto, proximoAudio);
               } else {
                   await enviarMensagem(phone, "Sua fatura foi analisada, mas no momento o consumo está abaixo da média exigida.");
-                  if (leadRef) await leadRef.set({ ...analise, STATUS_CADASTRO: 'RECUSADO_CONSUMO' }, { merge: true });
+                  atualizarEstado(phone, leadRef, { ...analise, STATUS_CADASTRO: 'RECUSADO_CONSUMO' });
               }
           } catch (e) {
               await enviarFluxo(phone, TEXTOS.T09_ERRO_FATURA, AUDIOS.A09_ERRO_FATURA);
@@ -194,13 +204,12 @@ app.post('/webhook/igreen', async (req, res) => {
 
       case 'AGUARDANDO_CASA':
           if (!textoIn) return;
-          if (leadRef) {
-              await leadRef.set({ ENDERECO_NUMERO: textoIn, STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE' }, { merge: true });
-          }
+          atualizarEstado(phone, leadRef, { ENDERECO_NUMERO: textoIn, STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE' });
           await enviarFluxo(phone, TEXTOS.T04_PEDIR_FRENTE, AUDIOS.A04_PEDIR_FRENTE);
           break;
 
       case 'AGUARDANDO_DOC_FRENTE':
+          // Se receber áudio/texto em vez de foto, acusa erro.
           if (!isImage) {
               await enviarFluxo(phone, TEXTOS.T11_ERRO_DOC, AUDIOS.A11_ERRO_DOC);
               return;
@@ -212,7 +221,7 @@ app.post('/webhook/igreen', async (req, res) => {
               const isDocValido = await validarDocumentoIA(base64Frente);
 
               if (isDocValido) {
-                  if (leadRef) await leadRef.set({ LINK_DOC_FRENTE: mediaUrlF, STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO' }, { merge: true });
+                  atualizarEstado(phone, leadRef, { LINK_DOC_FRENTE: mediaUrlF, STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO' });
                   await enviarFluxo(phone, TEXTOS.T05_PEDIR_VERSO, AUDIOS.A05_PEDIR_VERSO);
               } else {
                   await enviarFluxo(phone, TEXTOS.T11_ERRO_DOC, AUDIOS.A11_ERRO_DOC);
@@ -235,11 +244,11 @@ app.post('/webhook/igreen', async (req, res) => {
 
               if (isDocValido) {
                   await enviarFluxo(phone, TEXTOS.T06_ANALISE_BIO, AUDIOS.A06_ANALISE_BIO);
-                  if (leadRef) await leadRef.set({ LINK_DOC_VERSO: mediaUrlV, STATUS_CADASTRO: 'AGUARDANDO_EMAIL' }, { merge: true });
+                  atualizarEstado(phone, leadRef, { LINK_DOC_VERSO: mediaUrlV, STATUS_CADASTRO: 'AGUARDANDO_EMAIL' });
                   
                   setTimeout(async () => {
                       await enviarFluxo(phone, TEXTOS.T07_PEDIR_EMAIL, AUDIOS.A07_PEDIR_EMAIL);
-                  }, 4000); // 4 Segundos de espera para simular a biometria
+                  }, 4000); // 4 Segundos simulando biometria
               } else {
                   await enviarFluxo(phone, TEXTOS.T11_ERRO_DOC, AUDIOS.A11_ERRO_DOC);
               }
@@ -252,7 +261,7 @@ app.post('/webhook/igreen', async (req, res) => {
           if (!textoIn) return;
           const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
           if (emailRegex.test(textoIn)) {
-              if (leadRef) await leadRef.set({ EMAIL: textoIn, STATUS_CADASTRO: 'CONCLUIDO' }, { merge: true });
+              atualizarEstado(phone, leadRef, { EMAIL: textoIn, STATUS_CADASTRO: 'CONCLUIDO' });
               await enviarFluxo(phone, TEXTOS.T08_CONCLUSAO, AUDIOS.A08_CONCLUSAO);
           } else {
               await enviarFluxo(phone, TEXTOS.T12_ERRO_EMAIL, AUDIOS.A12_ERRO_EMAIL);
@@ -263,6 +272,15 @@ app.post('/webhook/igreen', async (req, res) => {
           break;
   }
 });
+
+// FUNÇÃO SEGURA PARA ATUALIZAR ESTADO (DB + Memória)
+async function atualizarEstado(phone, leadRef, dados) {
+    const atual = memoriaEstado.get(phone) || {};
+    memoriaEstado.set(phone, { ...atual, ...dados });
+    if (leadRef) {
+        await leadRef.set(dados, { merge: true }).catch(e => console.log("Aviso: Falha ao salvar no DB, usando memória."));
+    }
+}
 
 // FUNÇÕES AUXILIARES
 function obterMediaUrl(data) {
@@ -288,16 +306,16 @@ async function baixarArquivo(mediaUrl) {
     throw new Error("Falha ao baixar após tentativas");
 }
 
-async function enviarFluxo(phone, texto, audioUrl) {
+async function enviarFluxo(phone, texto, audioFile) {
     await enviarMensagem(phone, texto);
-    if (audioUrl) {
-        await enviarAudio(phone, audioUrl);
+    if (audioFile) {
+        await enviarAudioDireto(phone, audioFile);
     }
 }
 
-// MOTOR IA: FATURA (APENAS LEITURA, SEM VOZ)
+// MOTOR IA: FATURA (Gemini 2.5 Flash)
 async function auditarFaturaIA(base64, mimeType) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${GEMINI_API_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
   const prompt = `
     Analise a imagem da fatura. Retorne JSON:
     {
@@ -317,7 +335,7 @@ async function auditarFaturaIA(base64, mimeType) {
 
 // MOTOR IA: VALIDAÇÃO DE IDENTIDADE
 async function validarDocumentoIA(base64) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${GEMINI_API_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
   const prompt = `A imagem é uma foto válida de RG ou CNH brasileiro? Retorne JSON: {"VALIDO": true/false}`;
   const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
   const res = await axios.post(url, payload);
@@ -329,10 +347,28 @@ async function enviarMensagem(phone, message) {
   await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, { phone: numeroLimpo, message: String(message) }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }).catch(()=>{});
 }
 
-async function enviarAudio(phone, audioUrl) {
-  if (!audioUrl) return;
-  const numeroLimpo = String(phone).replace(/\D/g, ''); 
-  await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-audio`, { phone: numeroLimpo, audio: audioUrl }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }).catch(()=>{});
+// A SOLUÇÃO MÁGICA PARA O ÁUDIO NÃO FALHAR
+async function enviarAudioDireto(phone, fileName) {
+    try {
+        const filePath = path.join(__dirname, 'audios', fileName);
+        if (!fs.existsSync(filePath)) {
+            console.error(`[AVISO] O ficheiro de áudio ${fileName} não foi encontrado na pasta 'audios' do GitHub!`);
+            return;
+        }
+        
+        // Lê o MP3 do disco e envia direto, sem usar links!
+        const base64Audio = fs.readFileSync(filePath, { encoding: 'base64' });
+        const dataUri = `data:audio/mp3;base64,${base64Audio}`;
+        const numeroLimpo = String(phone).replace(/\D/g, ''); 
+        
+        await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-audio`, 
+            { phone: numeroLimpo, audio: dataUri }, 
+            { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }
+        );
+        console.log(`🔊 Áudio ${fileName} enviado perfeitamente!`);
+    } catch (e) {
+        console.error(`❌ Erro ao enviar áudio ${fileName}:`, e.message);
+    }
 }
 
 app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON!`));
