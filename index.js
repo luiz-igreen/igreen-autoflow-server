@@ -96,6 +96,14 @@ app.post('/webhook/igreen', async (req, res) => {
       return;
   }
   
+  // NOVA REGRA: PERMITIR REINICIAR O FLUXO FACILMENTE (COMANDO "NOVO" OU "OI" APÓS CONCLUIR)
+  if (textoIn.toLowerCase() === 'novo' || textoIn.toLowerCase() === 'reiniciar' || (textoIn.toLowerCase() === 'oi' && status === 'CONCLUIDO')) {
+      memoriaEstado.delete(phone);
+      await enviarFluxo(phone, TEXTOS.T01, "01");
+      atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', TELEFONE: phone });
+      return;
+  }
+
   if (status === 'CONFIRMANDO_CANCELAMENTO') {
       if (textoIn === '1') {
           if (leadRef) await leadRef.delete();
@@ -240,6 +248,11 @@ app.post('/webhook/igreen', async (req, res) => {
           break;
           
       case 'CONCLUIDO':
+          if (textoIn && !isImage && !isPDF) {
+              await enviarMensagem(phone, "O seu pré-cadastro já está finalizado com sucesso no nosso sistema! 🎉\n\n⚡ Se deseja cadastrar uma *NOVA* conta de luz, digite a palavra *NOVO*.\n👤 Se deseja falar com um consultor, digite *ATENDENTE*.");
+          } else if (isImage || isPDF) {
+              await enviarMensagem(phone, "Identifiquei um novo documento! 📄\n\nSe deseja iniciar um novo cadastro para esta fatura, digite a palavra *NOVO* primeiro para eu reiniciar o sistema.");
+          }
           break;
   }
 });
