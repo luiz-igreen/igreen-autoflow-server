@@ -72,13 +72,39 @@ app.post('/webhook/igreen', async (req, res) => {
     await enviarAudio(phone, await gerarAudioGemini(vozInicial));
 
     try {
-      let mediaUrl = data.link || (data.image ? data.image.imageUrl : (data.document ? data.document.documentUrl : ""));
-      if (!mediaUrl) throw new Error("Link da mídia não encontrado.");
+      let mediaUrl = "";
+      if (data.image && data.image.imageUrl) mediaUrl = data.image.imageUrl;
+      else if (data.document && data.document.documentUrl) mediaUrl = data.document.documentUrl;
 
-      // CORREÇÃO: Download simples sem o Header do Token, para evitar o erro 404 no servidor de arquivos
-      const fileResponse = await axios.get(mediaUrl, { 
-          responseType: 'arraybuffer'
-      });
+      if (!mediaUrl || !mediaUrl.startsWith('http')) {
+          console.log("❌ Payload recebido:", JSON.stringify(data, null, 2));
+          throw new Error("Link da mídia não encontrado no webhook.");
+      }
+
+      console.log(`🔗 Baixando foto de: ${mediaUrl}`);
+
+      // SISTEMA ANTI-FALHA (RETRY LOOP)
+      // O Node.js é tão rápido que tenta baixar a foto antes da Z-API terminar de salvá-la no servidor.
+      let fileResponse = null;
+      let tentativas = 4; // Vai tentar até 4 vezes
+      while (tentativas > 0) {
+          try {
+              fileResponse = await axios.get(mediaUrl, { 
+                  responseType: 'arraybuffer',
+                  headers: ZAPI_CLIENT_TOKEN ? { 'Client-Token': ZAPI_CLIENT_TOKEN } : {}
+              });
+              break; // Conseguiu baixar! Sai do loop.
+          } catch (err) {
+              if (err.response && err.response.status === 404 && tentativas > 1) {
+                  console.log(`⚠️ Z-API ainda está a processar a foto (Erro 404). Aguardando 2 segundos... (${tentativas - 1} tentativas restantes)`);
+                  await new Promise(r => setTimeout(r, 2000));
+                  tentativas--;
+              } else {
+                  throw err; // Erro real ou acabaram as tentativas
+              }
+          }
+      }
+
       const base64Data = Buffer.from(fileResponse.data, 'binary').toString('base64');
       const mimeType = isPDF ? "application/pdf" : "image/jpeg";
 
