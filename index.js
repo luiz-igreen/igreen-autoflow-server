@@ -109,13 +109,14 @@ app.post('/webhook/igreen', async (req, res) => {
       const base64Data = Buffer.from(fileResponse.data, 'binary').toString('base64');
       const mimeType = isPDF ? "application/pdf" : "image/jpeg";
 
-      console.log(`🧠 Gemini IA a ler os dados (Modelo 1.5 Estável)...`);
+      // 👇 MUDANÇA CRUCIAL: Agora usando a Versão 3.1 Pro Oficial
+      console.log(`🧠 Gemini IA a ler os dados (Modelo 3.1 Pro Atualizado)...`);
       const analise = await analisarComIA(base64Data, mimeType);
       console.log(`✅ LEITURA CONCLUÍDA! Resultado: Elegível? ${analise.ELEGIVEL}`);
 
       if (analise.ELEGIVEL && admin.apps.length > 0) {
           const db = admin.firestore();
-          const appId = 'igreen-autoflow-v4';
+          const appId = process.env.RENDER_SERVICE_ID || 'igreen-autoflow-v4';
           await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('leads').doc(phone).set({
               ...analise,
               DATA_PROCESSAMENTO: admin.firestore.Timestamp.now(),
@@ -148,28 +149,52 @@ app.post('/webhook/igreen', async (req, res) => {
   }
 });
 
-// MOTOR IA (Gemini Público Estável)
+// MOTOR IA (Atualizado para Gemini 3.1 Pro Preview)
 async function analisarComIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
-  // 🚨 CORREÇÃO DO ERRO 404: Mudamos para a versão pública e estável gemini-1.5-flash
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+  // 🚨 ATUALIZAÇÃO REQUERIDA (Versão 3.1)
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${GEMINI_API_KEY}`;
   const prompt = `Aja como auditor iGreen. Extraia dados em JSON: NOME_CLIENTE, CPF, CNPJ, UC, MEDIA_CONSUMO (kWh), ELEGIVEL (true/false), MOTIVO_RECUSA. Regras: Grupo B, Consumo > 150kWh, Sem tarifa social, Titular vivo.`;
   const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType, data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
   const res = await axios.post(url, payload);
   return JSON.parse(res.data.candidates[0].content.parts[0].text);
 }
 
-// NOVO MOTOR DE VOZ (Público e Gratuito - Google Translate TTS)
+// MOTOR DE VOZ (Atualizado para Gemini 3.1 Flash TTS com sistema de reserva de segurança)
 async function gerarAudio(texto) {
   try {
-    const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=pt-BR&client=tw-ob&q=${encodeURIComponent(texto)}`;
-    const res = await axios.get(url, { responseType: 'arraybuffer' });
-    const base64Audio = Buffer.from(res.data, 'binary').toString('base64');
-    return `data:audio/mp3;base64,${base64Audio}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts:generateContent?key=${GEMINI_API_KEY}`;
+    const payload = { 
+      contents: [{ parts: [{ text: texto }] }], 
+      generationConfig: { 
+        responseModalities: ["AUDIO"], 
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } } } 
+      } 
+    };
+    const res = await axios.post(url, payload);
+    const pcm = Buffer.from(res.data.candidates[0].content.parts[0].inlineData.data, 'base64');
+    return `data:audio/wav;base64,${pcmToWav(pcm).toString('base64')}`;
   } catch (error) {
-    console.log("❌ Erro ao gerar voz:", error.message);
-    return null;
+    console.log("⚠️ TTS Gemini 3.1 falhou. Usando sistema de voz alternativo seguro...");
+    try {
+        const urlFallback = `https://translate.google.com/translate_tts?ie=UTF-8&tl=pt-BR&client=tw-ob&q=${encodeURIComponent(texto)}`;
+        const resFallback = await axios.get(urlFallback, { responseType: 'arraybuffer' });
+        const base64Audio = Buffer.from(resFallback.data, 'binary').toString('base64');
+        return `data:audio/mp3;base64,${base64Audio}`;
+    } catch (e) {
+        return null;
+    }
   }
+}
+
+function pcmToWav(pcm) {
+  const s = 24000, c = 1, b = 16;
+  const buf = Buffer.alloc(44 + pcm.length);
+  buf.write('RIFF', 0); buf.writeUInt32LE(36 + pcm.length, 4); buf.write('WAVE', 8); buf.write('fmt ', 12);
+  buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20); buf.writeUInt16LE(c, 22); buf.writeUInt32LE(s, 24);
+  buf.writeUInt32LE(s*c*b/8, 28); buf.writeUInt16LE(c*b/8, 32); buf.writeUInt16LE(b, 34); buf.write('data', 36);
+  buf.writeUInt32LE(pcm.length, 40); pcm.copy(buf, 44);
+  return buf;
 }
 
 // ENVIOS Z-API
