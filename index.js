@@ -35,7 +35,7 @@ try {
   console.error("Erro na base de dados:", e.message);
 }
 
-// Memória local anti-amnésia (Previne que o robô esqueça a etapa se o DB falhar)
+// Memória local anti-amnésia
 const memoriaEstado = new Map();
 
 // OS TEXTOS EXTRAÍDOS RIGOROSAMENTE DOS SEUS ÁUDIOS (1 a 20)
@@ -102,7 +102,6 @@ app.post('/webhook/igreen', async (req, res) => {
   const appId = process.env.RENDER_SERVICE_ID || 'igreen-autoflow-v4';
   let leadRef = null;
   
-  // 1. SOLUÇÃO DA AMNÉSIA: OBTÉM O ESTADO (Confia primeiro na Memória Local!)
   let status = 'NOVO';
   const mem = memoriaEstado.get(phone);
   
@@ -111,7 +110,7 @@ app.post('/webhook/igreen', async (req, res) => {
   }
 
   if (mem && mem.STATUS_CADASTRO) {
-      status = mem.STATUS_CADASTRO; // Usa a memória ultra-rápida (não confunde etapas)
+      status = mem.STATUS_CADASTRO;
   } else if (leadRef) {
       const doc = await leadRef.get();
       if (doc.exists) {
@@ -122,14 +121,12 @@ app.post('/webhook/igreen', async (req, res) => {
 
   console.log(`\n📡 [RADAR] Cliente: ${phone} | Estado Atual: [${status}] | Tipo: ${data.type}`);
 
-  // INTERCEPTAR CANCELAMENTO
   if (textoIn.toLowerCase() === 'cancelar') {
       await enviarFluxo(phone, TEXTOS.T13_CANCELAMENTO, AUDIOS.A13_CANCELAMENTO);
       atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'CONFIRMANDO_CANCELAMENTO', PREV_STATUS: status });
       return;
   }
   
-  // INTERCEPTAR TRANSBORDO HUMANO
   if (textoIn.toLowerCase().match(/(atendente|humano|consultor|especialista|falar com alg)/)) {
       await enviarFluxo(phone, TEXTOS.T20_TRANSBORDO, AUDIOS.A20_TRANSBORDO);
       atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'TRANSBORDO_HUMANO' });
@@ -149,7 +146,6 @@ app.post('/webhook/igreen', async (req, res) => {
       return;
   }
 
-  // MÁQUINA DE ESTADOS DO FUNIL (Blindada)
   switch (status) {
       case 'NOVO':
       case 'AGUARDANDO_FATURA':
@@ -159,7 +155,6 @@ app.post('/webhook/igreen', async (req, res) => {
               return;
           }
 
-          // Recebeu a FATURA
           await enviarFluxo(phone, TEXTOS.T02_ANALISE_IA, AUDIOS.A02_ANALISE_IA);
           
           try {
@@ -216,7 +211,6 @@ app.post('/webhook/igreen', async (req, res) => {
           break;
 
       case 'AGUARDANDO_DOC_FRENTE':
-          // Se receber áudio/texto em vez de foto, acusa erro.
           if (!isImage) {
               await enviarFluxo(phone, TEXTOS.T11_ERRO_DOC, AUDIOS.A11_ERRO_DOC);
               return;
@@ -256,7 +250,7 @@ app.post('/webhook/igreen', async (req, res) => {
                   
                   setTimeout(async () => {
                       await enviarFluxo(phone, TEXTOS.T07_PEDIR_EMAIL, AUDIOS.A07_PEDIR_EMAIL);
-                  }, 4000); // 4 Segundos simulando biometria
+                  }, 4000); 
               } else {
                   await enviarFluxo(phone, TEXTOS.T11_ERRO_DOC, AUDIOS.A11_ERRO_DOC);
               }
@@ -282,7 +276,6 @@ app.post('/webhook/igreen', async (req, res) => {
   }
 });
 
-// FUNÇÃO SEGURA PARA ATUALIZAR ESTADO (DB + Memória)
 async function atualizarEstado(phone, leadRef, dados) {
     const atual = memoriaEstado.get(phone) || {};
     memoriaEstado.set(phone, { ...atual, ...dados });
@@ -291,7 +284,6 @@ async function atualizarEstado(phone, leadRef, dados) {
     }
 }
 
-// FUNÇÕES AUXILIARES
 function obterMediaUrl(data) {
     const url = data.link || (data.image && data.image.imageUrl) || (data.document && data.document.documentUrl) || (data.photo && data.photo.photoUrl) || "";
     if (!url || !url.startsWith('http')) throw new Error("Link não encontrado.");
@@ -322,11 +314,10 @@ async function enviarFluxo(phone, texto, audioFile) {
     }
 }
 
-// MOTOR IA: FATURA 
-// SOLUÇÃO DO BUG: Retornamos à Versão 3.1 Pro (Leitura Perfeita) e ajustámos os campos
+// 🚨 CORREÇÃO 404: Retornámos ao motor Oficial Estável e mantivemos o "limpador" de texto
 async function auditarFaturaIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${GEMINI_API_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
   const prompt = `
     Aja como auditor iGreen. Extraia dados em JSON da fatura anexa.
     IMPORTANTE: Retorne APENAS um objeto JSON válido.
@@ -351,18 +342,15 @@ async function auditarFaturaIA(base64, mimeType) {
   const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType, data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
   const res = await axios.post(url, payload);
   
-  // Limpador (Garante que não haverá erro se a IA usar Markdown)
   let textoLimpo = res.data.candidates[0].content.parts[0].text;
   textoLimpo = textoLimpo.replace(/```json/g, '').replace(/```/g, '').trim();
   
   return JSON.parse(textoLimpo);
 }
 
-// MOTOR IA: VALIDAÇÃO DE IDENTIDADE
-// SOLUÇÃO DO BUG: Retornamos à Versão 3.1 Pro 
 async function validarDocumentoIA(base64) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${GEMINI_API_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
   const prompt = `
     A imagem é uma foto válida de RG ou CNH brasileiro? 
     IMPORTANTE: Retorne APENAS um objeto JSON válido.
@@ -371,7 +359,6 @@ async function validarDocumentoIA(base64) {
   const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
   const res = await axios.post(url, payload);
   
-  // Limpador
   let textoLimpo = res.data.candidates[0].content.parts[0].text;
   textoLimpo = textoLimpo.replace(/```json/g, '').replace(/```/g, '').trim();
   
@@ -383,7 +370,6 @@ async function enviarMensagem(phone, message) {
   await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, { phone: numeroLimpo, message: String(message) }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }).catch(()=>{});
 }
 
-// A SOLUÇÃO MÁGICA PARA O ÁUDIO NÃO FALHAR
 async function enviarAudioDireto(phone, fileName) {
     try {
         const filePath = path.join(__dirname, 'audios', fileName);
@@ -392,7 +378,6 @@ async function enviarAudioDireto(phone, fileName) {
             return;
         }
         
-        // Lê o MP3 do disco e envia direto, sem usar links!
         const base64Audio = fs.readFileSync(filePath, { encoding: 'base64' });
         const dataUri = `data:audio/mp3;base64,${base64Audio}`;
         const numeroLimpo = String(phone).replace(/\D/g, ''); 
