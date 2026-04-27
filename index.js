@@ -29,55 +29,24 @@ try {
   console.error("Erro na base de dados:", e.message);
 }
 
-// Memória local anti-amnésia
 const memoriaEstado = new Map();
 
-// OS TEXTOS EXTRAÍDOS RIGOROSAMENTE DOS SEUS ÁUDIOS (1 a 20)
+// OS TEXTOS EXTRAÍDOS RIGOROSAMENTE DOS SEUS ÁUDIOS
 const TEXTOS = {
-    T01_BOAS_VINDAS: "Seja muito bem-vinda à iGreen Energy. Pra começarmos a sua simulação, por favor, me envie uma foto bem nítida ou o PDF da sua conta de luz.",
-    T02_ANALISE_IA: "Estou analisando a sua fatura e a elegibilidade regional. Por favor, aguarde um instante.",
-    T03_PEDIR_CASA: "Fatura auditada com sucesso. Identifiquei o seu CEP, mas não encontrei o número da residência. Por favor, digite o número da sua casa ou apartamento pra prosseguirmos.",
-    T04_PEDIR_FRENTE: "Fatura auditada com sucesso. Pra darmos continuidade, por favor, envie uma foto nítida apenas da frente do seu RG ou CNH.",
-    T05_PEDIR_VERSO: "Frente guardada. Agora, por favor, envie a foto do verso do documento, onde ficam o número de registro e o órgão emissor.",
-    T06_ANALISE_BIO: "Estou executando a leitura biométrica avançada, cruzando os dados da frente e do verso. Por favor, aguarde.",
-    T07_PEDIR_EMAIL: "Registrado. Pra finalizar, digite o seu melhor e-mail.",
-    T08_CONCLUSAO: "Prontinho. O seu pré-cadastro foi concluído com sucesso. Os seus dados já foram enviados pro nosso sistema e muito em breve você receberá o seu link para assinatura. A iGreen Energy agradece a sua confiança.",
-    T09_ERRO_FATURA: "Aviso, este documento não parece ser uma fatura de energia, ou a imagem está cortada. Por favor, envie a foto correta e nítida da sua conta de luz.",
-    T10_TARIFA_SOCIAL: "Atenção, identificamos que a sua conta possui a classificação de baixa renda ou tarifa social. Para proteger o seu benefício governamental, a iGreen não atende esta modalidade, pois a alteração poderia causar a perda do seu subsídio. O processo foi encerrado por segurança.",
-    T11_ERRO_DOC: "Aviso, o documento está ilegível, ou não é um RG ou CNH brasileiro válido. Por favor, reenvie a foto com mais foco e sem reflexos de luz.",
-    T12_ERRO_EMAIL: "E-mail inválido. Por favor, verifique se digitou corretamente, lembrando que deve conter a arroba, e envie novamente.",
-    T13_CANCELAMENTO: "Atenção, você solicitou o cancelamento. Tem certeza que deseja excluir todos os dados enviados até agora? Digite um para sim, cancelar tudo, ou dois para não, e continuar o cadastro.",
-    T14_ENVIO_CONTRATO: "O seu contrato chegou. A sua proposta de economia já está pronta. Clique no link da mensagem pra ler os termos e assinar digitalmente de forma rápida e segura. Qualquer dúvida, estou aqui.",
-    T15_COBRANCA_ASSINATURA: "Falta muito pouco pra começar a poupar. Verificamos que ainda não assinou o seu termo de adesão da iGreen Energy. Lembre-se, não há custos de adesão, obras ou fidelidade. O link ainda está disponível na mensagem.",
-    T16_CONEXAO_APROVADA: "Parabéns. A sua concessionária local acabou de aprovar a injeção da nossa energia solar na sua rede. A partir do próximo ciclo, você já começará a notar a redução no valor da sua fatura.",
-    T17_AVISO_BOLETO: "A sua fatura iGreen está pronta. Este mês a sua energia mais barata já foi processada. Segue na mensagem o seu boleto unificado. Parabéns por poupar com energia limpa.",
-    T18_IGREEN_CLUB: "Você já ativou o seu iGreen Club? Como nosso cliente, você tem descontos em milhares de estabelecimentos no Brasil. Baixe o nosso aplicativo no link da mensagem e comece a aproveitar hoje mesmo.",
-    T19_CASHBACK: "Quer zerar a sua conta de luz? Na iGreen Energy você ganha cashback por cada amigo ou familiar que você indicar. Acesse o seu aplicativo, pegue seu link de indicação e partilhe.",
-    T20_TRANSBORDO: "Entendido. Vou transferir o seu atendimento pra um de nossos consultores especialistas. Aguarde um instante, por favor."
-};
-
-// PREFIXOS DOS ÁUDIOS (O Rastreador vai procurar qualquer ficheiro que comece por estes números)
-const AUDIOS = {
-    A01_BOAS_VINDAS: "01",
-    A02_ANALISE_IA: "02",
-    A03_PEDIR_CASA: "03",
-    A04_PEDIR_FRENTE: "04",
-    A05_PEDIR_VERSO: "05",
-    A06_ANALISE_BIO: "06",
-    A07_PEDIR_EMAIL: "07",
-    A08_CONCLUSAO: "08",
-    A09_ERRO_FATURA: "09",
-    A10_TARIFA_SOCIAL: "10",
-    A11_ERRO_DOC: "11",
-    A12_ERRO_EMAIL: "12",
-    A13_CANCELAMENTO: "13",
-    A14_ENVIO_CONTRATO: "14",
-    A15_COBRANCA_ASSINATURA: "15",
-    A16_CONEXAO_APROVADA: "16",
-    A17_AVISO_BOLETO: "17",
-    A18_IGREEN_CLUB: "18",
-    A19_CASHBACK: "19",
-    A20_TRANSBORDO: "20"
+    T01: "Seja muito bem-vinda à iGreen Energy. Pra começarmos a sua simulação, por favor, me envie uma foto bem nítida ou o PDF da sua conta de luz.",
+    T02: "Estou analisando a sua fatura e a elegibilidade regional. Por favor, aguarde um instante.",
+    T03: "Fatura auditada com sucesso. Identifiquei o seu CEP, mas não encontrei o número da residência. Por favor, digite o número da sua casa ou apartamento pra prosseguirmos.",
+    T04: "Fatura auditada com sucesso. Pra darmos continuidade, por favor, envie uma foto nítida apenas da frente do seu RG ou CNH.",
+    T05: "Frente guardada. Agora, por favor, envie a foto do verso do documento, onde ficam o número de registro e o órgão emissor.",
+    T06: "Estou executando a leitura biométrica avançada, cruzando os dados da frente e do verso. Por favor, aguarde.",
+    T07: "Registrado. Pra finalizar, digite o seu melhor e-mail.",
+    T08: "Prontinho. O seu pré-cadastro foi concluído com sucesso. Os seus dados já foram enviados pro nosso sistema e muito em breve você receberá o seu link para assinatura. A iGreen Energy agradece a sua confiança.",
+    T09: "Aviso, este documento não parece ser uma fatura de energia, ou a imagem está cortada. Por favor, envie a foto correta e nítida da sua conta de luz.",
+    T10: "Atenção, identificamos que a sua conta possui a classificação de baixa renda ou tarifa social. Para proteger o seu benefício governamental, a iGreen não atende esta modalidade, pois a alteração poderia causar a perda do seu subsídio. O processo foi encerrado por segurança.",
+    T11: "Aviso, o documento está ilegível, ou não é um RG ou CNH brasileiro válido. Por favor, reenvie a foto com mais foco e sem reflexos de luz.",
+    T12: "E-mail inválido. Por favor, verifique se digitou corretamente, lembrando que deve conter a arroba, e envie novamente.",
+    T13: "Atenção, você solicitou o cancelamento. Tem certeza que deseja excluir todos os dados enviados até agora? Digite um para sim, cancelar tudo, ou dois para não, e continuar o cadastro.",
+    T20: "Entendido. Vou transferir o seu atendimento pra um de nossos consultores especialistas. Aguarde um instante, por favor."
 };
 
 // WEBHOOK PRINCIPAL (MÁQUINA DE ESTADOS)
@@ -113,16 +82,16 @@ app.post('/webhook/igreen', async (req, res) => {
       }
   }
 
-  console.log(`\n📡 [RADAR] Cliente: ${phone} | Estado Atual: [${status}] | Tipo: ${data.type}`);
+  console.log(`\n📡 [RADAR] Cliente: ${phone} | Estado: [${status}] | Tipo Msg: ${data.type}`);
 
   if (textoIn.toLowerCase() === 'cancelar') {
-      await enviarFluxo(phone, TEXTOS.T13_CANCELAMENTO, AUDIOS.A13_CANCELAMENTO);
+      await enviarFluxo(phone, TEXTOS.T13, "15");
       atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'CONFIRMANDO_CANCELAMENTO', PREV_STATUS: status });
       return;
   }
   
   if (textoIn.toLowerCase().match(/(atendente|humano|consultor|especialista|falar com alg)/)) {
-      await enviarFluxo(phone, TEXTOS.T20_TRANSBORDO, AUDIOS.A20_TRANSBORDO);
+      await enviarFluxo(phone, TEXTOS.T20, "22");
       atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'TRANSBORDO_HUMANO' });
       return;
   }
@@ -144,12 +113,12 @@ app.post('/webhook/igreen', async (req, res) => {
       case 'NOVO':
       case 'AGUARDANDO_FATURA':
           if (!isImage && !isPDF) {
-              await enviarFluxo(phone, TEXTOS.T01_BOAS_VINDAS, AUDIOS.A01_BOAS_VINDAS);
+              await enviarFluxo(phone, TEXTOS.T01, "01");
               atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', TELEFONE: phone });
               return;
           }
 
-          await enviarFluxo(phone, TEXTOS.T02_ANALISE_IA, AUDIOS.A02_ANALISE_IA);
+          await enviarFluxo(phone, TEXTOS.T02, "02");
           
           try {
               let mediaUrl = obterMediaUrl(data);
@@ -159,25 +128,25 @@ app.post('/webhook/igreen', async (req, res) => {
               const analise = await auditarFaturaIA(base64Data, mimeType);
 
               if (!analise.VALIDO) {
-                  await enviarFluxo(phone, TEXTOS.T09_ERRO_FATURA, AUDIOS.A09_ERRO_FATURA);
+                  await enviarFluxo(phone, TEXTOS.T09, "11");
                   return;
               }
 
               if (analise.TARIFA_SOCIAL) {
-                  await enviarFluxo(phone, TEXTOS.T10_TARIFA_SOCIAL, AUDIOS.A10_TARIFA_SOCIAL);
+                  await enviarFluxo(phone, TEXTOS.T10, "12");
                   atualizarEstado(phone, leadRef, { ...analise, STATUS_CADASTRO: 'RECUSADO_TARIFA_SOCIAL' });
                   return;
               }
 
               if (analise.ELEGIVEL) {
                   let proximoStatus = 'AGUARDANDO_DOC_FRENTE';
-                  let proximoTexto = TEXTOS.T04_PEDIR_FRENTE;
-                  let proximoAudio = AUDIOS.A04_PEDIR_FRENTE;
+                  let proximoTexto = TEXTOS.T04;
+                  let proximoAudio = "04";
 
                   if (!analise.ENDERECO_NUMERO || analise.ENDERECO_NUMERO.trim() === '') {
                       proximoStatus = 'AGUARDANDO_CASA';
-                      proximoTexto = TEXTOS.T03_PEDIR_CASA;
-                      proximoAudio = AUDIOS.A03_PEDIR_CASA;
+                      proximoTexto = TEXTOS.T03;
+                      proximoAudio = "03";
                   }
 
                   atualizarEstado(phone, leadRef, {
@@ -193,23 +162,22 @@ app.post('/webhook/igreen', async (req, res) => {
                   atualizarEstado(phone, leadRef, { ...analise, STATUS_CADASTRO: 'RECUSADO_CONSUMO' });
               }
           } catch (e) {
-              console.error("ERRO FATURA:", e.message);
-              await enviarFluxo(phone, TEXTOS.T09_ERRO_FATURA, AUDIOS.A09_ERRO_FATURA);
+              console.error("❌ ERRO FATURA:", e.message);
+              await enviarFluxo(phone, TEXTOS.T09, "11");
           }
           break;
 
       case 'AGUARDANDO_CASA':
           if (!textoIn) return;
           atualizarEstado(phone, leadRef, { ENDERECO_NUMERO: textoIn, STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE' });
-          await enviarFluxo(phone, TEXTOS.T04_PEDIR_FRENTE, AUDIOS.A04_PEDIR_FRENTE);
+          await enviarFluxo(phone, TEXTOS.T04, "04");
           break;
 
       case 'AGUARDANDO_DOC_FRENTE':
           if (!isImage) {
-              await enviarFluxo(phone, TEXTOS.T11_ERRO_DOC, AUDIOS.A11_ERRO_DOC);
+              await enviarFluxo(phone, TEXTOS.T11, "13");
               return;
           }
-          
           try {
               let mediaUrlF = obterMediaUrl(data);
               const base64Frente = await baixarArquivo(mediaUrlF);
@@ -217,40 +185,37 @@ app.post('/webhook/igreen', async (req, res) => {
 
               if (isDocValido) {
                   atualizarEstado(phone, leadRef, { LINK_DOC_FRENTE: mediaUrlF, STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO' });
-                  await enviarFluxo(phone, TEXTOS.T05_PEDIR_VERSO, AUDIOS.A05_PEDIR_VERSO);
+                  await enviarFluxo(phone, TEXTOS.T05, "05");
               } else {
-                  await enviarFluxo(phone, TEXTOS.T11_ERRO_DOC, AUDIOS.A11_ERRO_DOC);
+                  await enviarFluxo(phone, TEXTOS.T11, "13");
               }
           } catch (e) {
-              console.error("ERRO DOC FRENTE:", e.message);
-              await enviarFluxo(phone, TEXTOS.T11_ERRO_DOC, AUDIOS.A11_ERRO_DOC);
+              await enviarFluxo(phone, TEXTOS.T11, "13");
           }
           break;
 
       case 'AGUARDANDO_DOC_VERSO':
           if (!isImage) {
-              await enviarFluxo(phone, TEXTOS.T11_ERRO_DOC, AUDIOS.A11_ERRO_DOC);
+              await enviarFluxo(phone, TEXTOS.T11, "13");
               return;
           }
-
           try {
               let mediaUrlV = obterMediaUrl(data);
               const base64Verso = await baixarArquivo(mediaUrlV);
               const isDocValido = await validarDocumentoIA(base64Verso); 
 
               if (isDocValido) {
-                  await enviarFluxo(phone, TEXTOS.T06_ANALISE_BIO, AUDIOS.A06_ANALISE_BIO);
+                  await enviarFluxo(phone, TEXTOS.T06, "06");
                   atualizarEstado(phone, leadRef, { LINK_DOC_VERSO: mediaUrlV, STATUS_CADASTRO: 'AGUARDANDO_EMAIL' });
                   
                   setTimeout(async () => {
-                      await enviarFluxo(phone, TEXTOS.T07_PEDIR_EMAIL, AUDIOS.A07_PEDIR_EMAIL);
+                      await enviarFluxo(phone, TEXTOS.T07, "09");
                   }, 4000); 
               } else {
-                  await enviarFluxo(phone, TEXTOS.T11_ERRO_DOC, AUDIOS.A11_ERRO_DOC);
+                  await enviarFluxo(phone, TEXTOS.T11, "13");
               }
           } catch (e) {
-              console.error("ERRO DOC VERSO:", e.message);
-              await enviarFluxo(phone, TEXTOS.T11_ERRO_DOC, AUDIOS.A11_ERRO_DOC);
+              await enviarFluxo(phone, TEXTOS.T11, "13");
           }
           break;
 
@@ -259,12 +224,12 @@ app.post('/webhook/igreen', async (req, res) => {
           const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
           if (emailRegex.test(textoIn)) {
               atualizarEstado(phone, leadRef, { EMAIL: textoIn, STATUS_CADASTRO: 'CONCLUIDO' });
-              await enviarFluxo(phone, TEXTOS.T08_CONCLUSAO, AUDIOS.A08_CONCLUSAO);
+              await enviarFluxo(phone, TEXTOS.T08, "10");
           } else {
-              await enviarFluxo(phone, TEXTOS.T12_ERRO_EMAIL, AUDIOS.A12_ERRO_EMAIL);
+              await enviarFluxo(phone, TEXTOS.T12, "14");
           }
           break;
-
+          
       case 'CONCLUIDO':
           break;
   }
@@ -298,71 +263,61 @@ async function baixarArquivo(mediaUrl) {
             tentativas--;
         }
     }
-    throw new Error("Falha ao baixar após tentativas");
+    throw new Error("Falha ao baixar arquivo após 3 tentativas");
 }
 
 async function enviarFluxo(phone, texto, prefixoAudio) {
     await enviarMensagem(phone, texto);
     if (prefixoAudio) {
-        console.log(`⏱️ Pausa de 2s para o áudio chegar depois do texto...`);
+        console.log(`⏱️ Pausa de 2s antes do áudio...`);
         await new Promise(r => setTimeout(r, 2000));
         await enviarAudioDireto(phone, prefixoAudio);
     }
 }
 
-// 🚨 SOLUÇÃO 404: Mudança para o modelo OFICIAL gemini-1.5-flash (O 404 acabou agora!)
+// 🧠 A ÚNICA IA ESTÁVEL NO RENDER (2.5 FLASH) COM PROMPT BLINDADO
 async function auditarFaturaIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
+  
   const prompt = `
-    Aja como auditor iGreen. Extraia dados em JSON da fatura anexa.
-    IMPORTANTE: Retorne APENAS um objeto JSON válido.
+    Aja como um auditor rigoroso da iGreen.
+    ATENÇÃO MÁXIMA: O documento anexo PODE SER UMA FOTO DE UMA TELA DE COMPUTADOR. Isso é 100% VÁLIDO. 
+    Desde que a imagem contenha dados de energia de uma concessionária (Equatorial, Cemig, Enel, etc.), defina "VALIDO" como true.
+    Se for apenas uma foto de pessoa ou paisagem, defina false.
+    - Se a média de consumo for >= 150kWh, defina "ELEGIVEL" como true.
     
-    MUITO IMPORTANTE:
-    O cliente pode enviar PDFs, fotos de papel OU FOTOS DE TELA DE COMPUTADOR. 
-    QUALQUER imagem que contenha dados de energia (Equatorial, Cemig, consumos, valores) DEVE ter "VALIDO": true. 
-    SÓ defina "VALIDO": false se for uma selfie ou paisagem sem sentido.
-
-    Regras:
-    - Consumo >= 150kWh torna ELEGIVEL = true.
-
-    Retorne este formato exato:
+    Responda EXATAMENTE com este objeto JSON (sem markdown, sem crases):
     {
       "VALIDO": true,
       "TARIFA_SOCIAL": false,
       "ELEGIVEL": true,
-      "NOME_CLIENTE": "Nome Completo",
-      "CPF": "Apenas números",
-      "CNPJ": "Apenas números",
-      "UC": "Número da Unidade Consumidora",
-      "ENDERECO_NUMERO": "Número da casa",
+      "NOME_CLIENTE": "Nome completo",
+      "CPF": "00000000000",
+      "CNPJ": "00000000000000",
+      "UC": "Numero da UC",
+      "ENDERECO_NUMERO": "Numero da porta",
       "MEDIA_CONSUMO": 0
     }
   `;
+  
   const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType, data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
   const res = await axios.post(url, payload);
-  
-  let textoLimpo = res.data.candidates[0].content.parts[0].text;
-  textoLimpo = textoLimpo.replace(/```json/g, '').replace(/```/g, '').trim();
-  
+  let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
   return JSON.parse(textoLimpo);
 }
 
-// SOLUÇÃO 404: Mudança para o modelo OFICIAL gemini-1.5-flash
 async function validarDocumentoIA(base64) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
   const prompt = `
-    A imagem é uma foto válida de RG ou CNH brasileiro? 
-    IMPORTANTE: Retorne APENAS um objeto JSON válido.
+    A imagem anexa é uma foto válida de um RG (Identidade) ou CNH brasileiro (frente ou verso)? 
+    Responda APENAS com este JSON (sem markdown):
     {"VALIDO": true}
   `;
   const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
   const res = await axios.post(url, payload);
-  
-  let textoLimpo = res.data.candidates[0].content.parts[0].text;
-  textoLimpo = textoLimpo.replace(/```json/g, '').replace(/```/g, '').trim();
-  
+  let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
   return JSON.parse(textoLimpo).VALIDO;
 }
 
@@ -371,32 +326,28 @@ async function enviarMensagem(phone, message) {
   await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, { phone: numeroLimpo, message: String(message) }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }).catch(()=>{});
 }
 
-// 🚨 O RASTREADOR INTELIGENTE DE ÁUDIO (Busca o ficheiro onde ele estiver!)
+// 🔈 O RASTREADOR DE ÁUDIOS INTELIGENTE
 async function enviarAudioDireto(phone, prefixo) {
     try {
-        let filePath = null;
-        const rootDir = __dirname;
         const audiosDir = path.join(__dirname, 'audios');
         
-        // 1. Procura na pasta 'audios'
-        if (fs.existsSync(audiosDir)) {
-            const files = fs.readdirSync(audiosDir);
-            const found = files.find(f => f.startsWith(prefixo) && f.endsWith('.mp3'));
-            if (found) filePath = path.join(audiosDir, found);
-        }
-        
-        // 2. Se não encontrou, procura na raiz do projeto
-        if (!filePath && fs.existsSync(rootDir)) {
-            const rootFiles = fs.readdirSync(rootDir);
-            const rootFound = rootFiles.find(f => f.startsWith(prefixo) && f.endsWith('.mp3'));
-            if (rootFound) filePath = path.join(rootDir, rootFound);
-        }
-
-        if (!filePath) {
-            console.error(`[AVISO] Ficheiro MP3 começando por '${prefixo}' NÃO foi encontrado no GitHub! Verifique se os subiu corretamente.`);
+        if (!fs.existsSync(audiosDir)) {
+            console.error(`[ERRO CRÍTICO] A pasta 'audios' não existe no servidor! O robô não conseguiu encontrar os ficheiros.`);
             return;
         }
         
+        // Pega todos os arquivos na pasta audios
+        const files = fs.readdirSync(audiosDir);
+        
+        // Procura qualquer ficheiro que comece com o prefixo (Ex: "01")
+        const foundFile = files.find(f => f.startsWith(prefixo) && f.toLowerCase().endsWith('.mp3'));
+        
+        if (!foundFile) {
+            console.error(`[AVISO] Nenhum ficheiro começando com '${prefixo}' foi encontrado. Ficheiros presentes na pasta: ${files.join(', ')}`);
+            return;
+        }
+
+        const filePath = path.join(audiosDir, foundFile);
         const base64Audio = fs.readFileSync(filePath, { encoding: 'base64' });
         const dataUri = `data:audio/mpeg;base64,${base64Audio}`;
         const numeroLimpo = String(phone).replace(/\D/g, ''); 
@@ -405,9 +356,9 @@ async function enviarAudioDireto(phone, prefixo) {
             { phone: numeroLimpo, audio: dataUri }, 
             { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }
         );
-        console.log(`🔊 MÁGICA FEITA: Áudio ${path.basename(filePath)} encontrado e enviado com sucesso!`);
+        console.log(`🔊 Áudio enviado perfeitamente: ${foundFile}`);
     } catch (e) {
-        console.error(`❌ Erro ao enviar áudio ${prefixo}:`, e.message);
+        console.error(`❌ Erro ao processar o envio do áudio ${prefixo}:`, e.message);
     }
 }
 
