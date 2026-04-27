@@ -323,9 +323,10 @@ async function enviarFluxo(phone, texto, audioFile) {
 }
 
 // MOTOR IA: FATURA 
-// SOLUÇÃO DO BUG: Limpador de formatação Markdown adicionado
+// SOLUÇÃO DO BUG: Retornamos à Versão 3.1 Pro (Leitura Perfeita) e ajustámos os campos
 async function auditarFaturaIA(base64, mimeType) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
+  if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${GEMINI_API_KEY}`;
   const prompt = `
     Aja como auditor iGreen. Extraia dados em JSON da fatura anexa.
     IMPORTANTE: Retorne APENAS um objeto JSON válido.
@@ -336,11 +337,13 @@ async function auditarFaturaIA(base64, mimeType) {
 
     Retorne este formato exato:
     {
-      "VALIDO": true/false,
-      "TARIFA_SOCIAL": true/false,
-      "ELEGIVEL": true/false,
-      "NOME_CLIENTE": "Nome",
+      "VALIDO": true,
+      "TARIFA_SOCIAL": false,
+      "ELEGIVEL": true,
+      "NOME_CLIENTE": "Nome Completo",
       "CPF": "Apenas números",
+      "CNPJ": "Apenas números",
+      "UC": "Número da Unidade Consumidora",
       "ENDERECO_NUMERO": "Número da casa",
       "MEDIA_CONSUMO": 0
     }
@@ -348,7 +351,7 @@ async function auditarFaturaIA(base64, mimeType) {
   const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType, data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
   const res = await axios.post(url, payload);
   
-  // Limpador (Garante que não haverá erro de Parsing se a IA usar Markdown)
+  // Limpador (Garante que não haverá erro se a IA usar Markdown)
   let textoLimpo = res.data.candidates[0].content.parts[0].text;
   textoLimpo = textoLimpo.replace(/```json/g, '').replace(/```/g, '').trim();
   
@@ -356,13 +359,14 @@ async function auditarFaturaIA(base64, mimeType) {
 }
 
 // MOTOR IA: VALIDAÇÃO DE IDENTIDADE
-// SOLUÇÃO DO BUG: Limpador de formatação Markdown adicionado
+// SOLUÇÃO DO BUG: Retornamos à Versão 3.1 Pro 
 async function validarDocumentoIA(base64) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
+  if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${GEMINI_API_KEY}`;
   const prompt = `
     A imagem é uma foto válida de RG ou CNH brasileiro? 
     IMPORTANTE: Retorne APENAS um objeto JSON válido.
-    {"VALIDO": true/false}
+    {"VALIDO": true}
   `;
   const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
   const res = await axios.post(url, payload);
