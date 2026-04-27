@@ -7,12 +7,6 @@ const fs = require('fs');
 const app = express();
 app.use(express.json());
 
-// Garante que a pasta "audios" existe no servidor para não dar erro
-const audiosDir = path.join(__dirname, 'audios');
-if (!fs.existsSync(audiosDir)) {
-    fs.mkdirSync(audiosDir);
-}
-
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 
 // CHAVES DA Z-API CENTRALIZADAS
@@ -62,28 +56,28 @@ const TEXTOS = {
     T20_TRANSBORDO: "Entendido. Vou transferir o seu atendimento pra um de nossos consultores especialistas. Aguarde um instante, por favor."
 };
 
-// MAPEAMENTO DIRETO PARA OS FICHEIROS MP3 LOCAIS
+// PREFIXOS DOS ÁUDIOS (O Rastreador vai procurar qualquer ficheiro que comece por estes números)
 const AUDIOS = {
-    A01_BOAS_VINDAS: "01.mp3",
-    A02_ANALISE_IA: "02.mp3",
-    A03_PEDIR_CASA: "03.mp3",
-    A04_PEDIR_FRENTE: "04.mp3",
-    A05_PEDIR_VERSO: "05.mp3",
-    A06_ANALISE_BIO: "06.mp3",
-    A07_PEDIR_EMAIL: "07.mp3",
-    A08_CONCLUSAO: "08.mp3",
-    A09_ERRO_FATURA: "09.mp3",
-    A10_TARIFA_SOCIAL: "10.mp3",
-    A11_ERRO_DOC: "11.mp3",
-    A12_ERRO_EMAIL: "12.mp3",
-    A13_CANCELAMENTO: "13.mp3",
-    A14_ENVIO_CONTRATO: "14.mp3",
-    A15_COBRANCA_ASSINATURA: "15.mp3",
-    A16_CONEXAO_APROVADA: "16.mp3",
-    A17_AVISO_BOLETO: "17.mp3",
-    A18_IGREEN_CLUB: "18.mp3",
-    A19_CASHBACK: "19.mp3",
-    A20_TRANSBORDO: "20.mp3"
+    A01_BOAS_VINDAS: "01",
+    A02_ANALISE_IA: "02",
+    A03_PEDIR_CASA: "03",
+    A04_PEDIR_FRENTE: "04",
+    A05_PEDIR_VERSO: "05",
+    A06_ANALISE_BIO: "06",
+    A07_PEDIR_EMAIL: "07",
+    A08_CONCLUSAO: "08",
+    A09_ERRO_FATURA: "09",
+    A10_TARIFA_SOCIAL: "10",
+    A11_ERRO_DOC: "11",
+    A12_ERRO_EMAIL: "12",
+    A13_CANCELAMENTO: "13",
+    A14_ENVIO_CONTRATO: "14",
+    A15_COBRANCA_ASSINATURA: "15",
+    A16_CONEXAO_APROVADA: "16",
+    A17_AVISO_BOLETO: "17",
+    A18_IGREEN_CLUB: "18",
+    A19_CASHBACK: "19",
+    A20_TRANSBORDO: "20"
 };
 
 // WEBHOOK PRINCIPAL (MÁQUINA DE ESTADOS)
@@ -280,7 +274,7 @@ async function atualizarEstado(phone, leadRef, dados) {
     const atual = memoriaEstado.get(phone) || {};
     memoriaEstado.set(phone, { ...atual, ...dados });
     if (leadRef) {
-        await leadRef.set(dados, { merge: true }).catch(e => console.log("Aviso: Falha ao salvar no DB, usando memória."));
+        await leadRef.set(dados, { merge: true }).catch(e => console.log("Aviso: Falha ao salvar no DB."));
     }
 }
 
@@ -307,28 +301,27 @@ async function baixarArquivo(mediaUrl) {
     throw new Error("Falha ao baixar após tentativas");
 }
 
-async function enviarFluxo(phone, texto, audioFile) {
+async function enviarFluxo(phone, texto, prefixoAudio) {
     await enviarMensagem(phone, texto);
-    if (audioFile) {
-        // PAUSA DE 2 SEGUNDOS: Garante que o texto chega primeiro no WhatsApp do cliente antes do áudio
-        console.log(`⏱️ Pausa de 2s para enviar o áudio ${audioFile}...`);
+    if (prefixoAudio) {
+        console.log(`⏱️ Pausa de 2s para o áudio chegar depois do texto...`);
         await new Promise(r => setTimeout(r, 2000));
-        await enviarAudioDireto(phone, audioFile);
+        await enviarAudioDireto(phone, prefixoAudio);
     }
 }
 
-// 🚨 CORREÇÃO DA IA: Forçando a aceitação de fotos de ecrã/telas
+// 🚨 SOLUÇÃO 404: Mudança para o modelo OFICIAL gemini-1.5-flash (O 404 acabou agora!)
 async function auditarFaturaIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
   const prompt = `
     Aja como auditor iGreen. Extraia dados em JSON da fatura anexa.
     IMPORTANTE: Retorne APENAS um objeto JSON válido.
     
-    MUITO IMPORTANTE SOBRE A VALIDAÇÃO ("VALIDO"):
-    O cliente pode enviar PDFs, fotos de papel OU FOTOS TIRADAS DE UMA TELA DE COMPUTADOR/CELULAR. 
-    QUALQUER imagem que contenha dados de uma conta de luz (Equatorial, Cemig, Enel, consumos, valores) DEVE ter "VALIDO": true. 
-    SÓ defina "VALIDO": false se for uma selfie, paisagem ou imagem completamente sem sentido.
+    MUITO IMPORTANTE:
+    O cliente pode enviar PDFs, fotos de papel OU FOTOS DE TELA DE COMPUTADOR. 
+    QUALQUER imagem que contenha dados de energia (Equatorial, Cemig, consumos, valores) DEVE ter "VALIDO": true. 
+    SÓ defina "VALIDO": false se for uma selfie ou paisagem sem sentido.
 
     Regras:
     - Consumo >= 150kWh torna ELEGIVEL = true.
@@ -355,9 +348,10 @@ async function auditarFaturaIA(base64, mimeType) {
   return JSON.parse(textoLimpo);
 }
 
+// SOLUÇÃO 404: Mudança para o modelo OFICIAL gemini-1.5-flash
 async function validarDocumentoIA(base64) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
   const prompt = `
     A imagem é uma foto válida de RG ou CNH brasileiro? 
     IMPORTANTE: Retorne APENAS um objeto JSON válido.
@@ -377,16 +371,33 @@ async function enviarMensagem(phone, message) {
   await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, { phone: numeroLimpo, message: String(message) }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }).catch(()=>{});
 }
 
-async function enviarAudioDireto(phone, fileName) {
+// 🚨 O RASTREADOR INTELIGENTE DE ÁUDIO (Busca o ficheiro onde ele estiver!)
+async function enviarAudioDireto(phone, prefixo) {
     try {
-        const filePath = path.join(__dirname, 'audios', fileName);
-        if (!fs.existsSync(filePath)) {
-            console.error(`[AVISO] O ficheiro de áudio ${fileName} não foi encontrado na pasta 'audios' do GitHub!`);
+        let filePath = null;
+        const rootDir = __dirname;
+        const audiosDir = path.join(__dirname, 'audios');
+        
+        // 1. Procura na pasta 'audios'
+        if (fs.existsSync(audiosDir)) {
+            const files = fs.readdirSync(audiosDir);
+            const found = files.find(f => f.startsWith(prefixo) && f.endsWith('.mp3'));
+            if (found) filePath = path.join(audiosDir, found);
+        }
+        
+        // 2. Se não encontrou, procura na raiz do projeto
+        if (!filePath && fs.existsSync(rootDir)) {
+            const rootFiles = fs.readdirSync(rootDir);
+            const rootFound = rootFiles.find(f => f.startsWith(prefixo) && f.endsWith('.mp3'));
+            if (rootFound) filePath = path.join(rootDir, rootFound);
+        }
+
+        if (!filePath) {
+            console.error(`[AVISO] Ficheiro MP3 começando por '${prefixo}' NÃO foi encontrado no GitHub! Verifique se os subiu corretamente.`);
             return;
         }
         
         const base64Audio = fs.readFileSync(filePath, { encoding: 'base64' });
-        // Alterado para audio/mpeg que é o formato universal do WhatsApp para ficheiros MP3
         const dataUri = `data:audio/mpeg;base64,${base64Audio}`;
         const numeroLimpo = String(phone).replace(/\D/g, ''); 
         
@@ -394,9 +405,9 @@ async function enviarAudioDireto(phone, fileName) {
             { phone: numeroLimpo, audio: dataUri }, 
             { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }
         );
-        console.log(`🔊 Áudio ${fileName} enviado perfeitamente!`);
+        console.log(`🔊 MÁGICA FEITA: Áudio ${path.basename(filePath)} encontrado e enviado com sucesso!`);
     } catch (e) {
-        console.error(`❌ Erro ao enviar áudio ${fileName}:`, e.response ? JSON.stringify(e.response.data) : e.message);
+        console.error(`❌ Erro ao enviar áudio ${prefixo}:`, e.message);
     }
 }
 
