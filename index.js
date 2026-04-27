@@ -27,15 +27,6 @@ try {
   console.error("Erro na base de dados:", e.message);
 }
 
-// Saudação Dinâmica
-function obterSaudacao() {
-    const horaAtual = new Date().toLocaleString("pt-BR", { timeZone: "America/Maceio", hour: "numeric", hour12: false });
-    const h = parseInt(horaAtual);
-    if (h >= 5 && h < 12) return "Bom dia";
-    if (h >= 12 && h < 18) return "Boa tarde";
-    return "Boa noite";
-}
-
 // WEBHOOK PRINCIPAL
 app.post('/webhook/igreen', async (req, res) => {
   const data = req.body;
@@ -49,27 +40,26 @@ app.post('/webhook/igreen', async (req, res) => {
   const isImage = data.type === 'image' || data.isImage === true || data.type === 'photo' || (data.image && data.image.imageUrl) || (data.photo && data.photo.photoUrl);
   const isPDF = data.type === 'document' || data.isDocument === true || (data.document && data.document.documentUrl);
   const isTexto = data.text && data.text.message;
-  const saudacao = obterSaudacao();
 
   // CENÁRIO 1: O CLIENTE ENVIOU UM TEXTO ("Oi")
   if (isTexto && !isImage && !isPDF) {
       console.log(`💬 TEXTO RECEBIDO: "${data.text.message}"`);
-      const txtBoasVindas = `${saudacao}! Seja muito bem-vindo à iGreen Energy! 🌿\n\nPara eu simular a sua economia hoje, preciso que me envie uma foto bem nítida ou o PDF da sua conta de luz mais recente.`;
-      const vozBoasVindas = `${saudacao}! Seja muito bem-vindo à i Green Energy! Para começarmos a sua simulação, por favor, me envie uma foto bem nítida ou o P D F da sua conta de luz.`;
+      // TEXTO EXATO DA SUA PLANILHA:
+      const txtBoasVindas = "Oi! Tudo bem? Aqui é o assistente virtual da iGreen Energy. Para eu simular a sua economia hoje, preciso que me envie uma foto nítida da sua Fatura de Energia mais recente.";
       
       await enviarMensagem(phone, txtBoasVindas);
-      await enviarAudio(phone, await gerarAudio(vozBoasVindas));
+      await enviarAudio(phone, await gerarAudio(txtBoasVindas));
       return; 
   }
   
   // CENÁRIO 2: O CLIENTE ENVIOU A FATURA
   if (isImage || isPDF) {
     console.log(`📸 FATURA RECEBIDA. Iniciando processo...`);
-    const txtInicial = `${saudacao}! Recebi a sua fatura. 📄 Aguarde um instante enquanto faço a auditoria...`;
-    const vozInicial = `${saudacao}! Recebi a sua fatura. A nossa Inteligência Artificial está fazendo a auditoria completa. Aguarde só um instante.`;
+    // TEXTO EXATO DA SUA PLANILHA:
+    const txtInicial = "Estou analisando a sua fatura e a elegibilidade regional. Por favor, aguarde um instante.";
     
     await enviarMensagem(phone, txtInicial);
-    await enviarAudio(phone, await gerarAudio(vozInicial));
+    await enviarAudio(phone, await gerarAudio(txtInicial));
 
     try {
       let mediaUrl = data.link || 
@@ -109,7 +99,7 @@ app.post('/webhook/igreen', async (req, res) => {
       const base64Data = Buffer.from(fileResponse.data, 'binary').toString('base64');
       const mimeType = isPDF ? "application/pdf" : "image/jpeg";
 
-      console.log(`🧠 Gemini IA a ler os dados (Modelo 3.1 Pro Atualizado)...`);
+      console.log(`🧠 Gemini IA a ler os dados (Modelo 3.1 Pro)...`);
       const analise = await analisarComIA(base64Data, mimeType);
       console.log(`✅ LEITURA CONCLUÍDA! Resultado: Elegível? ${analise.ELEGIVEL}`);
 
@@ -129,48 +119,52 @@ app.post('/webhook/igreen', async (req, res) => {
           console.log(`💾 Cliente salvo no banco de dados Cloud com status: ${statusCadastro}`);
       }
 
-      const primeiroNome = analise.NOME_CLIENTE ? analise.NOME_CLIENTE.split(' ')[0] : "Cliente";
-      
       if (analise.ELEGIVEL) {
-        // TEXTOS CORRIGIDOS PARA PEDIR O DOCUMENTO!
-        const txtAprovado = `🎉 *Parabéns, ${primeiroNome}!*\n\nA sua conta foi *APROVADA*! O consumo lido foi de ${analise.MEDIA_CONSUMO} kWh.\n\nPara darmos andamento à sua adesão e garantir o seu desconto, por favor, envie agora uma *foto da FRENTE do seu documento de identidade* (RG ou CNH).`;
-        const vozAprovado = `Parabéns, ${primeiroNome}! Sua conta foi aprovada com sucesso. Para darmos andamento ao seu desconto, por favor, me envie agora uma foto da frente do seu documento de identidade, que pode ser R G ou C N H. Fico no aguardo!`;
-        
+        // AGUARDANDO OS SEUS TEXTOS EXATOS:
+        const txtAprovado = `Aprovado! Consumo: ${analise.MEDIA_CONSUMO} kWh. [AGUARDANDO SEU TEXTO EXATO PARA PEDIR CNH/RG]`;
         await enviarMensagem(phone, txtAprovado);
-        await enviarAudio(phone, await gerarAudio(vozAprovado));
+        await enviarAudio(phone, await gerarAudio(txtAprovado));
       } else {
-        const txtRecusado = `Olá ${primeiroNome}, sua fatura não atende aos critérios: ${analise.MOTIVO_RECUSA}`;
-        const vozRecusado = `Olá ${primeiroNome}, sua fatura não atende aos critérios da i Green pelo seguinte motivo: ${analise.MOTIVO_RECUSA}`;
+        // AGUARDANDO OS SEUS TEXTOS EXATOS:
+        const txtRecusado = `Recusado: ${analise.MOTIVO_RECUSA}. [AGUARDANDO SEU TEXTO EXATO DE RECUSA]`;
         await enviarMensagem(phone, txtRecusado);
-        await enviarAudio(phone, await gerarAudio(vozRecusado));
+        await enviarAudio(phone, await gerarAudio(txtRecusado));
       }
       
       console.log(`🏁 ATENDIMENTO FINALIZADO PARA: ${phone}\n=========================================`);
 
     } catch (erro) {
       console.error("❌ ERRO NO FLUXO:", erro.message);
-      const txtErro = "Tivemos uma falha temporária ao ler a sua imagem. Pode enviar a fatura novamente, por favor?";
+      // TEXTO EXATO DA SUA PLANILHA:
+      const txtErro = "Infelizmente o sistema não conseguiu ler a imagem. Verifique se a foto está clara, sem cortes, e envie novamente, por favor.";
       await enviarMensagem(phone, txtErro);
+      await enviarAudio(phone, await gerarAudio(txtErro));
     }
   }
 });
 
-// MOTOR IA (Mantido no 3.1 Pro Preview)
+// MOTOR IA (Gemini 3.1 Pro Preview - FORÇANDO PORTUGUÊS)
 async function analisarComIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${GEMINI_API_KEY}`;
-  const prompt = `Aja como auditor iGreen. Extraia dados em JSON: NOME_CLIENTE, CPF, CNPJ, UC, MEDIA_CONSUMO (kWh), ELEGIVEL (true/false), MOTIVO_RECUSA. Regras: Grupo B, Consumo > 150kWh, Sem tarifa social, Titular vivo.`;
+  
+  // REGRA BLINDADA PARA EVITAR INGLÊS E VOZ COM SOTAQUE ESTRANHO
+  const prompt = `
+    Aja como auditor iGreen. Extraia dados em JSON: NOME_CLIENTE, CPF, CNPJ, UC, MEDIA_CONSUMO (kWh), ELEGIVEL (true/false), MOTIVO_RECUSA. 
+    Regras: Grupo B, Consumo > 150kWh, Sem tarifa social, Titular vivo.
+    MÁXIMA IMPORTÂNCIA: Responda ABSOLUTAMENTE TUDO em Português do Brasil (PT-BR). Se a fatura for ilegível, devolva ELEGIVEL como false e MOTIVO_RECUSA como "A imagem enviada está ilegível ou não é uma fatura válida". Nunca use inglês.
+  `;
+  
   const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType, data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
   const res = await axios.post(url, payload);
   return JSON.parse(res.data.candidates[0].content.parts[0].text);
 }
 
-// MOTOR DE VOZ (Voltamos para a versão Premium "Kore" que estava 100% perfeita)
+// MOTOR DE VOZ (Estritamente Voz Premium "Kore" - Sem falhas lentas)
 async function gerarAudio(texto) {
   if (!GEMINI_API_KEY) return null;
   console.log(`🎙️ Gerando áudio Premium (Kore)...`);
   
-  // Usando o endpoint oficial TTS que não falha
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${GEMINI_API_KEY}`;
   
   const payload = {
@@ -194,7 +188,7 @@ async function gerarAudio(texto) {
     return `data:audio/wav;base64,${wavBuffer.toString('base64')}`;
   } catch (error) {
     console.error("❌ ERRO NA GERAÇÃO DE VOZ PREMIUM:", error.message);
-    return null;
+    return null; // Retorna nulo e não envia áudio, mas evita mandar áudio robótico lento.
   }
 }
 
