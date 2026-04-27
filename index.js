@@ -61,7 +61,7 @@ app.post('/webhook/igreen', async (req, res) => {
       
       await enviarMensagem(phone, txtBoasVindas);
       await enviarAudio(phone, await gerarAudioGemini(vozBoasVindas));
-      return; // Sai do fluxo para não analisar texto como fatura
+      return; 
   }
   
   // CENÁRIO 2: O CLIENTE ENVIOU A FATURA
@@ -85,21 +85,25 @@ app.post('/webhook/igreen', async (req, res) => {
 
       console.log(`🔗 Preparando para baixar a foto do link oficial...`);
 
-      // SISTEMA ANTI-FALHA (RETRY LOOP) BLINDADO
+      // SISTEMA ANTI-FALHA (RETRY LOOP) BLINDADO COM DISFARCE (USER-AGENT)
       let fileResponse = null;
       let tentativas = 5; 
       while (tentativas > 0) {
           try {
               console.log(`➡️ Tentativa de download (${6 - tentativas}/5)...`);
               fileResponse = await axios.get(mediaUrl, { 
-                  responseType: 'arraybuffer'
-                  // 🚨 CORREÇÃO DEFINITIVA: NENHUM HEADER AQUI!
-                  // Enviar o Client-Token aqui causava a rejeição e o Erro 404!
+                  responseType: 'arraybuffer',
+                  headers: {
+                      // O disfarce perfeito para o firewall do Backblaze não bloquear a imagem (Erro 404/403)
+                      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8'
+                  }
               });
               console.log(`✅ FOTO BAIXADA COM SUCESSO! Enviando para o Gemini IA...`);
               break; 
           } catch (err) {
-              console.log(`⚠️ O servidor de imagens ainda não disponibilizou o ficheiro. Aguardando 3 segundos...`);
+              const statusErro = err.response ? err.response.status : 'Desconhecido';
+              console.log(`⚠️ O servidor de imagens bloqueou/atrasou (Erro ${statusErro}). Aguardando 3 segundos...`);
               if (tentativas === 1) throw new Error("Falha definitiva ao tentar baixar a imagem após 5 tentativas.");
               await new Promise(r => setTimeout(r, 3000));
               tentativas--;
@@ -115,7 +119,7 @@ app.post('/webhook/igreen', async (req, res) => {
 
       if (analise.ELEGIVEL && admin.apps.length > 0) {
           const db = admin.firestore();
-          const appId = process.env.RENDER_SERVICE_ID || 'igreen-autoflow-v4';
+          const appId = 'igreen-autoflow-v4';
           await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('leads').doc(phone).set({
               ...analise,
               DATA_PROCESSAMENTO: admin.firestore.Timestamp.now(),
@@ -190,4 +194,4 @@ async function enviarAudio(phone, audio) {
   await axios.post(url, { phone: phone.replace(/\D/g,''), audio }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }).catch(e => console.log("Erro audio"));
 }
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON!`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON!`));  
