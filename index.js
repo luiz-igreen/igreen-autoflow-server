@@ -1,214 +1,228 @@
-require('dotenv').config();
-
 const express = require('express');
 const axios = require('axios');
 const admin = require('firebase-admin');
-const fs = require('fs/promises');
-const path = require('path');
 
-const app = express();
-app.use(express.json());
-
-// Inicialização do Firebase com service account de variável de ambiente
-// Correção: Carregamento seguro do service account
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
-if (Object.keys(serviceAccount).length === 0) {
-  console.error('Erro: FIREBASE_SERVICE_ACCOUNT não configurado');
-  process.exit(1);
+// Initialize Firebase Admin
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT))
+  });
 }
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-});
 const db = admin.firestore();
 
-// Constantes de ambiente
-// Correção: Uso de template strings corretas em todas as URLs
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+// Environment variables
+const PORT = process.env.PORT || 3000;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
-const AUDIO_DIR = process.env.AUDIO_DIR || './audios';
+const GEMINI_FLASH_KEY = process.env.GEMINI_FLASH_KEY;
+const GEMINI_PRO_KEY = process.env.GEMINI_PRO_KEY;
+const FLASH_MODEL = 'gemini-2.0-flash-exp';
+const PRO_MODEL = 'gemini-2.0-pro-exp';
 
-// Função para enviar mensagem via WhatsApp Cloud API
-// Proteção: async/await com try/catch implícito no handler principal
-async function sendMessage(to, text) {
-  const url = `https://graph.facebook.com/v18.0/${PHONE_NUMBER_ID}/messages`;
-  // Correção: Template strings corretas e headers adequados
-  await axios.post(url, {
-    messaging_product: "whatsapp",
-    to,
-    text: { body: text }
-  }, {
-    headers: {
-      'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
-      'Content-Type': 'application/json'
-    }
-  });
-}
-
-// Função para baixar mídia do WhatsApp
-async function downloadMedia(mediaId) {
-  const url = `https://graph.facebook.com/v18.0/${mediaId}`;
-  const res = await axios.get(url, {
-    headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` },
-    responseType: 'arraybuffer'
-  });
-  return Buffer.from(res.data);
-}
-
-// Correção da função auditarFaturaIA:
-// - Modelos estáveis com fallback automático (evita 404)
-// - Endpoint atual: https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent
-// - Tratamento robusto de erros, continua no próximo modelo se 404
-// - Validação inlineData: mimeType e data base64 obrigatórios
-// - Prompt otimizado para auditoria de faturas
-async function auditarFaturaIA(buffer, mimeType) {
-  const models = ['gemini-1.5-pro-latest', 'gemini-1.5-flash-latest', 'gemini-1.0-pro-vision-latest'];
-  for (const model of models) {
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
-      // Correção: Payload conforme documentação, com inlineData validado
-      const payload = {
-        contents: [{
-          parts: [
-            {
-              text: "Analise esta fatura ou áudio de fatura: verifique valores, itens, impostos, irregularidades, autenticidade. Responda em português brasileiro de forma clara e estruturada."
-            },
-            {
-              inlineData: {
-                mimeType: mimeType, // Validado: deve ser image/jpeg, audio/mpeg, etc.
-                data: buffer.toString('base64') // Base64 obrigatório
-              }
-            }
-          ]
-        }]
-      };
-      const res = await axios.post(url, payload, {
-        headers: { 'Content-Type': 'application/json' }
-      });
-      // Log corrigido com crase e parênteses
-      console.log(`Análise bem-sucedida com modelo: ${model}`);
-      return res.data.candidates[0].content.parts[0].text;
-    } catch (err) {
-      console.error(`Erro com modelo ${model}:`, err.response?.status || err.message);
-      // Fallback: continua se 404 (modelo indisponível) ou erro genérico
-      if (err.response?.status !== 404) {
-        throw err;
-      }
-    }
-  }
-  throw new Error('Todos os modelos falharam. Verifique a chave da API Gemini.');
-}
-
-// Implementação de buscarAudioRecursivo:
-// - Totalmente assíncrono com fs.promises.readdir (evita readdirSync que bloqueia event loop)
-// - Recursão com await para proteger event loop
-// - Suporte a múltiplas extensões de áudio
-// - Tratamento de erros por diretório
-async function buscarAudioRecursivo(startDir) {
-  const audios = [];
-  async function recurse(currentDir) {
-    try {
-      const entries = await fs.readdir(currentDir, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = path.join(currentDir, entry.name);
-        if (entry.isDirectory()) {
-          await recurse(fullPath);
-        } else if (entry.isFile() && /\.(mp3|wav|ogg|m4a|flac|aac)$/i.test(entry.name)) {
-          audios.push(fullPath);
-        }
-      }
-    } catch (err) {
-      console.error(`Erro ao ler diretório ${currentDir}:`, err.message);
-    }
-  }
-  await recurse(startDir);
-  return audios;
-}
-
-// Handler principal do webhook
-// Correções gerais: async/await em todas ops, try/catch robusto, logs corrigidos
-// Garantia de res.status(200) para não quebrar máquina de estados do WhatsApp
-// Suporte a text, image e audio sem quebrar flow
-const handleWebhook = async (req, res) => {
-  try {
-    const body = req.body;
-    // Verifica se há mensagem válida
-    if (body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]) {
-      const message = body.entry[0].changes[0].value.messages[0];
-      const from = message.from;
-      const type = message.type;
-
-      if (type === 'text') {
-        const text = message.text.body.toLowerCase().trim();
-        // Comando para buscar áudios
-        if (text === 'buscar audio') {
-          console.log(`Busca de áudio iniciada para ${from}`); // Log corrigido
-          const audios = await buscarAudioRecursivo(AUDIO_DIR);
-          const list = audios.slice(0, 10).join('\n') || 'Nenhum áudio encontrado.';
-          await sendMessage(from, `Áudios encontrados em ${AUDIO_DIR}:\n${list}`);
-        } else {
-          await sendMessage(from, 'Comandos: "buscar audio" ou envie imagem/áudio de fatura para auditoria IA.');
-        }
-      } else if (type === 'image') {
-        const mediaId = message.image.id;
-        const mimeType = message.image.mime_type;
-        console.log(`Auditoria de imagem iniciada para ${from}, MIME: ${mimeType}`);
-        const buffer = await downloadMedia(mediaId);
-        const analysis = await auditarFaturaIA(buffer, mimeType);
-        // Salva no Firestore (integração Firebase)
-        await db.collection('audits').add({
-          phone: from,
-          type: 'image',
-          mimeType,
-          timestamp: admin.firestore.FieldValue.serverTimestamp(),
-          analysis
-        });
-        await sendMessage(from, `✅ Análise da fatura:\n\n${analysis}`);
-      } else if (type === 'audio') {
-        const mediaId = message.audio.id;
-        const mimeType = message.audio.mime_type;
-        console.log(`Auditoria de áudio iniciada para ${from}, MIME: ${mimeType}`);
-        const buffer = await downloadMedia(mediaId);
-        const analysis = await auditarFaturaIA(buffer, mimeType);
-        await db.collection('audits').add({
-          phone: from,
-          type: 'audio',
-          mimeType,
-          timestamp: admin.firestore.FieldValue.serverTimestamp(),
-          analysis
-        });
-        await sendMessage(from, `✅ Análise do áudio de fatura:\n\n${analysis}`);
-      }
-    }
-    res.status(200).send('OK');
-  } catch (err) {
-    console.error('Erro no webhook:', err.message); // Log corrigido com parênteses e crase
-    res.status(200).send('OK'); // Sempre responde 200 para não quebrar máquina de estados
-  }
+// Logging function
+const log = (msg) => {
+  console.log(`[${new Date().toISOString()}] ${msg}`);
 };
 
-// Rota GET para verificação do webhook
+// OCR Prompt
+const OCR_PROMPT = `Extract all text from the provided image using OCR. Handle challenges such as shadows, blurs, low resolution, partial cuts, occlusions, or poor lighting. Be as accurate and complete as possible. Ignore any non-text elements.
+
+Respond ONLY with valid JSON in this exact format: {"text": "the full extracted text here", "completeness": 0.95}
+
+Where 'completeness' is a float from 0.0 to 1.0 estimating how complete and reliable the text extraction is (1.0 = perfect, no missing parts).`;
+
+// Axios instance with defaults
+const apiClient = axios.create({
+  timeout: 60000,
+  headers: { 'Content-Type': 'application/json' }
+});
+
+const whatsappClient = axios.create({
+  timeout: 30000,
+  headers: { 'Content-Type': 'application/json' }
+});
+
+// Express app
+const app = express();
+app.use(express.json({ limit: '10mb' }));
+
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Webhook verification (GET)
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
+
   if (mode === 'subscribe' && token === VERIFY_TOKEN) {
+    log('Webhook verified');
     res.status(200).send(challenge);
   } else {
     res.sendStatus(403);
   }
 });
 
-// Rota POST para webhook
-app.post('/webhook', handleWebhook);
+// Webhook handler (POST)
+app.post('/webhook', async (req, res) => {
+  try {
+    const body = req.body;
+    if (body.object === 'whatsapp_business_account') {
+      await handleWhatsAppEvent(body.entry[0].changes[0].value);
+    }
+    res.sendStatus(200);
+  } catch (error) {
+    log(`Webhook error: ${error.message}`);
+    res.sendStatus(500);
+  }
+});
 
-// Health check
-app.get('/', (req, res) => res.send('Servidor WhatsApp-Gemini-Firebase rodando!'));
+// Handle WhatsApp events
+async function handleWhatsAppEvent(value) {
+  const messages = value.messages;
+  if (!messages || !Array.isArray(messages)) return;
 
-// Inicia servidor
-// Proteção: listen assíncrono não necessário, mas event loop protegido
-const PORT = process.env.PORT || 3000;
+  for (const message of messages) {
+    if (message.type === 'image') {
+      await processImage(message);
+    }
+  }
+}
+
+// Process image message
+async function processImage(message) {
+  const from = message.from;
+  const mediaId = message.image.id;
+  const msgId = message.id;
+
+  log(`Processing image from ${from}, mediaId: ${mediaId}`);
+
+  try {
+    const imageBuffer = await downloadMedia(mediaId);
+    const ocrResult = await performOCR(imageBuffer);
+    await auditToFirebase({ from, msgId, ...ocrResult });
+
+    const reply = `OCR Result:
+${ocrResult.text}
+
+Completeness: ${(ocrResult.completeness * 100).toFixed(1)}%
+Model: ${ocrResult.model.toUpperCase()}`;
+
+    await sendMessage(from, reply);
+    log(`Sent OCR result to ${from}`);
+  } catch (error) {
+    log(`Error processing image ${mediaId}: ${error.message}`);
+    await sendMessage(from, 'Sorry, there was an error processing the image. Please try again.');
+  }
+}
+
+// Download media from WhatsApp
+async function downloadMedia(mediaId) {
+  const url = `https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/media/${mediaId}`;
+  const response = await whatsappClient.get(url, {
+    headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` },
+    responseType: 'arraybuffer'
+  });
+  return Buffer.from(response.data);
+}
+
+// Perform OCR with Flash first, retry, fallback to Pro
+async function performOCR(imageBuffer) {
+  const base64Image = imageBuffer.toString('base64');
+
+  // Try Flash up to 3 times
+  let result;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    result = await callGemini(base64Image, GEMINI_FLASH_KEY, FLASH_MODEL);
+    result.model = 'flash';
+    log(`Flash attempt ${attempt}, completeness: ${(result.completeness * 100).toFixed(1)}%`);
+    if (result.completeness >= 0.8) {
+      return result;
+    }
+  }
+
+  // Fallback to Pro
+  log('Falling back to Pro model');
+  result = await callGemini(base64Image, GEMINI_PRO_KEY, PRO_MODEL);
+  result.model = 'pro';
+  log(`Pro completeness: ${(result.completeness * 100).toFixed(1)}%`);
+  return result;
+}
+
+// Call Gemini API
+async function callGemini(base64Image, apiKey, model) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+  const payload = {
+    contents: [{
+      parts: [
+        { text: OCR_PROMPT },
+        {
+          inline_data: {
+            mime_type: 'image/jpeg',
+            data: base64Image
+          }
+        }
+      ]
+    }],
+    generationConfig: {
+      temperature: 0.1,
+      response_mime_type: 'application/json'
+    }
+  };
+
+  const response = await apiClient.post(url, payload);
+  const generatedText = response.data.candidates[0].content.parts[0].text;
+
+  // Parse JSON
+  let parsed;
+  try {
+    parsed = JSON.parse(generatedText);
+  } catch (e) {
+    throw new Error(`Invalid JSON from Gemini: ${generatedText}`);
+  }
+
+  if (!parsed.text || typeof parsed.completeness !== 'number') {
+    throw new Error('Invalid response structure from Gemini');
+  }
+
+  return {
+    text: parsed.text,
+    completeness: Math.max(0, Math.min(1, parsed.completeness)) // Clamp 0-1
+  };
+}
+
+// Send message via WhatsApp
+async function sendMessage(to, text) {
+  const url = `https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`;
+  await whatsappClient.post(url, {
+    messaging_product: 'whatsapp',
+    to,
+    type: 'text',
+    text: { body: text }
+  }, {
+    headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` }
+  });
+}
+
+// Audit to Firebase
+async function auditToFirebase(data) {
+  await db.collection('ocr_audits').add({
+    timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    phone: data.from,
+    msgId: data.msgId,
+    model: data.model,
+    text: data.text,
+    completeness: data.completeness,
+    createdAt: new Date().toISOString()
+  });
+  log(`Audited to Firebase: ${data.msgId}`);
+}
+
+// Start server
 app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
+  log(`Server running on port ${PORT}`);
 });
