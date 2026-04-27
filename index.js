@@ -310,11 +310,14 @@ async function baixarArquivo(mediaUrl) {
 async function enviarFluxo(phone, texto, audioFile) {
     await enviarMensagem(phone, texto);
     if (audioFile) {
+        // PAUSA DE 2 SEGUNDOS: Garante que o texto chega primeiro no WhatsApp do cliente antes do áudio
+        console.log(`⏱️ Pausa de 2s para enviar o áudio ${audioFile}...`);
+        await new Promise(r => setTimeout(r, 2000));
         await enviarAudioDireto(phone, audioFile);
     }
 }
 
-// 🚨 CORREÇÃO 404: Retornámos ao motor Oficial Estável e mantivemos o "limpador" de texto
+// 🚨 CORREÇÃO DA IA: Forçando a aceitação de fotos de ecrã/telas
 async function auditarFaturaIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
@@ -322,8 +325,12 @@ async function auditarFaturaIA(base64, mimeType) {
     Aja como auditor iGreen. Extraia dados em JSON da fatura anexa.
     IMPORTANTE: Retorne APENAS um objeto JSON válido.
     
+    MUITO IMPORTANTE SOBRE A VALIDAÇÃO ("VALIDO"):
+    O cliente pode enviar PDFs, fotos de papel OU FOTOS TIRADAS DE UMA TELA DE COMPUTADOR/CELULAR. 
+    QUALQUER imagem que contenha dados de uma conta de luz (Equatorial, Cemig, Enel, consumos, valores) DEVE ter "VALIDO": true. 
+    SÓ defina "VALIDO": false se for uma selfie, paisagem ou imagem completamente sem sentido.
+
     Regras:
-    - Se a imagem for uma conta de luz (Equatorial, Cemig, Enel, etc), VALIDO = true. Se for foto de pessoa, identidade ou paisagem, VALIDO = false.
     - Consumo >= 150kWh torna ELEGIVEL = true.
 
     Retorne este formato exato:
@@ -379,7 +386,8 @@ async function enviarAudioDireto(phone, fileName) {
         }
         
         const base64Audio = fs.readFileSync(filePath, { encoding: 'base64' });
-        const dataUri = `data:audio/mp3;base64,${base64Audio}`;
+        // Alterado para audio/mpeg que é o formato universal do WhatsApp para ficheiros MP3
+        const dataUri = `data:audio/mpeg;base64,${base64Audio}`;
         const numeroLimpo = String(phone).replace(/\D/g, ''); 
         
         await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-audio`, 
@@ -388,7 +396,7 @@ async function enviarAudioDireto(phone, fileName) {
         );
         console.log(`🔊 Áudio ${fileName} enviado perfeitamente!`);
     } catch (e) {
-        console.error(`❌ Erro ao enviar áudio ${fileName}:`, e.message);
+        console.error(`❌ Erro ao enviar áudio ${fileName}:`, e.response ? JSON.stringify(e.response.data) : e.message);
     }
 }
 
