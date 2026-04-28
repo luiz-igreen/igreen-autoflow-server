@@ -62,7 +62,9 @@ app.post('/webhook/igreen', async (req, res) => {
   const textoIn = data.text?.message?.trim() || "";
   
   const db = admin.apps.length > 0 ? admin.firestore() : null;
-  const appId = process.env.RENDER_SERVICE_ID || 'igreen-autoflow-v4';
+  
+  // FIX: Nome exato da gaveta onde o Painel vai procurar
+  const appId = 'igreen-autoflow-v4';
   let leadRef = null;
   
   let status = 'NOVO';
@@ -95,15 +97,15 @@ app.post('/webhook/igreen', async (req, res) => {
       atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'TRANSBORDO_HUMANO' });
       return;
   }
-  
-  // NOVA REGRA: PERMITIR REINICIAR O FLUXO FACILMENTE (COMANDO "NOVO" OU "OI" APÓS CONCLUIR)
+
+  // FIX: Permitir iniciar nova conversa com comandos fáceis
   if (textoIn.toLowerCase() === 'novo' || textoIn.toLowerCase() === 'reiniciar' || (textoIn.toLowerCase() === 'oi' && status === 'CONCLUIDO')) {
       memoriaEstado.delete(phone);
       await enviarFluxo(phone, TEXTOS.T01, "01");
       atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', TELEFONE: phone });
       return;
   }
-
+  
   if (status === 'CONFIRMANDO_CANCELAMENTO') {
       if (textoIn === '1') {
           if (leadRef) await leadRef.delete();
@@ -248,6 +250,7 @@ app.post('/webhook/igreen', async (req, res) => {
           break;
           
       case 'CONCLUIDO':
+          // FIX: Mensagem inteligente ao tentar interagir depois de finalizado
           if (textoIn && !isImage && !isPDF) {
               await enviarMensagem(phone, "O seu pré-cadastro já está finalizado com sucesso no nosso sistema! 🎉\n\n⚡ Se deseja cadastrar uma *NOVA* conta de luz, digite a palavra *NOVO*.\n👤 Se deseja falar com um consultor, digite *ATENDENTE*.");
           } else if (isImage || isPDF) {
@@ -367,7 +370,7 @@ async function auditarFaturaIA(base64, mimeType) {
   return JSON.parse(textoLimpo);
 }
 
-// 🧠 MOTOR IA PARA DOCUMENTOS (ATUALIZADO PARA LER CPF E DATA DE NASCIMENTO)
+// 🧠 MOTOR IA PARA DOCUMENTOS
 async function analisarDocumentoIA(base64) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
   
