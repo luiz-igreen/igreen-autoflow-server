@@ -162,7 +162,7 @@ app.post('/webhook/igreen', async (req, res) => {
                   return;
               }
 
-              // CORREÇÃO 3: O CÁLCULO MATEMÁTICO EXATO NO SERVIDOR (Fim das alucinações da IA)
+              // CÁLCULO MATEMÁTICO EXATO NO SERVIDOR
               let isAlagoas = analise.ESTADO === 'AL' || (analise.DISTRIBUIDORA && analise.DISTRIBUIDORA.toUpperCase().includes('ALAGOAS')) || (analise.DISTRIBUIDORA && analise.DISTRIBUIDORA.toUpperCase().includes('EQUATORIAL'));
               let maxMeses = isAlagoas ? 6 : 12;
               let somaConsumo = 0;
@@ -176,15 +176,13 @@ app.post('/webhook/igreen', async (req, res) => {
                   }
               }
 
-              // Previne divisão por zero. Se não tem histórico, pega o valor que a IA leu como consumo atual (se tiver)
               if (mesesComDados > 0) {
                   analise.MEDIA_CONSUMO = Math.round(somaConsumo / mesesComDados);
               } else {
                   analise.MEDIA_CONSUMO = Number(analise.MEDIA_CONSUMO) || 0; 
               }
 
-              // Define se é elegível com base no cálculo cravado do servidor
-              analise.ELEGIVEL = analise.MEDIA_CONSUMO >= 150; // Ajuste este limite se necessário
+              analise.ELEGIVEL = analise.MEDIA_CONSUMO >= 150;
 
               if (analise.ELEGIVEL) {
                   let proximoStatus = 'AGUARDANDO_DOC_FRENTE';
@@ -195,7 +193,6 @@ app.post('/webhook/igreen', async (req, res) => {
                       analise.ENDERECO_NUMERO = String(analise.ENDERECO_NUMERO).replace(/\D/g, '');
                   }
 
-                  // A CHAVE PRIMÁRIA AGORA É A UC
                   let ucLimpa = String(analise.UC || "").replace(/\D/g, '');
                   if (!ucLimpa || ucLimpa === "") ucLimpa = "SEM_UC_" + Date.now();
                   analise.UC = ucLimpa;
@@ -209,14 +206,22 @@ app.post('/webhook/igreen', async (req, res) => {
                       docExistente = await leadRef.get();
                   }
 
-                  // CORREÇÃO 2: CRUZAMENTO DE UC (A ALTERAÇÃO) - Pula documentos se a UC já foi concluída antes
-                  if (docExistente && docExistente.exists && docExistente.data().STATUS_CADASTRO === 'CONCLUIDO') {
-                      proximoStatus = 'CONCLUIDO';
-                      await enviarMensagem(phone, `⚡ Identifiquei que esta Unidade Consumidora (*${ucLimpa}*) já está cadastrada no nosso sistema!\n\nAtualizei a sua média de consumo para *${analise.MEDIA_CONSUMO} kWh* com base na fatura que acabou de enviar.\n\nNão é necessário reenviar os seus documentos de identificação.`);
-                      
-                      // Não precisa enviar o áudio 04 nem pedir RG
-                      proximoTexto = null; 
-                      proximoAudio = null;
+                  // ATUALIZAÇÃO CADASTRAL SE FALTAR DOCUMENTO
+                  if (docExistente && docExistente.exists) {
+                      const dadosAnteriores = docExistente.data();
+                      const faltaDocs = !dadosAnteriores.LINK_DOC_FRENTE || !dadosAnteriores.CPF || dadosAnteriores.CPF === "Não consta";
+
+                      if (faltaDocs) {
+                          await enviarMensagem(phone, `⚡ Identifiquei a sua Unidade Consumidora (*${ucLimpa}*), mas notei que **faltam documentos** no seu cadastro.\n\nVamos fazer uma rápida atualização cadastral para garantir o seu desconto!`);
+                          proximoStatus = 'AGUARDANDO_DOC_FRENTE';
+                          proximoTexto = TEXTOS.T04;
+                          proximoAudio = "04";
+                      } else if (dadosAnteriores.STATUS_CADASTRO === 'CONCLUIDO') {
+                          proximoStatus = 'CONCLUIDO';
+                          await enviarMensagem(phone, `⚡ Identifiquei que esta Unidade Consumidora (*${ucLimpa}*) já está com o cadastro COMPLETO!\n\nAtualizei a sua média de consumo para *${analise.MEDIA_CONSUMO} kWh* com base na fatura que acabou de enviar.\n\nNão é necessário reenviar os seus documentos.`);
+                          proximoTexto = null; 
+                          proximoAudio = null;
+                      }
                   } else if (!analise.ENDERECO_NUMERO || analise.ENDERECO_NUMERO.trim() === '') {
                       proximoStatus = 'AGUARDANDO_CASA';
                       proximoTexto = TEXTOS.T03;
@@ -405,7 +410,7 @@ function nomesCompativeis(nomeFatura, nomeDoc) {
     return matches >= 2 || (arrayFatura.length === 1 && matches === 1);
 }
 
-// 🧠 MOTOR IA DEFINITIVO 
+// 🧠 MOTOR IA DEFINITIVO COM IDENTIFICAÇÃO DE MÁSCARA (PF/PJ)
 async function auditarFaturaIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
   
@@ -419,11 +424,14 @@ async function auditarFaturaIA(base64, mimeType) {
     🚨 REGRA DE ILEGIBILIDADE (MUITO IMPORTANTE) 🚨:
     Se a imagem estiver muito embaçada, cortada, ou se for IMPOSSÍVEL ler claramente o "Nome do Titular" ou a "Unidade Consumidora (UC)", você DEVE retornar "VALIDO": false. Não tente adivinhar dados rasurados.
 
-    🚨 REGRA - CPF E DADOS PESSOAIS 🚨:
-    NÃO TENTE EXTRAIR CPF, CNPJ OU DATA DE NASCIMENTO DESTA FATURA. Preencha "Não consta".
+    🚨 REGRA - CPF E CNPJ MASCARADOS (PARA IDENTIFICAR PF OU PJ) 🚨:
+    A fatura geralmente contém o CPF ou CNPJ do titular MASCARADO (escondido com asteriscos, ex: ***.123.456-** ou **.***.***/0001-**).
+    1. Procure esse dado mascarado na fatura.
+    2. Se o formato for de CPF, preencha o campo "MASCARA_CPF" com o valor exato que encontrou (ex: ***.123.456-**) e defina "TIPO_PERFIL" como "PESSOA FISICA".
+    3. Se o formato for de CNPJ, preencha o campo "MASCARA_CNPJ" com o valor exato e defina "TIPO_PERFIL" como "PESSOA JURIDICA".
+    4. Os campos "CPF", "CNPJ" completos e "DATA_NASCIMENTO" devem continuar ESTRITAMENTE como "Não consta" (o cliente enviará o documento depois). Nunca invente números completos.
 
     🚨 REGRA DE HISTÓRICO DE CONSUMO 🚨:
-    Para evitar erros matemáticos, o seu único trabalho sobre consumo é LER o histórico mês a mês impresso na fatura.
     Extraia apenas os NÚMEROS de kWh para os meses apresentados, começando pelo mais recente (Mês 1) indo até o mais antigo.
     Se um mês estiver vazio ou não existir na imagem, preencha com 0.
     NÃO FAÇA NENHUM CÁLCULO DE MÉDIA. O nosso servidor fará isso. Retorne apenas "0" no campo "MEDIA_CONSUMO".
@@ -432,6 +440,7 @@ async function auditarFaturaIA(base64, mimeType) {
     {
       "VALIDO": true,
       "TARIFA_SOCIAL": false,
+      "TIPO_PERFIL": "PESSOA FISICA",
       "NOME_CLIENTE": "Nome completo do titular",
       "MASCARA_CPF": "Não consta",
       "CPF": "Não consta",
@@ -466,7 +475,7 @@ async function auditarFaturaIA(base64, mimeType) {
   const res = await axios.post(url, payload);
   let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
   
-  console.log(`[IA] Fatura Auditada. A extrair Histórico de Consumo...`);
+  console.log(`[IA] Fatura Auditada. A extrair Máscaras e Perfil (PF/PJ)...`);
   return JSON.parse(textoLimpo);
 }
 
