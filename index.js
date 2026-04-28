@@ -74,22 +74,19 @@ app.post('/webhook/igreen', async (req, res) => {
       const leadsColl = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('leads');
       
       if (mem && mem.UC) {
-          // Se já está na memória e tem UC, a chave primária é a UC
           leadRef = leadsColl.doc(mem.UC);
           status = mem.STATUS_CADASTRO;
       } else {
-          // Se o servidor reiniciou, busca a ÚLTIMA sessão ativa deste telefone no banco
           const snapshot = await leadsColl.where('TELEFONE', '==', phone).get();
           if (!snapshot.empty) {
               let docs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
               docs.sort((a, b) => {
                   const ta = a.DATA_PROCESSAMENTO?.toMillis ? a.DATA_PROCESSAMENTO.toMillis() : 0;
                   const tb = b.DATA_PROCESSAMENTO?.toMillis ? b.DATA_PROCESSAMENTO.toMillis() : 0;
-                  return tb - ta; // Mais recente primeiro
+                  return tb - ta; 
               });
               
               const latest = docs[0];
-              // Se o status NÃO FOR um destes finais, significa que a conversa estava a meio
               if (!['CONCLUIDO', 'RECUSADO_CONSUMO', 'RECUSADO_TARIFA_SOCIAL', 'NOME_DIVERGENTE', 'CONFIRMANDO_CANCELAMENTO'].includes(latest.STATUS_CADASTRO)) {
                   if (latest.UC) leadRef = leadsColl.doc(latest.UC);
                   status = latest.STATUS_CADASTRO;
@@ -115,11 +112,9 @@ app.post('/webhook/igreen', async (req, res) => {
       return;
   }
 
-  // Permitir iniciar nova conversa com comandos fáceis
   if (textoIn.toLowerCase() === 'novo' || textoIn.toLowerCase() === 'reiniciar' || (textoIn.toLowerCase() === 'oi' && status === 'CONCLUIDO')) {
       memoriaEstado.delete(phone);
       await enviarFluxo(phone, TEXTOS.T01, "01");
-      // Guarda apenas na memória até ter a Fatura e a UC para não sujar o banco
       memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', TELEFONE: phone });
       return;
   }
@@ -156,18 +151,40 @@ app.post('/webhook/igreen', async (req, res) => {
 
               const analise = await auditarFaturaIA(base64Data, mimeType);
 
-              // 1: FILTRO DE ILEGIBILIDADE DA FATURA
               if (!analise.VALIDO) {
                   await enviarFluxo(phone, TEXTOS.T09, "09");
                   return;
               }
 
-              // REGRA 5: TARIFA SOCIAL - NÃO ENVIAR PARA O BANCO DE DADOS
               if (analise.TARIFA_SOCIAL) {
                   await enviarFluxo(phone, TEXTOS.T10, "10");
-                  memoriaEstado.delete(phone); // Apenas limpa a memória para encerrar o ciclo
+                  memoriaEstado.delete(phone); 
                   return;
               }
+
+              // CORREÇÃO 3: O CÁLCULO MATEMÁTICO EXATO NO SERVIDOR (Fim das alucinações da IA)
+              let isAlagoas = analise.ESTADO === 'AL' || (analise.DISTRIBUIDORA && analise.DISTRIBUIDORA.toUpperCase().includes('ALAGOAS')) || (analise.DISTRIBUIDORA && analise.DISTRIBUIDORA.toUpperCase().includes('EQUATORIAL'));
+              let maxMeses = isAlagoas ? 6 : 12;
+              let somaConsumo = 0;
+              let mesesComDados = 0;
+
+              for(let i = 1; i <= maxMeses; i++) {
+                  let val = Number(analise[`CONSUMO_MES_${i}`]);
+                  if(val > 0) {
+                      somaConsumo += val;
+                      mesesComDados++;
+                  }
+              }
+
+              // Previne divisão por zero. Se não tem histórico, pega o valor que a IA leu como consumo atual (se tiver)
+              if (mesesComDados > 0) {
+                  analise.MEDIA_CONSUMO = Math.round(somaConsumo / mesesComDados);
+              } else {
+                  analise.MEDIA_CONSUMO = Number(analise.MEDIA_CONSUMO) || 0; 
+              }
+
+              // Define se é elegível com base no cálculo cravado do servidor
+              analise.ELEGIVEL = analise.MEDIA_CONSUMO >= 150; // Ajuste este limite se necessário
 
               if (analise.ELEGIVEL) {
                   let proximoStatus = 'AGUARDANDO_DOC_FRENTE';
@@ -178,20 +195,32 @@ app.post('/webhook/igreen', async (req, res) => {
                       analise.ENDERECO_NUMERO = String(analise.ENDERECO_NUMERO).replace(/\D/g, '');
                   }
 
-                  if (!analise.ENDERECO_NUMERO || analise.ENDERECO_NUMERO.trim() === '') {
-                      proximoStatus = 'AGUARDANDO_CASA';
-                      proximoTexto = TEXTOS.T03;
-                      proximoAudio = "03";
-                  }
-
                   // A CHAVE PRIMÁRIA AGORA É A UC
                   let ucLimpa = String(analise.UC || "").replace(/\D/g, '');
                   if (!ucLimpa || ucLimpa === "") ucLimpa = "SEM_UC_" + Date.now();
                   analise.UC = ucLimpa;
 
+                  let leadsColl = null;
+                  let docExistente = null;
+
                   if (db) {
-                      const leadsColl = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('leads');
-                      leadRef = leadsColl.doc(ucLimpa); // CRIA A LINHA NOVA BASEADA NA UC
+                      leadsColl = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('leads');
+                      leadRef = leadsColl.doc(ucLimpa); 
+                      docExistente = await leadRef.get();
+                  }
+
+                  // CORREÇÃO 2: CRUZAMENTO DE UC (A ALTERAÇÃO) - Pula documentos se a UC já foi concluída antes
+                  if (docExistente && docExistente.exists && docExistente.data().STATUS_CADASTRO === 'CONCLUIDO') {
+                      proximoStatus = 'CONCLUIDO';
+                      await enviarMensagem(phone, `⚡ Identifiquei que esta Unidade Consumidora (*${ucLimpa}*) já está cadastrada no nosso sistema!\n\nAtualizei a sua média de consumo para *${analise.MEDIA_CONSUMO} kWh* com base na fatura que acabou de enviar.\n\nNão é necessário reenviar os seus documentos de identificação.`);
+                      
+                      // Não precisa enviar o áudio 04 nem pedir RG
+                      proximoTexto = null; 
+                      proximoAudio = null;
+                  } else if (!analise.ENDERECO_NUMERO || analise.ENDERECO_NUMERO.trim() === '') {
+                      proximoStatus = 'AGUARDANDO_CASA';
+                      proximoTexto = TEXTOS.T03;
+                      proximoAudio = "03";
                   }
 
                   atualizarEstado(phone, leadRef, {
@@ -202,11 +231,11 @@ app.post('/webhook/igreen', async (req, res) => {
                       TELEFONE: phone
                   });
                   
-                  await enviarFluxo(phone, proximoTexto, proximoAudio);
+                  if (proximoTexto) await enviarFluxo(phone, proximoTexto, proximoAudio);
+
               } else {
-                  // REGRA 5: MENSAGEM GENTIL PARA CONSUMO BAIXO E BLOQUEIO DE SALVAMENTO NO DB
                   await enviarMensagem(phone, `Olá! Agradecemos muito o seu interesse. 💚\n\nApós analisar a sua fatura, verificamos que a sua média de consumo (${analise.MEDIA_CONSUMO || 0} kWh) está abaixo do mínimo exigido no momento para a sua região.\n\nPor isso, não poderemos prosseguir com o cadastro agora. Guardaremos o seu contacto para o avisar em futuras oportunidades!`);
-                  memoriaEstado.delete(phone); // Apenas limpa a memória para encerrar o ciclo
+                  memoriaEstado.delete(phone); 
               }
           } catch (e) {
               console.error("❌ ERRO FATURA:", e.message);
@@ -240,7 +269,7 @@ app.post('/webhook/igreen', async (req, res) => {
 
                   if (nomeDoc !== "Não consta" && !nomesCompativeis(nomeFatura, nomeDoc)) {
                       await enviarMensagem(phone, `⚠️ *Divergência Detectada*\n\nO nome no documento enviado (*${nomeDoc}*) não corresponde ao titular da fatura de energia (*${nomeFatura}*).\n\nPor medidas de segurança antifraude, o sistema foi bloqueado. Por favor, envie uma foto do documento de identificação do titular correto da fatura.`);
-                      return; // Trava o utilizador aqui até ele enviar o documento certo
+                      return; 
                   }
 
                   let dadosDoc = { LINK_DOC_FRENTE: mediaUrlF, STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO' };
@@ -363,7 +392,6 @@ async function enviarFluxo(phone, texto, prefixoAudio) {
 function nomesCompativeis(nomeFatura, nomeDoc) {
     if (!nomeFatura || !nomeDoc || nomeFatura === "Não consta" || nomeDoc === "Não consta") return false;
     
-    // Limpa acentos e caracteres especiais, e divide em palavras com mais de 2 letras
     const limpa = (str) => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z ]/g, "").split(" ").filter(w => w.length > 2);
     
     const arrayFatura = limpa(nomeFatura);
@@ -374,8 +402,6 @@ function nomesCompativeis(nomeFatura, nomeDoc) {
         if (arrayDoc.includes(word)) matches++;
     }
     
-    // O sistema aprova se pelo menos 2 palavras baterem certo (Ex: "Anderson" e "Luiz")
-    // Ou se a pessoa tiver apenas 1 nome válido e ele bater certo.
     return matches >= 2 || (arrayFatura.length === 1 && matches === 1);
 }
 
@@ -394,20 +420,18 @@ async function auditarFaturaIA(base64, mimeType) {
     Se a imagem estiver muito embaçada, cortada, ou se for IMPOSSÍVEL ler claramente o "Nome do Titular" ou a "Unidade Consumidora (UC)", você DEVE retornar "VALIDO": false. Não tente adivinhar dados rasurados.
 
     🚨 REGRA - CPF E DADOS PESSOAIS 🚨:
-    NÃO TENTE EXTRAIR CPF, CNPJ OU DATA DE NASCIMENTO DESTA FATURA. Preencha "Não consta". O cliente enviará o RG no próximo passo. Nunca invente CPFs fictícios.
+    NÃO TENTE EXTRAIR CPF, CNPJ OU DATA DE NASCIMENTO DESTA FATURA. Preencha "Não consta".
 
-    🚨 REGRA ESTRITA DE CÁLCULO DA MÉDIA DE CONSUMO 🚨:
-    Você DEVE analisar o histórico de consumo na imagem e aplicar a seguinte regra de cálculo:
-    
-    1. ESTADO DE ALAGOAS (Ex: Equatorial AL): Some ESTRITAMENTE os ÚLTIMOS 06 (seis) meses do histórico e divida por 6. NUNCA USE 12 MESES PARA ALAGOAS.
-    2. OUTROS ESTADOS: Some os 12 meses e divida por 12.
-    3. REGRA DE PROPORCIONALIDADE (Imóvel novo/alugado): Se o cliente NÃO TIVER histórico suficiente na fatura (ex: tem apenas 3 meses anotados), some APENAS os meses que existem e divida pelo NÚMERO EXATO de meses existentes.
+    🚨 REGRA DE HISTÓRICO DE CONSUMO 🚨:
+    Para evitar erros matemáticos, o seu único trabalho sobre consumo é LER o histórico mês a mês impresso na fatura.
+    Extraia apenas os NÚMEROS de kWh para os meses apresentados, começando pelo mais recente (Mês 1) indo até o mais antigo.
+    Se um mês estiver vazio ou não existir na imagem, preencha com 0.
+    NÃO FAÇA NENHUM CÁLCULO DE MÉDIA. O nosso servidor fará isso. Retorne apenas "0" no campo "MEDIA_CONSUMO".
     
     Responda EXATAMENTE com este objeto JSON (sem formatação ou markdown em volta):
     {
       "VALIDO": true,
       "TARIFA_SOCIAL": false,
-      "ELEGIVEL": true,
       "NOME_CLIENTE": "Nome completo do titular",
       "MASCARA_CPF": "Não consta",
       "CPF": "Não consta",
@@ -442,7 +466,7 @@ async function auditarFaturaIA(base64, mimeType) {
   const res = await axios.post(url, payload);
   let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
   
-  console.log(`[IA] Fatura Auditada. Validação Ilegibilidade Ativa!`);
+  console.log(`[IA] Fatura Auditada. A extrair Histórico de Consumo...`);
   return JSON.parse(textoLimpo);
 }
 
@@ -475,7 +499,7 @@ async function analisarDocumentoIA(base64) {
   return JSON.parse(textoLimpo);
 }
 
-// ENVIO DE TEXTO (COM LIMPEZA DE NÚMERO)
+// ENVIO DE TEXTO
 async function enviarMensagem(phone, message) {
   const numeroLimpo = String(phone).replace(/\D/g, ''); 
   try {
