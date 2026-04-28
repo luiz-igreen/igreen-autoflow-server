@@ -41,8 +41,8 @@ const TEXTOS = {
     T06: "Estou executando a leitura biométrica avançada, cruzando os dados da frente e do verso. Por favor, aguarde.",
     T07: "Registrado. Pra finalizar, digite o seu melhor e-mail.",
     T08: "Prontinho. O seu pré-cadastro foi concluído com sucesso. Os seus dados já foram enviados pro nosso sistema e muito em breve você receberá o seu link para assinatura. A iGreen Energy agradece a sua confiança.",
-    T09: "Aviso, este documento não parece ser uma fatura de energia, ou a imagem está cortada. Por favor, envie a foto correta e nítida da sua conta de luz.",
-    T10: "Atenção, identificamos que a sua conta possui a classificação de baixa renda ou tarifa social. Para proteger o seu benefício governamental, a iGreen não atende esta modalidade, pois a alteração poderia causar a perda do seu subsídio. O processo foi encerrado por segurança.",
+    T09: "Aviso, este documento não parece ser uma fatura de energia, ou a imagem está cortada e ilegível. Por favor, envie uma foto correta e bem nítida da sua conta de luz.",
+    T10: "Atenção, identificamos que a sua conta possui a classificação de baixa renda ou tarifa social. Para proteger o seu benefício governamental, a iGreen não atende esta modalidade, pois a alteração poderia causar a perda do seu subsídio. O processo foi encerrado por segurança. Agradecemos o seu contacto!",
     T11: "Aviso, o documento está ilegível, ou não é um RG ou CNH brasileiro válido. Por favor, reenvie a foto com mais foco e sem reflexos de luz.",
     T12: "E-mail inválido. Por favor, verifique se digitou corretamente, lembrando que deve conter a arroba, e envie novamente.",
     T13: "Atenção, você solicitou o cancelamento. Tem certeza que deseja excluir todos os dados enviados até agora? Digite um para sim, cancelar tudo, ou dois para não, e continuar o cadastro.",
@@ -62,30 +62,47 @@ app.post('/webhook/igreen', async (req, res) => {
   const textoIn = data.text?.message?.trim() || "";
   
   const db = admin.apps.length > 0 ? admin.firestore() : null;
-  
-  // Nome exato da gaveta onde o Painel vai procurar
   const appId = 'igreen-autoflow-v4';
-  let leadRef = null;
   
+  // BUSCA DA SESSÃO ATIVA
   let status = 'NOVO';
-  const mem = memoriaEstado.get(phone);
-  
-  if (db) {
-      leadRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('leads').doc(phone);
-  }
+  let leadRef = null;
+  let mem = memoriaEstado.get(phone);
+  let leadData = mem || {};
 
-  if (mem && mem.STATUS_CADASTRO) {
-      status = mem.STATUS_CADASTRO;
-  } else if (leadRef) {
-      const doc = await leadRef.get();
-      if (doc.exists) {
-          status = doc.data().STATUS_CADASTRO || 'NOVO';
-          memoriaEstado.set(phone, doc.data()); 
+  if (db) {
+      const leadsColl = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('leads');
+      
+      if (mem && mem.UC) {
+          // Se já está na memória e tem UC, a chave primária é a UC
+          leadRef = leadsColl.doc(mem.UC);
+          status = mem.STATUS_CADASTRO;
+      } else {
+          // Se o servidor reiniciou, busca a ÚLTIMA sessão ativa deste telefone no banco
+          const snapshot = await leadsColl.where('TELEFONE', '==', phone).get();
+          if (!snapshot.empty) {
+              let docs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+              docs.sort((a, b) => {
+                  const ta = a.DATA_PROCESSAMENTO?.toMillis ? a.DATA_PROCESSAMENTO.toMillis() : 0;
+                  const tb = b.DATA_PROCESSAMENTO?.toMillis ? b.DATA_PROCESSAMENTO.toMillis() : 0;
+                  return tb - ta; // Mais recente primeiro
+              });
+              
+              const latest = docs[0];
+              // Se o status NÃO FOR um destes finais, significa que a conversa estava a meio
+              if (!['CONCLUIDO', 'RECUSADO_CONSUMO', 'RECUSADO_TARIFA_SOCIAL', 'NOME_DIVERGENTE', 'CONFIRMANDO_CANCELAMENTO'].includes(latest.STATUS_CADASTRO)) {
+                  if (latest.UC) leadRef = leadsColl.doc(latest.UC);
+                  status = latest.STATUS_CADASTRO;
+                  leadData = latest;
+                  memoriaEstado.set(phone, latest);
+              }
+          }
       }
   }
 
   console.log(`\n📡 [RADAR] Cliente: ${phone} | Estado: [${status}] | Tipo Msg: ${data.type}`);
 
+  // COMANDOS GLOBAIS
   if (textoIn.toLowerCase() === 'cancelar') {
       await enviarFluxo(phone, TEXTOS.T13, "13");
       atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'CONFIRMANDO_CANCELAMENTO', PREV_STATUS: status });
@@ -102,7 +119,8 @@ app.post('/webhook/igreen', async (req, res) => {
   if (textoIn.toLowerCase() === 'novo' || textoIn.toLowerCase() === 'reiniciar' || (textoIn.toLowerCase() === 'oi' && status === 'CONCLUIDO')) {
       memoriaEstado.delete(phone);
       await enviarFluxo(phone, TEXTOS.T01, "01");
-      atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', TELEFONE: phone });
+      // Guarda apenas na memória até ter a Fatura e a UC para não sujar o banco
+      memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', TELEFONE: phone });
       return;
   }
   
@@ -119,12 +137,13 @@ app.post('/webhook/igreen', async (req, res) => {
       return;
   }
 
+  // MÁQUINA DE ESTADOS PRINCIPAL
   switch (status) {
       case 'NOVO':
       case 'AGUARDANDO_FATURA':
           if (!isImage && !isPDF) {
               await enviarFluxo(phone, TEXTOS.T01, "01");
-              atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', TELEFONE: phone });
+              memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', TELEFONE: phone });
               return;
           }
 
@@ -137,14 +156,16 @@ app.post('/webhook/igreen', async (req, res) => {
 
               const analise = await auditarFaturaIA(base64Data, mimeType);
 
+              // 1: FILTRO DE ILEGIBILIDADE DA FATURA
               if (!analise.VALIDO) {
                   await enviarFluxo(phone, TEXTOS.T09, "09");
                   return;
               }
 
+              // REGRA 5: TARIFA SOCIAL - NÃO ENVIAR PARA O BANCO DE DADOS
               if (analise.TARIFA_SOCIAL) {
                   await enviarFluxo(phone, TEXTOS.T10, "10");
-                  atualizarEstado(phone, leadRef, { ...analise, STATUS_CADASTRO: 'RECUSADO_TARIFA_SOCIAL' });
+                  memoriaEstado.delete(phone); // Apenas limpa a memória para encerrar o ciclo
                   return;
               }
 
@@ -153,7 +174,6 @@ app.post('/webhook/igreen', async (req, res) => {
                   let proximoTexto = TEXTOS.T04;
                   let proximoAudio = "04";
 
-                  // CORREÇÃO 2: Limpar qualquer letra e garantir que o Endereço Número seja APENAS NÚMERO
                   if (analise.ENDERECO_NUMERO) {
                       analise.ENDERECO_NUMERO = String(analise.ENDERECO_NUMERO).replace(/\D/g, '');
                   }
@@ -164,17 +184,29 @@ app.post('/webhook/igreen', async (req, res) => {
                       proximoAudio = "03";
                   }
 
+                  // A CHAVE PRIMÁRIA AGORA É A UC
+                  let ucLimpa = String(analise.UC || "").replace(/\D/g, '');
+                  if (!ucLimpa || ucLimpa === "") ucLimpa = "SEM_UC_" + Date.now();
+                  analise.UC = ucLimpa;
+
+                  if (db) {
+                      const leadsColl = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('leads');
+                      leadRef = leadsColl.doc(ucLimpa); // CRIA A LINHA NOVA BASEADA NA UC
+                  }
+
                   atualizarEstado(phone, leadRef, {
                       ...analise,
                       STATUS_CADASTRO: proximoStatus,
                       DATA_PROCESSAMENTO: admin.apps.length > 0 ? admin.firestore.Timestamp.now() : new Date(),
-                      LINK_FATURA: mediaUrl
+                      LINK_FATURA: mediaUrl,
+                      TELEFONE: phone
                   });
                   
                   await enviarFluxo(phone, proximoTexto, proximoAudio);
               } else {
-                  await enviarMensagem(phone, `Sua fatura foi analisada, mas a sua média de consumo (${analise.MEDIA_CONSUMO} kWh) está abaixo do mínimo exigido no momento.`);
-                  atualizarEstado(phone, leadRef, { ...analise, STATUS_CADASTRO: 'RECUSADO_CONSUMO' });
+                  // REGRA 5: MENSAGEM GENTIL PARA CONSUMO BAIXO E BLOQUEIO DE SALVAMENTO NO DB
+                  await enviarMensagem(phone, `Olá! Agradecemos muito o seu interesse. 💚\n\nApós analisar a sua fatura, verificamos que a sua média de consumo (${analise.MEDIA_CONSUMO || 0} kWh) está abaixo do mínimo exigido no momento para a sua região.\n\nPor isso, não poderemos prosseguir com o cadastro agora. Guardaremos o seu contacto para o avisar em futuras oportunidades!`);
+                  memoriaEstado.delete(phone); // Apenas limpa a memória para encerrar o ciclo
               }
           } catch (e) {
               console.error("❌ ERRO FATURA:", e.message);
@@ -184,9 +216,8 @@ app.post('/webhook/igreen', async (req, res) => {
 
       case 'AGUARDANDO_CASA':
           if (!textoIn) return;
-          // CORREÇÃO 2.1: Filtra o que o cliente digitar, pegando apenas os números
           const numeroLimpoDaMensagem = textoIn.replace(/\D/g, ''); 
-          const numeroFinalSalvo = numeroLimpoDaMensagem || "S/N"; // Se o cliente digitar apenas letras (ex: "Sem numero"), salva S/N
+          const numeroFinalSalvo = numeroLimpoDaMensagem || "S/N"; 
           
           atualizarEstado(phone, leadRef, { ENDERECO_NUMERO: numeroFinalSalvo, STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE' });
           await enviarFluxo(phone, TEXTOS.T04, "04");
@@ -203,6 +234,15 @@ app.post('/webhook/igreen', async (req, res) => {
               const analiseDoc = await analisarDocumentoIA(base64Frente);
 
               if (analiseDoc.VALIDO) {
+                  // CRUZAMENTO DE DADOS (ANTIFRAUDE)
+                  const nomeDoc = analiseDoc.NOME_DOCUMENTO || "";
+                  const nomeFatura = leadData.NOME_CLIENTE || "";
+
+                  if (nomeDoc !== "Não consta" && !nomesCompativeis(nomeFatura, nomeDoc)) {
+                      await enviarMensagem(phone, `⚠️ *Divergência Detectada*\n\nO nome no documento enviado (*${nomeDoc}*) não corresponde ao titular da fatura de energia (*${nomeFatura}*).\n\nPor medidas de segurança antifraude, o sistema foi bloqueado. Por favor, envie uma foto do documento de identificação do titular correto da fatura.`);
+                      return; // Trava o utilizador aqui até ele enviar o documento certo
+                  }
+
                   let dadosDoc = { LINK_DOC_FRENTE: mediaUrlF, STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO' };
                   if (analiseDoc.CPF && analiseDoc.CPF !== "Não consta") dadosDoc.CPF = analiseDoc.CPF;
                   if (analiseDoc.DATA_NASCIMENTO && analiseDoc.DATA_NASCIMENTO !== "Não consta") dadosDoc.DATA_NASCIMENTO = analiseDoc.DATA_NASCIMENTO;
@@ -228,6 +268,15 @@ app.post('/webhook/igreen', async (req, res) => {
               const analiseDoc = await analisarDocumentoIA(base64Verso); 
 
               if (analiseDoc.VALIDO) {
+                  // CRUZAMENTO DE DADOS (ANTIFRAUDE)
+                  const nomeDoc = analiseDoc.NOME_DOCUMENTO || "";
+                  const nomeFatura = leadData.NOME_CLIENTE || "";
+
+                  if (nomeDoc !== "Não consta" && !nomesCompativeis(nomeFatura, nomeDoc)) {
+                      await enviarMensagem(phone, `⚠️ *Divergência Detectada*\n\nO nome no documento enviado (*${nomeDoc}*) não corresponde ao titular da fatura de energia (*${nomeFatura}*).\n\nPor favor, envie o documento de identificação correto.`);
+                      return; 
+                  }
+
                   await enviarFluxo(phone, TEXTOS.T06, "06");
                   
                   let dadosDoc = { LINK_DOC_VERSO: mediaUrlV, STATUS_CADASTRO: 'AGUARDANDO_EMAIL' };
@@ -267,6 +316,8 @@ app.post('/webhook/igreen', async (req, res) => {
           break;
   }
 });
+
+// === FUNÇÕES DE APOIO E MATEMÁTICA ===
 
 async function atualizarEstado(phone, leadRef, dados) {
     const atual = memoriaEstado.get(phone) || {};
@@ -308,7 +359,27 @@ async function enviarFluxo(phone, texto, prefixoAudio) {
     }
 }
 
-// 🧠 MOTOR IA DEFINITIVO COM REGRA CORRETA PARA ALAGOAS E OUTROS ESTADOS
+// MOTOR DE CRUZAMENTO DE NOMES
+function nomesCompativeis(nomeFatura, nomeDoc) {
+    if (!nomeFatura || !nomeDoc || nomeFatura === "Não consta" || nomeDoc === "Não consta") return false;
+    
+    // Limpa acentos e caracteres especiais, e divide em palavras com mais de 2 letras
+    const limpa = (str) => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z ]/g, "").split(" ").filter(w => w.length > 2);
+    
+    const arrayFatura = limpa(nomeFatura);
+    const arrayDoc = limpa(nomeDoc);
+    
+    let matches = 0;
+    for (let word of arrayFatura) {
+        if (arrayDoc.includes(word)) matches++;
+    }
+    
+    // O sistema aprova se pelo menos 2 palavras baterem certo (Ex: "Anderson" e "Luiz")
+    // Ou se a pessoa tiver apenas 1 nome válido e ele bater certo.
+    return matches >= 2 || (arrayFatura.length === 1 && matches === 1);
+}
+
+// 🧠 MOTOR IA DEFINITIVO 
 async function auditarFaturaIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
   
@@ -319,23 +390,18 @@ async function auditarFaturaIA(base64, mimeType) {
     ATENÇÃO: O documento anexo PODE SER UMA FOTO DE UMA TELA DE COMPUTADOR. Isso é 100% VÁLIDO. 
     Desde que a imagem contenha dados de energia (Equatorial, Cemig, Enel, etc.), defina "VALIDO" como true.
 
-    🚨 MUITO IMPORTANTE - CPF E DADOS PESSOAIS 🚨:
-    NÃO TENTE EXTRAIR CPF, CNPJ OU DATA DE NASCIMENTO DESTA FATURA. Você DEVE preencher "Não consta" nesses campos. O cliente enviará o RG no próximo passo. Nunca invente CPFs fictícios.
+    🚨 REGRA DE ILEGIBILIDADE (MUITO IMPORTANTE) 🚨:
+    Se a imagem estiver muito embaçada, cortada, ou se for IMPOSSÍVEL ler claramente o "Nome do Titular" ou a "Unidade Consumidora (UC)", você DEVE retornar "VALIDO": false. Não tente adivinhar dados rasurados.
 
-    🚨 MUITO IMPORTANTE - NÚMERO DO ENDEREÇO 🚨:
-    O campo "ENDERECO_NUMERO" DEVE conter APENAS OS DÍGITOS NUMÉRICOS do número da residência (Ex: se estiver "Casa 45", retorne apenas "45"). Se for S/N ou não houver número na imagem, retorne apenas "". NUNCA escreva palavras neste campo.
+    🚨 REGRA - CPF E DADOS PESSOAIS 🚨:
+    NÃO TENTE EXTRAIR CPF, CNPJ OU DATA DE NASCIMENTO DESTA FATURA. Preencha "Não consta". O cliente enviará o RG no próximo passo. Nunca invente CPFs fictícios.
 
     🚨 REGRA ESTRITA DE CÁLCULO DA MÉDIA DE CONSUMO 🚨:
     Você DEVE analisar o histórico de consumo na imagem e aplicar a seguinte regra de cálculo:
     
     1. ESTADO DE ALAGOAS (Ex: Equatorial AL): Some ESTRITAMENTE os ÚLTIMOS 06 (seis) meses do histórico e divida por 6. NUNCA USE 12 MESES PARA ALAGOAS.
     2. OUTROS ESTADOS: Some os 12 meses e divida por 12.
-    3. REGRA DE PROPORCIONALIDADE (Imóvel novo/alugado): Se o cliente NÃO TIVER histórico suficiente na fatura (ex: tem apenas 3 meses anotados), some APENAS os meses que existem e divida pelo NÚMERO EXATO de meses existentes. Nunca divida por 6 ou 12 se não houver dados para esses meses.
-    
-    Exemplo prático de ALAGOAS na foto: (174+167+174+179+162+140) = 996. Média = 996 / 6 = 166.
-    - O valor "MEDIA_CONSUMO" deve ser um número inteiro.
-    - Se a "MEDIA_CONSUMO" calculada for >= 150kWh (para AL) ou >= à regra local, defina "ELEGIVEL" = true.
-    - Extraia todo o histórico de consumo mês a mês para as variáveis CONSUMO_MES_1 a 12. Onde for vazio, coloque 0.
+    3. REGRA DE PROPORCIONALIDADE (Imóvel novo/alugado): Se o cliente NÃO TIVER histórico suficiente na fatura (ex: tem apenas 3 meses anotados), some APENAS os meses que existem e divida pelo NÚMERO EXATO de meses existentes.
     
     Responda EXATAMENTE com este objeto JSON (sem formatação ou markdown em volta):
     {
@@ -376,11 +442,11 @@ async function auditarFaturaIA(base64, mimeType) {
   const res = await axios.post(url, payload);
   let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
   
-  console.log(`[IA] Extração profunda concluída com regras de Estado, Número e Proporcionalidade!`);
+  console.log(`[IA] Fatura Auditada. Validação Ilegibilidade Ativa!`);
   return JSON.parse(textoLimpo);
 }
 
-// 🧠 MOTOR IA PARA DOCUMENTOS
+// 🧠 MOTOR IA PARA DOCUMENTOS E CRUZAMENTO
 async function analisarDocumentoIA(base64) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
   
@@ -389,11 +455,15 @@ async function analisarDocumentoIA(base64) {
   const prompt = `
     A imagem anexa é uma foto de um documento de identidade brasileiro (RG ou CNH, frente ou verso)? 
     Se sim, defina "VALIDO": true.
-    Sua segunda tarefa é extrair ESTRITAMENTE o número do CPF (retorne APENAS números, sem pontos ou traços) e a Data de Nascimento (formato DD/MM/AAAA), se estiverem visíveis nesta imagem.
-    Se você não conseguir enxergar esses dados com clareza nesta imagem, defina-os como "Não consta".
+    Sua segunda tarefa é extrair os seguintes dados, se estiverem visíveis:
+    1. O NOME COMPLETO do cidadão (Atribua à variável NOME_DOCUMENTO).
+    2. ESTRITAMENTE o número do CPF (retorne APENAS números, sem pontos ou traços).
+    3. A Data de Nascimento (formato DD/MM/AAAA).
+    Se você não conseguir enxergar algum desses dados com clareza, defina-os como "Não consta".
     Responda APENAS com este JSON (sem markdown):
     {
       "VALIDO": true,
+      "NOME_DOCUMENTO": "NOME DO TITULAR",
       "CPF": "00000000000",
       "DATA_NASCIMENTO": "DD/MM/AAAA"
     }
