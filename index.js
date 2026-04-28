@@ -63,7 +63,7 @@ app.post('/webhook/igreen', async (req, res) => {
   
   const db = admin.apps.length > 0 ? admin.firestore() : null;
   
-  // FIX: Nome exato da gaveta onde o Painel vai procurar
+  // Nome exato da gaveta onde o Painel vai procurar
   const appId = 'igreen-autoflow-v4';
   let leadRef = null;
   
@@ -98,7 +98,7 @@ app.post('/webhook/igreen', async (req, res) => {
       return;
   }
 
-  // FIX: Permitir iniciar nova conversa com comandos fáceis
+  // Permitir iniciar nova conversa com comandos fáceis
   if (textoIn.toLowerCase() === 'novo' || textoIn.toLowerCase() === 'reiniciar' || (textoIn.toLowerCase() === 'oi' && status === 'CONCLUIDO')) {
       memoriaEstado.delete(phone);
       await enviarFluxo(phone, TEXTOS.T01, "01");
@@ -153,6 +153,11 @@ app.post('/webhook/igreen', async (req, res) => {
                   let proximoTexto = TEXTOS.T04;
                   let proximoAudio = "04";
 
+                  // CORREÇÃO 2: Limpar qualquer letra e garantir que o Endereço Número seja APENAS NÚMERO
+                  if (analise.ENDERECO_NUMERO) {
+                      analise.ENDERECO_NUMERO = String(analise.ENDERECO_NUMERO).replace(/\D/g, '');
+                  }
+
                   if (!analise.ENDERECO_NUMERO || analise.ENDERECO_NUMERO.trim() === '') {
                       proximoStatus = 'AGUARDANDO_CASA';
                       proximoTexto = TEXTOS.T03;
@@ -179,7 +184,11 @@ app.post('/webhook/igreen', async (req, res) => {
 
       case 'AGUARDANDO_CASA':
           if (!textoIn) return;
-          atualizarEstado(phone, leadRef, { ENDERECO_NUMERO: textoIn, STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE' });
+          // CORREÇÃO 2.1: Filtra o que o cliente digitar, pegando apenas os números
+          const numeroLimpoDaMensagem = textoIn.replace(/\D/g, ''); 
+          const numeroFinalSalvo = numeroLimpoDaMensagem || "S/N"; // Se o cliente digitar apenas letras (ex: "Sem numero"), salva S/N
+          
+          atualizarEstado(phone, leadRef, { ENDERECO_NUMERO: numeroFinalSalvo, STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE' });
           await enviarFluxo(phone, TEXTOS.T04, "04");
           break;
 
@@ -250,7 +259,6 @@ app.post('/webhook/igreen', async (req, res) => {
           break;
           
       case 'CONCLUIDO':
-          // FIX: Mensagem inteligente ao tentar interagir depois de finalizado
           if (textoIn && !isImage && !isPDF) {
               await enviarMensagem(phone, "O seu pré-cadastro já está finalizado com sucesso no nosso sistema! 🎉\n\n⚡ Se deseja cadastrar uma *NOVA* conta de luz, digite a palavra *NOVO*.\n👤 Se deseja falar com um consultor, digite *ATENDENTE*.");
           } else if (isImage || isPDF) {
@@ -311,16 +319,18 @@ async function auditarFaturaIA(base64, mimeType) {
     ATENÇÃO: O documento anexo PODE SER UMA FOTO DE UMA TELA DE COMPUTADOR. Isso é 100% VÁLIDO. 
     Desde que a imagem contenha dados de energia (Equatorial, Cemig, Enel, etc.), defina "VALIDO" como true.
 
-    MUITO IMPORTANTE SOBRE DADOS PESSOAIS: Se o CPF, CNPJ ou Data de Nascimento NÃO estiverem explicitamente escritos e legíveis nesta fatura, ou estiverem escondidos por asteriscos (ex: ***.123.456-**), escreva "Não consta". NUNCA INVENTE DATAS OU NÚMEROS. Deixe para extrairmos do RG depois.
+    🚨 MUITO IMPORTANTE - CPF E DADOS PESSOAIS 🚨:
+    NÃO TENTE EXTRAIR CPF, CNPJ OU DATA DE NASCIMENTO DESTA FATURA. Você DEVE preencher "Não consta" nesses campos. O cliente enviará o RG no próximo passo. Nunca invente CPFs fictícios.
 
-    Sua missão é extrair TODOS os dados disponíveis para alimentar o Dashboard Cloud.
-    
+    🚨 MUITO IMPORTANTE - NÚMERO DO ENDEREÇO 🚨:
+    O campo "ENDERECO_NUMERO" DEVE conter APENAS OS DÍGITOS NUMÉRICOS do número da residência (Ex: se estiver "Casa 45", retorne apenas "45"). Se for S/N ou não houver número na imagem, retorne apenas "". NUNCA escreva palavras neste campo.
+
     🚨 REGRA ESTRITA DE CÁLCULO DA MÉDIA DE CONSUMO 🚨:
     Você DEVE analisar o histórico de consumo na imagem e aplicar a seguinte regra de cálculo:
     
-    1. ALAGOAS (Equatorial AL): Some ESTRITAMENTE os 06 (seis) primeiros meses do histórico (contando de cima para baixo) e divida por 6.
-    2. OUTROS ESTADOS: Some os 12 meses (se exigido pela concessionária local) e divida por 12.
-    3. REGRA DE PROPORCIONALIDADE (Imóvel novo/alugado): Se o cliente NÃO TIVER histórico suficiente (ex: a conta tem apenas 3 ou 4 meses registrados), você DEVE somar apenas os meses que existem e dividir pelo número exato de meses existentes (ex: some os 4 e divida por 4). Nunca divida por 6 ou 12 se não houver dados para esses meses.
+    1. ESTADO DE ALAGOAS (Ex: Equatorial AL): Some ESTRITAMENTE os ÚLTIMOS 06 (seis) meses do histórico e divida por 6. NUNCA USE 12 MESES PARA ALAGOAS.
+    2. OUTROS ESTADOS: Some os 12 meses e divida por 12.
+    3. REGRA DE PROPORCIONALIDADE (Imóvel novo/alugado): Se o cliente NÃO TIVER histórico suficiente na fatura (ex: tem apenas 3 meses anotados), some APENAS os meses que existem e divida pelo NÚMERO EXATO de meses existentes. Nunca divida por 6 ou 12 se não houver dados para esses meses.
     
     Exemplo prático de ALAGOAS na foto: (174+167+174+179+162+140) = 996. Média = 996 / 6 = 166.
     - O valor "MEDIA_CONSUMO" deve ser um número inteiro.
@@ -332,15 +342,15 @@ async function auditarFaturaIA(base64, mimeType) {
       "VALIDO": true,
       "TARIFA_SOCIAL": false,
       "ELEGIVEL": true,
-      "NOME_CLIENTE": "Nome completo",
-      "MASCARA_CPF": "000.000.000-00",
-      "CPF": "00000000000",
-      "MASCARA_CNPJ": "00.000.000/0000-00",
-      "CNPJ": "Apenas numeros",
-      "DATA_NASCIMENTO": "DD/MM/AAAA",
+      "NOME_CLIENTE": "Nome completo do titular",
+      "MASCARA_CPF": "Não consta",
+      "CPF": "Não consta",
+      "MASCARA_CNPJ": "Não consta",
+      "CNPJ": "Não consta",
+      "DATA_NASCIMENTO": "Não consta",
       "CEP": "00000-000",
       "ENDERECO": "Rua/Avenida, Bairro",
-      "ENDERECO_NUMERO": "Numero da casa ou apartamento",
+      "ENDERECO_NUMERO": "Apenas numeros",
       "ESTADO": "Sigla do estado",
       "DISTRIBUIDORA": "Nome da concessionaria",
       "TIPO_LIGACAO": "Monofasico, Bifasico ou Trifasico",
@@ -366,7 +376,7 @@ async function auditarFaturaIA(base64, mimeType) {
   const res = await axios.post(url, payload);
   let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
   
-  console.log(`[IA] Extração profunda concluída com regras de Estado e Proporcionalidade!`);
+  console.log(`[IA] Extração profunda concluída com regras de Estado, Número e Proporcionalidade!`);
   return JSON.parse(textoLimpo);
 }
 
@@ -379,7 +389,7 @@ async function analisarDocumentoIA(base64) {
   const prompt = `
     A imagem anexa é uma foto de um documento de identidade brasileiro (RG ou CNH, frente ou verso)? 
     Se sim, defina "VALIDO": true.
-    Sua segunda tarefa é extrair o número do CPF (apenas números) e a Data de Nascimento (formato DD/MM/AAAA), se estiverem visíveis nesta imagem.
+    Sua segunda tarefa é extrair ESTRITAMENTE o número do CPF (retorne APENAS números, sem pontos ou traços) e a Data de Nascimento (formato DD/MM/AAAA), se estiverem visíveis nesta imagem.
     Se você não conseguir enxergar esses dados com clareza nesta imagem, defina-os como "Não consta".
     Responda APENAS com este JSON (sem markdown):
     {
