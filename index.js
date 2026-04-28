@@ -41,9 +41,9 @@ const TEXTOS = {
     T06: "Estou executando a leitura biométrica avançada, cruzando os dados da frente e do verso. Por favor, aguarde.",
     T07: "Registrado. Pra finalizar, digite o seu melhor e-mail.",
     T08: "Prontinho. O seu pré-cadastro foi concluído com sucesso. Os seus dados já foram enviados pro nosso sistema e muito em breve você receberá o seu link para assinatura. A iGreen Energy agradece a sua confiança.",
-    T09: "Aviso, este documento não parece ser uma fatura de energia, ou a imagem está cortada e ilegível. Por favor, envie uma foto correta e bem nítida da sua conta de luz.",
+    T09: "Aviso, este documento não parece ser uma fatura de energia válida, a imagem está cortada ou enviou uma imagem incorreta. Por favor, envie uma foto correta e bem nítida da sua conta de luz.",
     T10: "Atenção, identificamos que a sua conta possui a classificação de baixa renda ou tarifa social. Para proteger o seu benefício governamental, a iGreen não atende esta modalidade, pois a alteração poderia causar a perda do seu subsídio. O processo foi encerrado por segurança. Agradecemos o seu contacto!",
-    T11: "Aviso, o documento está ilegível, ou não é um RG ou CNH brasileiro válido. Por favor, reenvie a foto com mais foco e sem reflexos de luz.",
+    T11: "Aviso, a imagem enviada não é um documento de identificação (RG/CNH) válido ou está muito ilegível. Por favor, reenvie a foto do documento com mais foco.",
     T12: "E-mail inválido. Por favor, verifique se digitou corretamente, lembrando que deve conter a arroba, e envie novamente.",
     T13: "Atenção, você solicitou o cancelamento. Tem certeza que deseja excluir todos os dados enviados até agora? Digite um para sim, cancelar tudo, ou dois para não, e continuar o cadastro.",
     T20: "Entendido. Vou transferir o seu atendimento pra um de nossos consultores especialistas. Aguarde um instante, por favor."
@@ -162,7 +162,6 @@ app.post('/webhook/igreen', async (req, res) => {
                   return;
               }
 
-              // CÁLCULO MATEMÁTICO EXATO NO SERVIDOR
               let isAlagoas = analise.ESTADO === 'AL' || (analise.DISTRIBUIDORA && analise.DISTRIBUIDORA.toUpperCase().includes('ALAGOAS')) || (analise.DISTRIBUIDORA && analise.DISTRIBUIDORA.toUpperCase().includes('EQUATORIAL'));
               let maxMeses = isAlagoas ? 6 : 12;
               let somaConsumo = 0;
@@ -206,7 +205,6 @@ app.post('/webhook/igreen', async (req, res) => {
                       docExistente = await leadRef.get();
                   }
 
-                  // ATUALIZAÇÃO CADASTRAL SE FALTAR DOCUMENTO
                   if (docExistente && docExistente.exists) {
                       const dadosAnteriores = docExistente.data();
                       const faltaDocs = !dadosAnteriores.LINK_DOC_FRENTE || !dadosAnteriores.CPF || dadosAnteriores.CPF === "Não consta";
@@ -217,10 +215,9 @@ app.post('/webhook/igreen', async (req, res) => {
                           proximoTexto = TEXTOS.T04;
                           proximoAudio = "04";
                       } else if (dadosAnteriores.STATUS_CADASTRO === 'CONCLUIDO') {
-                          proximoStatus = 'CONCLUIDO';
-                          await enviarMensagem(phone, `⚡ Identifiquei que esta Unidade Consumidora (*${ucLimpa}*) já está com o cadastro COMPLETO!\n\nAtualizei a sua média de consumo para *${analise.MEDIA_CONSUMO} kWh* com base na fatura que acabou de enviar.\n\nNão é necessário reenviar os seus documentos.`);
-                          proximoTexto = null; 
-                          proximoAudio = null;
+                          await enviarMensagem(phone, `⚡ Identifiquei que esta Unidade Consumidora (*${ucLimpa}*) já possui um cadastro **COMPLETO** e ativo no nosso sistema!\n\nVocê enviou esta fatura por engano? 🤔\n\nSe você deseja cadastrar um **outro imóvel** em seu nome, por favor, envie a foto da fatura dessa **outra** instalação (com uma UC diferente desta).\n\nEstou no aguardo!`);
+                          memoriaEstado.delete(phone); 
+                          return; 
                       }
                   } else if (!analise.ENDERECO_NUMERO || analise.ENDERECO_NUMERO.trim() === '') {
                       proximoStatus = 'AGUARDANDO_CASA';
@@ -268,7 +265,6 @@ app.post('/webhook/igreen', async (req, res) => {
               const analiseDoc = await analisarDocumentoIA(base64Frente);
 
               if (analiseDoc.VALIDO) {
-                  // CRUZAMENTO DE DADOS (ANTIFRAUDE)
                   const nomeDoc = analiseDoc.NOME_DOCUMENTO || "";
                   const nomeFatura = leadData.NOME_CLIENTE || "";
 
@@ -302,7 +298,6 @@ app.post('/webhook/igreen', async (req, res) => {
               const analiseDoc = await analisarDocumentoIA(base64Verso); 
 
               if (analiseDoc.VALIDO) {
-                  // CRUZAMENTO DE DADOS (ANTIFRAUDE)
                   const nomeDoc = analiseDoc.NOME_DOCUMENTO || "";
                   const nomeFatura = leadData.NOME_CLIENTE || "";
 
@@ -313,14 +308,21 @@ app.post('/webhook/igreen', async (req, res) => {
 
                   await enviarFluxo(phone, TEXTOS.T06, "06");
                   
-                  let dadosDoc = { LINK_DOC_VERSO: mediaUrlV, STATUS_CADASTRO: 'AGUARDANDO_EMAIL' };
+                  const jaTemEmail = leadData.EMAIL && String(leadData.EMAIL).includes('@');
+                  const proximoStatus = jaTemEmail ? 'CONCLUIDO' : 'AGUARDANDO_EMAIL';
+                  
+                  let dadosDoc = { LINK_DOC_VERSO: mediaUrlV, STATUS_CADASTRO: proximoStatus };
                   if (analiseDoc.CPF && analiseDoc.CPF !== "Não consta") dadosDoc.CPF = analiseDoc.CPF;
                   if (analiseDoc.DATA_NASCIMENTO && analiseDoc.DATA_NASCIMENTO !== "Não consta") dadosDoc.DATA_NASCIMENTO = analiseDoc.DATA_NASCIMENTO;
                   
                   atualizarEstado(phone, leadRef, dadosDoc);
                   
                   setTimeout(async () => {
-                      await enviarFluxo(phone, TEXTOS.T07, "07");
+                      if (jaTemEmail) {
+                          await enviarMensagem(phone, "✅ Os seus documentos foram atualizados com sucesso e o seu cadastro agora está **COMPLETO** no nosso sistema! 🎉\n\nA iGreen Energy agradece a sua confiança.");
+                      } else {
+                          await enviarFluxo(phone, TEXTOS.T07, "07");
+                      }
                   }, 4000); 
               } else {
                   await enviarFluxo(phone, TEXTOS.T11, "11");
@@ -384,75 +386,66 @@ async function baixarArquivo(mediaUrl) {
     throw new Error("Falha ao baixar arquivo após 3 tentativas");
 }
 
+// ATUALIZAÇÃO DA FUNÇÃO PARA PASSAR O TEXTO PARA A VOZ
 async function enviarFluxo(phone, texto, prefixoAudio) {
     await enviarMensagem(phone, texto);
     if (prefixoAudio) {
         console.log(`⏱️ Pausa de 2s antes do áudio...`);
         await new Promise(r => setTimeout(r, 2000));
-        await enviarAudioDireto(phone, prefixoAudio);
+        await enviarAudioDireto(phone, prefixoAudio, texto);
     }
 }
 
-// MOTOR DE CRUZAMENTO DE NOMES
 function nomesCompativeis(nomeFatura, nomeDoc) {
     if (!nomeFatura || !nomeDoc || nomeFatura === "Não consta" || nomeDoc === "Não consta") return false;
-    
     const limpa = (str) => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z ]/g, "").split(" ").filter(w => w.length > 2);
-    
     const arrayFatura = limpa(nomeFatura);
     const arrayDoc = limpa(nomeDoc);
-    
     let matches = 0;
     for (let word of arrayFatura) {
         if (arrayDoc.includes(word)) matches++;
     }
-    
     return matches >= 2 || (arrayFatura.length === 1 && matches === 1);
 }
 
-// 🧠 MOTOR IA DEFINITIVO COM IDENTIFICAÇÃO DE MÁSCARA (PF/PJ)
 async function auditarFaturaIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
-  
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${GEMINI_API_KEY}`;
-  
   const prompt = `
     Aja como um auditor de dados rigoroso da iGreen.
     ATENÇÃO: O documento anexo PODE SER UMA FOTO DE UMA TELA DE COMPUTADOR. Isso é 100% VÁLIDO. 
     Desde que a imagem contenha dados de energia (Equatorial, Cemig, Enel, etc.), defina "VALIDO" como true.
 
-    🚨 REGRA DE ILEGIBILIDADE (MUITO IMPORTANTE) 🚨:
-    Se a imagem estiver muito embaçada, cortada, ou se for IMPOSSÍVEL ler claramente o "Nome do Titular" ou a "Unidade Consumidora (UC)", você DEVE retornar "VALIDO": false. Não tente adivinhar dados rasurados.
+    🚨 REGRA ANTI-LIXO VISUAL E ILEGIBILIDADE 🚨:
+    Você tem a capacidade de visão computacional. Se a imagem enviada for uma selfie humana, uma foto de paisagem, de um animal, uma xícara de café, ou QUALQUER objeto aleatório que NÃO SEJA uma fatura de luz, você DEVE IMEDIATAMENTE retornar "VALIDO": false.
+    Se a fatura estiver muito embaçada e for IMPOSSÍVEL ler claramente o "Nome do Titular" ou a "Unidade Consumidora (UC)", você DEVE retornar "VALIDO": false.
 
     🚨 REGRA - CPF E CNPJ MASCARADOS (PARA IDENTIFICAR PF OU PJ) 🚨:
-    A fatura geralmente contém o CPF ou CNPJ do titular MASCARADO (escondido com asteriscos, ex: ***.123.456-** ou **.***.***/0001-**).
-    1. Procure esse dado mascarado na fatura.
-    2. Se o formato for de CPF, preencha o campo "MASCARA_CPF" com o valor exato que encontrou (ex: ***.123.456-**) e defina "TIPO_PERFIL" como "PESSOA FISICA".
-    3. Se o formato for de CNPJ, preencha o campo "MASCARA_CNPJ" com o valor exato e defina "TIPO_PERFIL" como "PESSOA JURIDICA".
-    4. Os campos "CPF", "CNPJ" completos e "DATA_NASCIMENTO" devem continuar ESTRITAMENTE como "Não consta" (o cliente enviará o documento depois). Nunca invente números completos.
+    1. Procure a máscara (ex: ***.123.456-** ou **.***.***/0001-**).
+    2. Formato CPF -> "MASCARA_CPF" e "TIPO_PERFIL" = "PESSOA FISICA".
+    3. Formato CNPJ -> "MASCARA_CNPJ" e "TIPO_PERFIL" = "PESSOA JURIDICA".
+    4. "CPF", "CNPJ" completos e "DATA_NASCIMENTO" devem continuar como "Não consta".
 
     🚨 REGRA DE HISTÓRICO DE CONSUMO 🚨:
-    Extraia apenas os NÚMEROS de kWh para os meses apresentados, começando pelo mais recente (Mês 1) indo até o mais antigo.
-    Se um mês estiver vazio ou não existir na imagem, preencha com 0.
-    NÃO FAÇA NENHUM CÁLCULO DE MÉDIA. O nosso servidor fará isso. Retorne apenas "0" no campo "MEDIA_CONSUMO".
+    Extraia apenas os NÚMEROS de kWh para os meses. Se não existir, preencha com 0. Retorne 0 no campo "MEDIA_CONSUMO".
     
-    Responda EXATAMENTE com este objeto JSON (sem formatação ou markdown em volta):
+    Responda EXATAMENTE com este objeto JSON:
     {
       "VALIDO": true,
       "TARIFA_SOCIAL": false,
       "TIPO_PERFIL": "PESSOA FISICA",
-      "NOME_CLIENTE": "Nome completo do titular",
+      "NOME_CLIENTE": "Nome",
       "MASCARA_CPF": "Não consta",
       "CPF": "Não consta",
       "MASCARA_CNPJ": "Não consta",
       "CNPJ": "Não consta",
       "DATA_NASCIMENTO": "Não consta",
       "CEP": "00000-000",
-      "ENDERECO": "Rua/Avenida, Bairro",
-      "ENDERECO_NUMERO": "Apenas numeros",
-      "ESTADO": "Sigla do estado",
-      "DISTRIBUIDORA": "Nome da concessionaria",
-      "TIPO_LIGACAO": "Monofasico, Bifasico ou Trifasico",
+      "ENDERECO": "Endereco",
+      "ENDERECO_NUMERO": "Numero",
+      "ESTADO": "UF",
+      "DISTRIBUIDORA": "Nome",
+      "TIPO_LIGACAO": "Monofasico",
       "UC": "Numero da UC",
       "VALOR_FATURA": 0.00,
       "MEDIA_CONSUMO": 0,
@@ -470,30 +463,21 @@ async function auditarFaturaIA(base64, mimeType) {
       "CONSUMO_MES_12": 0
     }
   `;
-  
   const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType, data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
   const res = await axios.post(url, payload);
   let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
-  
-  console.log(`[IA] Fatura Auditada. A extrair Máscaras e Perfil (PF/PJ)...`);
   return JSON.parse(textoLimpo);
 }
 
-// 🧠 MOTOR IA PARA DOCUMENTOS E CRUZAMENTO
 async function analisarDocumentoIA(base64) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
-  
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${GEMINI_API_KEY}`;
-  
   const prompt = `
-    A imagem anexa é uma foto de um documento de identidade brasileiro (RG ou CNH, frente ou verso)? 
-    Se sim, defina "VALIDO": true.
-    Sua segunda tarefa é extrair os seguintes dados, se estiverem visíveis:
-    1. O NOME COMPLETO do cidadão (Atribua à variável NOME_DOCUMENTO).
-    2. ESTRITAMENTE o número do CPF (retorne APENAS números, sem pontos ou traços).
-    3. A Data de Nascimento (formato DD/MM/AAAA).
-    Se você não conseguir enxergar algum desses dados com clareza, defina-os como "Não consta".
-    Responda APENAS com este JSON (sem markdown):
+    A imagem anexa é uma foto CLARA de um documento de identidade brasileiro? 
+    🚨 REGRA ANTI-LIXO VISUAL 🚨: 
+    Se a imagem for uma xícara de café, selfie, ou qualquer objeto que NÃO SEJA um RG/CNH válido, defina "VALIDO": false.
+    Se for, defina "VALIDO": true. Extraia NOME_DOCUMENTO, CPF (só números), DATA_NASCIMENTO. Onde não achar, ponha "Não consta".
+    Responda APENAS com este JSON:
     {
       "VALIDO": true,
       "NOME_DOCUMENTO": "NOME DO TITULAR",
@@ -501,14 +485,12 @@ async function analisarDocumentoIA(base64) {
       "DATA_NASCIMENTO": "DD/MM/AAAA"
     }
   `;
-  
   const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
   const res = await axios.post(url, payload);
   let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
   return JSON.parse(textoLimpo);
 }
 
-// ENVIO DE TEXTO
 async function enviarMensagem(phone, message) {
   const numeroLimpo = String(phone).replace(/\D/g, ''); 
   try {
@@ -521,15 +503,12 @@ async function enviarMensagem(phone, message) {
   }
 }
 
-// RASTREADOR UNIVERSAL DE ÁUDIOS
 function buscarAudioRecursivo(diretorio, prefixo) {
     let arquivos = fs.readdirSync(diretorio);
     for (let arquivo of arquivos) {
         if (arquivo === 'node_modules' || arquivo === '.git') continue; 
-        
         let caminhoCompleto = path.join(diretorio, arquivo);
         let stat = fs.statSync(caminhoCompleto);
-        
         if (stat.isDirectory()) {
             let encontrado = buscarAudioRecursivo(caminhoCompleto, prefixo); 
             if (encontrado) return encontrado;
@@ -542,26 +521,42 @@ function buscarAudioRecursivo(diretorio, prefixo) {
     return null;
 }
 
-async function enviarAudioDireto(phone, prefixo) {
+// CORREÇÃO: PLANO B DE VOZ (TTS SINTÉTICO SE O MP3 NÃO FOR ACHADO)
+async function enviarAudioDireto(phone, prefixo, textoDaMensagem) {
     try {
         console.log(`[ÁUDIO] A vasculhar o GitHub à procura do áudio '${prefixo}'...`);
         
         const filePath = buscarAudioRecursivo(__dirname, prefixo);
+        const numeroLimpo = String(phone).replace(/\D/g, ''); 
+        let dataUri = "";
         
-        if (!filePath) {
-            console.error(`[ERRO CRÍTICO] O áudio '${prefixo}' NÃO EXISTE em nenhuma pasta do seu GitHub! Por favor, verifique se fez o upload.`);
-            return;
+        if (filePath) {
+            console.log(`🔊 [ÁUDIO] Ficheiro físico encontrado no GitHub: ${filePath}`);
+            const base64Audio = fs.readFileSync(filePath, { encoding: 'base64' });
+            dataUri = `data:audio/mpeg;base64,${base64Audio}`;
+        } else if (textoDaMensagem) {
+            console.log(`⚠️ [AVISO] Áudio '${prefixo}' não encontrado. Acionando Gerador de Voz (TTS) como Plano B...`);
+            
+            // Pega nos primeiros 200 caracteres para garantir o limite da API do Google Tradutor
+            const textoCurto = textoDaMensagem.substring(0, 200);
+            const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=pt-BR&q=${encodeURIComponent(textoCurto)}`;
+            
+            // Transforma a voz da internet num áudio para o WhatsApp ler
+            const resAudio = await axios.get(ttsUrl, { 
+                responseType: 'arraybuffer',
+                headers: { 'User-Agent': 'Mozilla/5.0' }
+            });
+            const base64Audio = Buffer.from(resAudio.data, 'binary').toString('base64');
+            dataUri = `data:audio/mpeg;base64,${base64Audio}`;
         }
 
-        const base64Audio = fs.readFileSync(filePath, { encoding: 'base64' });
-        const dataUri = `data:audio/mpeg;base64,${base64Audio}`;
-        const numeroLimpo = String(phone).replace(/\D/g, ''); 
-        
-        await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-audio`, 
-            { phone: numeroLimpo, audio: dataUri }, 
-            { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }
-        );
-        console.log(`🔊 Sucesso! Áudio encontrado em: ${filePath}`);
+        if (dataUri) {
+            await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-audio`, 
+                { phone: numeroLimpo, audio: dataUri }, 
+                { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }
+            );
+            console.log(`🔊 Sucesso! Áudio enviado com o mesmo teor da mensagem para ${numeroLimpo}.`);
+        }
     } catch (e) {
         console.error(`❌ Erro ao enviar áudio ${prefixo}:`, e.message);
     }
