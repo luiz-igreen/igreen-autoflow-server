@@ -30,6 +30,7 @@ try {
 }
 
 const memoriaEstado = new Map();
+const timersInatividade = new Map(); // NOVO: Controlador de tempo
 
 // OS TEXTOS EXTRAÍDOS RIGOROSAMENTE DOS SEUS ÁUDIOS
 const TEXTOS = {
@@ -41,13 +42,44 @@ const TEXTOS = {
     T06: "Estou executando a leitura biométrica avançada, cruzando os dados da frente e do verso. Por favor, aguarde.",
     T07: "Registrado. Pra finalizar, digite o seu melhor e-mail.",
     T08: "Prontinho. O seu pré-cadastro foi concluído com sucesso. Os seus dados já foram enviados pro nosso sistema e muito em breve você receberá o seu link para assinatura. A iGreen Energy agradece a sua confiança.",
-    T09: "Aviso, este documento não parece ser uma fatura de energia válida, a imagem está cortada ou enviou uma imagem incorreta. Por favor, envie uma foto correta e bem nítida da sua conta de luz.",
+    // CORREÇÃO: TEXTO EXATO SOLICITADO PARA FATURA INVÁLIDA
+    T09: "Aviso: Esta fatura de energia ou conta de luz, não é válida. Está ilegível. Enviar uma fatura de energia ou conta de luz válida para continuarmos o nosso processamento cadastral.",
     T10: "Atenção, identificamos que a sua conta possui a classificação de baixa renda ou tarifa social. Para proteger o seu benefício governamental, a iGreen não atende esta modalidade, pois a alteração poderia causar a perda do seu subsídio. O processo foi encerrado por segurança. Agradecemos o seu contacto!",
     T11: "Aviso, a imagem enviada não é um documento de identificação (RG/CNH) válido ou está muito ilegível. Por favor, reenvie a foto do documento com mais foco.",
     T12: "E-mail inválido. Por favor, verifique se digitou corretamente, lembrando que deve conter a arroba, e envie novamente.",
     T13: "Atenção, você solicitou o cancelamento. Tem certeza que deseja excluir todos os dados enviados até agora? Digite um para sim, cancelar tudo, ou dois para não, e continuar o cadastro.",
-    T20: "Entendido. Vou transferir o seu atendimento pra um de nossos consultores especialistas. Aguarde um instante, por favor."
+    T20: "Entendido. Vou transferir o seu atendimento pra um de nossos consultores especialistas. Aguarde um instante, por favor.",
+    // NOVO TEXTO: CANCELAMENTO POR DEMORA
+    TIMEOUT: "Devido à falta de resposta por um longo período, o seu pré-cadastro foi cancelado por medida de segurança.\n\nQuando estiver com os seus documentos em mãos, basta enviar a palavra *NOVO* para recomeçarmos o processo. A iGreen agradece!"
 };
+
+// FUNÇÕES DE CONTROLE DE TEMPO (TIMEOUT)
+function cancelarTimeout(phone) {
+    if (timersInatividade.has(phone)) {
+        clearTimeout(timersInatividade.get(phone));
+        timersInatividade.delete(phone);
+    }
+}
+
+function configurarTimeoutInatividade(phone, leadRef) {
+    cancelarTimeout(phone); // Limpa o timer anterior
+    
+    // Configura um timer de 15 minutos (15 * 60 * 1000 milissegundos)
+    const timeoutId = setTimeout(async () => {
+        console.log(`[TIMEOUT] Cancelando cadastro inacabado do cliente ${phone}`);
+        await enviarMensagem(phone, TEXTOS.TIMEOUT);
+        
+        // DESTRÓI A LINHA NO BANCO DE DADOS (Limpa a prévia visual)
+        if (leadRef) {
+            await leadRef.delete().catch(()=>console.log("Falha ao limpar DB no timeout"));
+        }
+        
+        memoriaEstado.delete(phone);
+        timersInatividade.delete(phone);
+    }, 15 * 60 * 1000); 
+    
+    timersInatividade.set(phone, timeoutId);
+}
 
 // WEBHOOK PRINCIPAL (MÁQUINA DE ESTADOS)
 app.post('/webhook/igreen', async (req, res) => {
@@ -60,6 +92,9 @@ app.post('/webhook/igreen', async (req, res) => {
   const isImage = data.type === 'image' || data.isImage === true || data.type === 'photo' || (data.image && data.image.imageUrl) || (data.photo && data.photo.photoUrl);
   const isPDF = data.type === 'document' || data.isDocument === true || (data.document && data.document.documentUrl);
   const textoIn = data.text?.message?.trim() || "";
+  
+  // O cliente mandou mensagem, então cancelamos a contagem regressiva de cancelamento
+  cancelarTimeout(phone);
   
   const db = admin.apps.length > 0 ? admin.firestore() : null;
   const appId = 'igreen-autoflow-v4';
@@ -115,6 +150,7 @@ app.post('/webhook/igreen', async (req, res) => {
   if (textoIn.toLowerCase() === 'novo' || textoIn.toLowerCase() === 'reiniciar' || (textoIn.toLowerCase() === 'oi' && status === 'CONCLUIDO')) {
       memoriaEstado.delete(phone);
       await enviarFluxo(phone, TEXTOS.T01, "01");
+      // CORREÇÃO: Guarda só na RAM. Não suja o banco de dados (evita a linha vazia na prévia)
       memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', TELEFONE: phone });
       return;
   }
@@ -162,6 +198,7 @@ app.post('/webhook/igreen', async (req, res) => {
                   return;
               }
 
+              // CÁLCULO MATEMÁTICO EXATO NO SERVIDOR
               let isAlagoas = analise.ESTADO === 'AL' || (analise.DISTRIBUIDORA && analise.DISTRIBUIDORA.toUpperCase().includes('ALAGOAS')) || (analise.DISTRIBUIDORA && analise.DISTRIBUIDORA.toUpperCase().includes('EQUATORIAL'));
               let maxMeses = isAlagoas ? 6 : 12;
               let somaConsumo = 0;
@@ -205,6 +242,7 @@ app.post('/webhook/igreen', async (req, res) => {
                       docExistente = await leadRef.get();
                   }
 
+                  // ATUALIZAÇÃO CADASTRAL SE FALTAR DOCUMENTO
                   if (docExistente && docExistente.exists) {
                       const dadosAnteriores = docExistente.data();
                       const faltaDocs = !dadosAnteriores.LINK_DOC_FRENTE || !dadosAnteriores.CPF || dadosAnteriores.CPF === "Não consta";
@@ -233,7 +271,10 @@ app.post('/webhook/igreen', async (req, res) => {
                       TELEFONE: phone
                   });
                   
-                  if (proximoTexto) await enviarFluxo(phone, proximoTexto, proximoAudio);
+                  if (proximoTexto) {
+                      await enviarFluxo(phone, proximoTexto, proximoAudio);
+                      configurarTimeoutInatividade(phone, leadRef); // Inicia contagem para cancelar se sumir
+                  }
 
               } else {
                   await enviarMensagem(phone, `Olá! Agradecemos muito o seu interesse. 💚\n\nApós analisar a sua fatura, verificamos que a sua média de consumo (${analise.MEDIA_CONSUMO || 0} kWh) está abaixo do mínimo exigido no momento para a sua região.\n\nPor isso, não poderemos prosseguir com o cadastro agora. Guardaremos o seu contacto para o avisar em futuras oportunidades!`);
@@ -252,6 +293,7 @@ app.post('/webhook/igreen', async (req, res) => {
           
           atualizarEstado(phone, leadRef, { ENDERECO_NUMERO: numeroFinalSalvo, STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE' });
           await enviarFluxo(phone, TEXTOS.T04, "04");
+          configurarTimeoutInatividade(phone, leadRef);
           break;
 
       case 'AGUARDANDO_DOC_FRENTE':
@@ -279,6 +321,7 @@ app.post('/webhook/igreen', async (req, res) => {
                   
                   atualizarEstado(phone, leadRef, dadosDoc);
                   await enviarFluxo(phone, TEXTOS.T05, "05");
+                  configurarTimeoutInatividade(phone, leadRef);
               } else {
                   await enviarFluxo(phone, TEXTOS.T11, "11");
               }
@@ -322,6 +365,7 @@ app.post('/webhook/igreen', async (req, res) => {
                           await enviarMensagem(phone, "✅ Os seus documentos foram atualizados com sucesso e o seu cadastro agora está **COMPLETO** no nosso sistema! 🎉\n\nA iGreen Energy agradece a sua confiança.");
                       } else {
                           await enviarFluxo(phone, TEXTOS.T07, "07");
+                          configurarTimeoutInatividade(phone, leadRef);
                       }
                   }, 4000); 
               } else {
@@ -338,6 +382,7 @@ app.post('/webhook/igreen', async (req, res) => {
           if (emailRegex.test(textoIn)) {
               atualizarEstado(phone, leadRef, { EMAIL: textoIn, STATUS_CADASTRO: 'CONCLUIDO' });
               await enviarFluxo(phone, TEXTOS.T08, "08");
+              cancelarTimeout(phone); // Cliente concluiu, cancela a contagem de tempo!
           } else {
               await enviarFluxo(phone, TEXTOS.T12, "12");
           }
@@ -358,7 +403,10 @@ app.post('/webhook/igreen', async (req, res) => {
 async function atualizarEstado(phone, leadRef, dados) {
     const atual = memoriaEstado.get(phone) || {};
     memoriaEstado.set(phone, { ...atual, ...dados });
-    if (leadRef) {
+    
+    // CORREÇÃO: Só escreve no banco de dados SE a gaveta (UC) já tiver sido criada.
+    // Isso evita as "linhas fantasmas" na sua prévia!
+    if (leadRef && dados.UC) {
         await leadRef.set(dados, { merge: true }).catch(e => console.log("Aviso: Falha ao salvar no DB."));
     }
 }
@@ -386,7 +434,6 @@ async function baixarArquivo(mediaUrl) {
     throw new Error("Falha ao baixar arquivo após 3 tentativas");
 }
 
-// ATUALIZAÇÃO DA FUNÇÃO PARA PASSAR O TEXTO PARA A VOZ
 async function enviarFluxo(phone, texto, prefixoAudio) {
     await enviarMensagem(phone, texto);
     if (prefixoAudio) {
@@ -408,13 +455,13 @@ function nomesCompativeis(nomeFatura, nomeDoc) {
     return matches >= 2 || (arrayFatura.length === 1 && matches === 1);
 }
 
+// 🧠 MOTOR IA DEFINITIVO 
 async function auditarFaturaIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${GEMINI_API_KEY}`;
   const prompt = `
     Aja como um auditor de dados rigoroso da iGreen.
     ATENÇÃO: O documento anexo PODE SER UMA FOTO DE UMA TELA DE COMPUTADOR. Isso é 100% VÁLIDO. 
-    Desde que a imagem contenha dados de energia (Equatorial, Cemig, Enel, etc.), defina "VALIDO" como true.
 
     🚨 REGRA ANTI-LIXO VISUAL E ILEGIBILIDADE 🚨:
     Você tem a capacidade de visão computacional. Se a imagem enviada for uma selfie humana, uma foto de paisagem, de um animal, uma xícara de café, ou QUALQUER objeto aleatório que NÃO SEJA uma fatura de luz, você DEVE IMEDIATAMENTE retornar "VALIDO": false.
@@ -521,27 +568,28 @@ function buscarAudioRecursivo(diretorio, prefixo) {
     return null;
 }
 
-// CORREÇÃO: PLANO B DE VOZ (TTS SINTÉTICO SE O MP3 NÃO FOR ACHADO)
+// PLANO B DE VOZ (TTS SINTÉTICO SE O MP3 NÃO FOR ACHADO NO GITHUB)
 async function enviarAudioDireto(phone, prefixo, textoDaMensagem) {
     try {
-        console.log(`[ÁUDIO] A vasculhar o GitHub à procura do áudio '${prefixo}'...`);
+        console.log(`[ÁUDIO] Procurando o arquivo MP3 '${prefixo}' no GitHub...`);
         
         const filePath = buscarAudioRecursivo(__dirname, prefixo);
         const numeroLimpo = String(phone).replace(/\D/g, ''); 
         let dataUri = "";
         
         if (filePath) {
-            console.log(`🔊 [ÁUDIO] Ficheiro físico encontrado no GitHub: ${filePath}`);
+            console.log(`🔊 [ÁUDIO] Arquivo FÍSICO encontrado! Usando voz profissional: ${filePath}`);
             const base64Audio = fs.readFileSync(filePath, { encoding: 'base64' });
             dataUri = `data:audio/mpeg;base64,${base64Audio}`;
         } else if (textoDaMensagem) {
-            console.log(`⚠️ [AVISO] Áudio '${prefixo}' não encontrado. Acionando Gerador de Voz (TTS) como Plano B...`);
+            console.log(`⚠️ [AVISO] O áudio '${prefixo}.mp3' não foi encontrado na pasta do GitHub. Usando voz do Google como fallback...`);
             
-            // Pega nos primeiros 200 caracteres para garantir o limite da API do Google Tradutor
-            const textoCurto = textoDaMensagem.substring(0, 200);
+            // CORREÇÃO: Ensina o Google a pronunciar iGreen corretamente
+            let textoAdaptado = textoDaMensagem.replace(/iGreen Energy/gi, "Ai Grín Énergy").replace(/iGreen/gi, "Ai Grín");
+            const textoCurto = textoAdaptado.substring(0, 200);
+            
             const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=pt-BR&q=${encodeURIComponent(textoCurto)}`;
             
-            // Transforma a voz da internet num áudio para o WhatsApp ler
             const resAudio = await axios.get(ttsUrl, { 
                 responseType: 'arraybuffer',
                 headers: { 'User-Agent': 'Mozilla/5.0' }
@@ -555,11 +603,10 @@ async function enviarAudioDireto(phone, prefixo, textoDaMensagem) {
                 { phone: numeroLimpo, audio: dataUri }, 
                 { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }
             );
-            console.log(`🔊 Sucesso! Áudio enviado com o mesmo teor da mensagem para ${numeroLimpo}.`);
         }
     } catch (e) {
         console.error(`❌ Erro ao enviar áudio ${prefixo}:`, e.message);
     }
 }
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON!`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON!`));  
