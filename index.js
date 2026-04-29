@@ -32,7 +32,7 @@ try {
 const memoriaEstado = new Map();
 const timersInatividade = new Map();
 
-// DICIONÁRIO DE TEXTOS COMPLETOS (MAPEAMENTO DE 01 A 26)
+// DICIONÁRIO DE TEXTOS COMPLETOS
 const TEXTOS = {
     T01: "Seja muito bem-vinda à iGreen Energy. Pra começarmos a sua simulação, por favor, me envie uma foto bem nítida ou o PDF da sua conta de luz.",
     T02: "Estou analisando a sua fatura e a elegibilidade regional. Por favor, aguarde um instante.",
@@ -54,8 +54,6 @@ const TEXTOS = {
     T18: "Você já ativou o seu iGreen Club? Como nosso cliente, você tem descontos em milhares de estabelecimentos no Brasil. Baixe o nosso aplicativo no link da mensagem e comece a aproveitar hoje mesmo.",
     T19: "Quer zerar a sua conta de luz? Na iGreen Energy você ganha cashback por cada amigo ou familiar que indicar. Acesse o seu aplicativo, pegue seu link de indicação e partilhe.",
     T20: "Entendido. Vou transferir o seu atendimento pra um de nossos consultores especialistas. Aguarde um instante, por favor.",
-    
-    // NOVOS ÁUDIOS (21 a 26) MAPEADOS
     T21: "Devido à falta de resposta por um longo período, o seu pré-cadastro foi cancelado por medida de segurança.\n\nQuando estiver com os seus documentos em mãos, basta enviar a palavra *NOVO* para recomeçarmos o processo. A iGreen agradece!",
     T22: "⚠️ *Divergência Detectada*\n\nO nome no documento enviado não corresponde ao titular da fatura de energia.\n\nPor medidas de segurança antifraude, o processo foi bloqueado. Por favor, envie a foto do documento de identificação do titular correto da fatura.",
     T23: "⚡ Identifiquei a sua Unidade Consumidora, mas notei que **faltam documentos** no seu cadastro.\n\nVamos fazer uma rápida atualização cadastral para garantir o seu desconto! Por favor, envie uma foto nítida apenas da frente do seu RG ou CNH.",
@@ -76,7 +74,6 @@ function configurarTimeoutInatividade(phone, ucInacabada = null) {
     
     const timeoutId = setTimeout(async () => {
         console.log(`[TIMEOUT] Cancelando espera do cliente ${phone}`);
-        // AGORA USA O ÁUDIO 21
         await enviarFluxo(phone, TEXTOS.T21, "21");
         
         if (ucInacabada) {
@@ -202,8 +199,20 @@ app.post('/webhook/igreen', async (req, res) => {
 
               const analise = await auditarFaturaIA(base64Data, mimeType);
 
+              // VALIDAÇÃO COM O NOVO PODER DE VISÃO DE OBJETOS
               if (!analise.VALIDO) {
-                  await enviarFluxo(phone, TEXTOS.T09, "09");
+                  // Se a IA identificou um objeto estranho (ex: lata de refrigerante)
+                  if (analise.OBJETO_IDENTIFICADO && analise.OBJETO_IDENTIFICADO.trim() !== "") {
+                      const msgVisao = `Aviso: Identifiquei que você me enviou *${analise.OBJETO_IDENTIFICADO}* ao invés de uma conta de luz. 👀😅\n\nPor favor, envie uma fatura de energia válida para continuarmos o cadastro.`;
+                      await enviarMensagem(phone, msgVisao);
+                      // Espera 2 segundos e envia o áudio padrão de Fatura Inválida
+                      await new Promise(r => setTimeout(r, 2000));
+                      await enviarAudioDireto(phone, "09", TEXTOS.T09);
+                  } else {
+                      // Se for só uma fatura borrada ou ilegível, envia o texto/áudio padrão
+                      await enviarFluxo(phone, TEXTOS.T09, "09");
+                  }
+                  
                   memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', TELEFONE: phone });
                   configurarTimeoutInatividade(phone, null);
                   return;
@@ -263,13 +272,11 @@ app.post('/webhook/igreen', async (req, res) => {
                       const faltaDocs = !dadosAnteriores.LINK_DOC_FRENTE || !dadosAnteriores.CPF || dadosAnteriores.CPF === "Não consta";
 
                       if (faltaDocs) {
-                          // AGORA USA O ÁUDIO 23
                           await enviarFluxo(phone, TEXTOS.T23, "23");
                           proximoStatus = 'AGUARDANDO_DOC_FRENTE';
                           proximoTexto = null;
                           proximoAudio = null;
                       } else if (dadosAnteriores.STATUS_CADASTRO === 'CONCLUIDO') {
-                          // AGORA USA O ÁUDIO 24
                           await enviarFluxo(phone, TEXTOS.T24, "24");
                           memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', TELEFONE: phone });
                           configurarTimeoutInatividade(phone, null);
@@ -295,7 +302,6 @@ app.post('/webhook/igreen', async (req, res) => {
                   }
 
               } else {
-                  // AGORA USA O ÁUDIO 25
                   await enviarFluxo(phone, TEXTOS.T25, "25");
                   memoriaEstado.delete(phone); 
               }
@@ -336,7 +342,6 @@ app.post('/webhook/igreen', async (req, res) => {
                   const nomeFatura = leadData.NOME_CLIENTE || "";
 
                   if (nomeDoc !== "Não consta" && !nomesCompativeis(nomeFatura, nomeDoc)) {
-                      // AGORA USA O ÁUDIO 22
                       await enviarFluxo(phone, TEXTOS.T22, "22");
                       configurarTimeoutInatividade(phone, mem.UC);
                       return; 
@@ -350,7 +355,15 @@ app.post('/webhook/igreen', async (req, res) => {
                   await enviarFluxo(phone, TEXTOS.T05, "05");
                   configurarTimeoutInatividade(phone, mem.UC);
               } else {
-                  await enviarFluxo(phone, TEXTOS.T11, "11");
+                  // MENSAGEM DINÂMICA DE VISÃO PARA O DOCUMENTO
+                  if (analiseDoc.OBJETO_IDENTIFICADO && analiseDoc.OBJETO_IDENTIFICADO.trim() !== "") {
+                      const msgVisaoDoc = `Aviso: Identifiquei que você me enviou *${analiseDoc.OBJETO_IDENTIFICADO}* ao invés de um documento de identidade. 👀\n\nPor favor, reenvie a foto do seu RG ou CNH com mais foco.`;
+                      await enviarMensagem(phone, msgVisaoDoc);
+                      await new Promise(r => setTimeout(r, 2000));
+                      await enviarAudioDireto(phone, "11", TEXTOS.T11);
+                  } else {
+                      await enviarFluxo(phone, TEXTOS.T11, "11");
+                  }
                   configurarTimeoutInatividade(phone, mem.UC);
               }
           } catch (e) {
@@ -375,7 +388,6 @@ app.post('/webhook/igreen', async (req, res) => {
                   const nomeFatura = leadData.NOME_CLIENTE || "";
 
                   if (nomeDoc !== "Não consta" && !nomesCompativeis(nomeFatura, nomeDoc)) {
-                      // AGORA USA O ÁUDIO 22
                       await enviarFluxo(phone, TEXTOS.T22, "22");
                       configurarTimeoutInatividade(phone, mem.UC);
                       return; 
@@ -394,16 +406,23 @@ app.post('/webhook/igreen', async (req, res) => {
                   
                   setTimeout(async () => {
                       if (jaTemEmail) {
-                          // AGORA USA O ÁUDIO 26
                           await enviarFluxo(phone, TEXTOS.T26, "26");
-                          cancelarTimeout(phone);
+                          cancelarTimeout(phone); 
                       } else {
                           await enviarFluxo(phone, TEXTOS.T07, "07");
                           configurarTimeoutInatividade(phone, mem.UC);
                       }
                   }, 4000); 
               } else {
-                  await enviarFluxo(phone, TEXTOS.T11, "11");
+                  // MENSAGEM DINÂMICA DE VISÃO PARA O DOCUMENTO
+                  if (analiseDoc.OBJETO_IDENTIFICADO && analiseDoc.OBJETO_IDENTIFICADO.trim() !== "") {
+                      const msgVisaoDoc = `Aviso: Identifiquei que você me enviou *${analiseDoc.OBJETO_IDENTIFICADO}* ao invés do verso do documento. 👀\n\nPor favor, reenvie a foto do verso do seu RG ou CNH.`;
+                      await enviarMensagem(phone, msgVisaoDoc);
+                      await new Promise(r => setTimeout(r, 2000));
+                      await enviarAudioDireto(phone, "11", TEXTOS.T11);
+                  } else {
+                      await enviarFluxo(phone, TEXTOS.T11, "11");
+                  }
                   configurarTimeoutInatividade(phone, mem.UC);
               }
           } catch (e) {
@@ -443,6 +462,7 @@ app.post('/webhook/igreen', async (req, res) => {
 async function atualizarEstado(phone, leadRef, dados) {
     const atual = memoriaEstado.get(phone) || {};
     memoriaEstado.set(phone, { ...atual, ...dados });
+    
     if (leadRef && dados.UC) {
         await leadRef.set(dados, { merge: true }).catch(e => console.log("Aviso: Falha ao salvar no DB."));
     }
@@ -492,7 +512,7 @@ function nomesCompativeis(nomeFatura, nomeDoc) {
     return matches >= 2 || (arrayFatura.length === 1 && matches === 1);
 }
 
-// 🧠 MOTOR IA DEFINITIVO 
+// 🧠 MOTOR IA DEFINITIVO COM IDENTIFICAÇÃO DE OBJETOS
 async function auditarFaturaIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${GEMINI_API_KEY}`;
@@ -501,8 +521,8 @@ async function auditarFaturaIA(base64, mimeType) {
     ATENÇÃO: O documento anexo PODE SER UMA FOTO DE UMA TELA DE COMPUTADOR. Isso é 100% VÁLIDO. 
 
     🚨 REGRA ANTI-LIXO VISUAL E ILEGIBILIDADE 🚨:
-    Você tem a capacidade de visão computacional. Se a imagem enviada for uma selfie humana, uma foto de paisagem, de um animal, uma xícara de café, ou QUALQUER objeto aleatório que NÃO SEJA uma fatura de luz, você DEVE IMEDIATAMENTE retornar "VALIDO": false.
-    Se a fatura estiver muito embaçada e for IMPOSSÍVEL ler claramente o "Nome do Titular" ou a "Unidade Consumidora (UC)", você DEVE retornar "VALIDO": false.
+    Você tem a capacidade de visão computacional. Se a imagem enviada for uma selfie humana, uma foto de paisagem, de um animal, uma lata de refrigerante, ou QUALQUER objeto que NÃO SEJA uma fatura de luz, você DEVE retornar "VALIDO": false.
+    ⭐ MUITO IMPORTANTE: Se você identificar que NÃO É UMA FATURA, descreva de forma curta e direta o que você está vendo (ex: "uma lata de refrigerante", "um teclado de computador", "uma foto de uma pessoa") no campo "OBJETO_IDENTIFICADO". Se for uma fatura de energia, deixe como "".
 
     🚨 REGRA - CPF E CNPJ MASCARADOS (PARA IDENTIFICAR PF OU PJ) 🚨:
     1. Procure a máscara (ex: ***.123.456-** ou **.***.***/0001-**).
@@ -516,6 +536,7 @@ async function auditarFaturaIA(base64, mimeType) {
     Responda EXATAMENTE com este objeto JSON:
     {
       "VALIDO": true,
+      "OBJETO_IDENTIFICADO": "",
       "TARIFA_SOCIAL": false,
       "TIPO_PERFIL": "PESSOA FISICA",
       "NOME_CLIENTE": "Nome",
@@ -557,13 +578,15 @@ async function analisarDocumentoIA(base64) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${GEMINI_API_KEY}`;
   const prompt = `
-    A imagem anexa é uma foto CLARA de um documento de identidade brasileiro? 
+    A imagem anexa é uma foto CLARA de um documento de identidade brasileiro (RG ou CNH)? 
     🚨 REGRA ANTI-LIXO VISUAL 🚨: 
-    Se a imagem for uma xícara de café, selfie, ou qualquer objeto que NÃO SEJA um RG/CNH válido, defina "VALIDO": false.
-    Se for, defina "VALIDO": true. Extraia NOME_DOCUMENTO, CPF (só números), DATA_NASCIMENTO. Onde não achar, ponha "Não consta".
+    Se a imagem for uma xícara de café, selfie, uma paisagem, ou qualquer objeto que NÃO SEJA um RG/CNH válido, defina "VALIDO": false.
+    ⭐ MUITO IMPORTANTE: Se não for um documento válido, descreva de forma curta o que você está vendo (ex: "uma lata de refrigerante", "uma caneca", "uma parede") no campo "OBJETO_IDENTIFICADO". Se for um documento, deixe "".
+    
     Responda APENAS com este JSON:
     {
       "VALIDO": true,
+      "OBJETO_IDENTIFICADO": "",
       "NOME_DOCUMENTO": "NOME DO TITULAR",
       "CPF": "00000000000",
       "DATA_NASCIMENTO": "DD/MM/AAAA"
@@ -597,7 +620,7 @@ function buscarAudioRecursivo(diretorio, prefixo) {
             let encontrado = buscarAudioRecursivo(caminhoCompleto, prefixo); 
             if (encontrado) return encontrado;
         } else {
-            if (arquivo.startsWith(prefixo) && arquivo.toLowerCase().endsWith('.mp3')) {
+            if (arquivo.startsWith(prefixo) && arquivo.toLowerCase().includes('.mp3')) {
                 return caminhoCompleto; 
             }
         }
@@ -608,7 +631,7 @@ function buscarAudioRecursivo(diretorio, prefixo) {
 // PLANO B DE VOZ (TTS SINTÉTICO SE O MP3 NÃO FOR ACHADO NO GITHUB)
 async function enviarAudioDireto(phone, prefixo, textoDaMensagem) {
     try {
-        console.log(`[ÁUDIO] Procurando o arquivo MP3 '${prefixo}' no GitHub...`);
+        console.log(`[ÁUDIO] Procurando o arquivo MP3 com prefixo '${prefixo}' no GitHub...`);
         
         const filePath = buscarAudioRecursivo(__dirname, prefixo);
         const numeroLimpo = String(phone).replace(/\D/g, ''); 
@@ -619,7 +642,7 @@ async function enviarAudioDireto(phone, prefixo, textoDaMensagem) {
             const base64Audio = fs.readFileSync(filePath, { encoding: 'base64' });
             dataUri = `data:audio/mpeg;base64,${base64Audio}`;
         } else if (textoDaMensagem) {
-            console.log(`⚠️ [AVISO] O áudio '${prefixo}.mp3' não foi encontrado na pasta do GitHub. Usando voz do Google como fallback...`);
+            console.log(`⚠️ [AVISO] O áudio '${prefixo}' não foi encontrado na pasta do GitHub. Usando voz do Google como fallback...`);
             
             let textoAdaptado = textoDaMensagem.replace(/iGreen Energy/gi, "Ai Grín Énergy").replace(/iGreen/gi, "Ai Grín");
             const textoCurto = textoAdaptado.substring(0, 200);
