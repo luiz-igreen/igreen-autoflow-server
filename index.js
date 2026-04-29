@@ -32,7 +32,7 @@ try {
 const memoriaEstado = new Map();
 const timersInatividade = new Map();
 
-// DICIONÁRIO DE TEXTOS COMPLETOS (COM O NOVO T27)
+// DICIONÁRIO DE TEXTOS COMPLETOS (COM T28 E T29)
 const TEXTOS = {
     T01: "Seja muito bem-vinda à iGreen Energy. Pra começarmos a sua simulação, por favor, me envie uma foto bem nítida ou o PDF da sua conta de luz.",
     T02: "Estou analisando a sua fatura e a elegibilidade regional. Por favor, aguarde um instante.",
@@ -60,7 +60,9 @@ const TEXTOS = {
     T24: "⚡ Identifiquei que esta Unidade Consumidora já possui um cadastro **COMPLETO** e ativo no nosso sistema!\n\nVocê enviou esta fatura por engano? 🤔\n\nSe deseja cadastrar um **outro imóvel** em seu nome, por favor, envie a foto da fatura dessa **outra** instalação (com uma UC diferente desta).\n\nEstou no aguardo!",
     T25: "Olá! Agradecemos muito o seu interesse. 💚\n\nApós analisar a sua fatura, verificamos que a sua média de consumo está abaixo do mínimo exigido no momento para a sua região.\n\nPor isso, não poderemos prosseguir com o cadastro agora. Guardaremos o seu contacto para o avisar em futuras oportunidades!",
     T26: "✅ Os seus documentos foram atualizados com sucesso e o seu cadastro agora está **COMPLETO** no nosso sistema! 🎉\n\nA iGreen Energy agradece a sua confiança.",
-    T27: "Aviso: A nossa Inteligência Artificial analisou a imagem e identificou que você enviou um objeto diferente, ao invés do documento solicitado. Por favor, envie a foto correta para continuarmos o seu cadastro."
+    T27: "Aviso: A nossa Inteligência Artificial analisou a imagem e identificou que você enviou um objeto diferente, ao invés do documento solicitado. Por favor, envie a foto correta para continuarmos o seu cadastro.",
+    T28: "⚡ Identifiquei que esta fatura já está cadastrada no nosso sistema!\n\nComo encontrei campos em branco no seu cadastro antigo, já aproveitei para os *atualizar* com as informações de Vencimento e Mês da Conta extraídas desta imagem.\n\nDeseja continuar e fazer um *NOVO* cadastro substituindo os documentos enviados anteriormente?\n\nDigite *1* para SIM (Novo Cadastro)\nDigite *2* para CANCELAR (Manter os dados atuais seguros)",
+    T29: "Operação cancelada com sucesso! ✅\n\nOs seus dados atualizados foram mantidos em total segurança no nosso Banco de Dados."
 };
 
 function cancelarTimeout(phone) {
@@ -200,16 +202,13 @@ app.post('/webhook/igreen', async (req, res) => {
 
               const analise = await auditarFaturaIA(base64Data, mimeType);
 
-              // VALIDAÇÃO COM VISÃO DE OBJETOS E VOZ PROFISSIONAL (ÁUDIO 27)
               if (!analise.VALIDO) {
                   if (analise.OBJETO_IDENTIFICADO && analise.OBJETO_IDENTIFICADO.trim() !== "") {
                       const msgVisao = `Aviso: Identifiquei que você me enviou *${analise.OBJETO_IDENTIFICADO}* ao invés de uma conta de luz. 👀😅\n\nPor favor, envie uma fatura de energia válida para continuarmos o cadastro.`;
                       await enviarMensagem(phone, msgVisao);
                       await new Promise(r => setTimeout(r, 2000));
-                      // Envia o áudio 27 físico
                       await enviarAudioDireto(phone, "27", TEXTOS.T27);
                   } else {
-                      // Fatura apenas borrada/ilegível
                       await enviarFluxo(phone, TEXTOS.T09, "09");
                   }
                   
@@ -277,10 +276,10 @@ app.post('/webhook/igreen', async (req, res) => {
                           proximoTexto = null;
                           proximoAudio = null;
                       } else if (dadosAnteriores.STATUS_CADASTRO === 'CONCLUIDO') {
-                          await enviarFluxo(phone, TEXTOS.T24, "24");
-                          memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', TELEFONE: phone });
-                          configurarTimeoutInatividade(phone, null);
-                          return; 
+                          // MUDANÇA V22: RECADASTRO INTELIGENTE COM CONFIRMAÇÃO
+                          proximoStatus = 'CONFIRMANDO_RECADASTRO';
+                          proximoTexto = TEXTOS.T28;
+                          proximoAudio = null; // Sem áudio para não chatear nas opções
                       }
                   } else if (!analise.ENDERECO_NUMERO || analise.ENDERECO_NUMERO.trim() === '') {
                       proximoStatus = 'AGUARDANDO_CASA';
@@ -288,6 +287,7 @@ app.post('/webhook/igreen', async (req, res) => {
                       proximoAudio = "03";
                   }
 
+                  // ISTO GARANTE QUE O VENCIMENTO E CONTA MÊS SÃO GRAVADOS IMEDIATAMENTE!
                   atualizarEstado(phone, leadRef, {
                       ...analise,
                       STATUS_CADASTRO: proximoStatus,
@@ -310,6 +310,24 @@ app.post('/webhook/igreen', async (req, res) => {
               await enviarFluxo(phone, TEXTOS.T09, "09");
               memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', TELEFONE: phone });
               configurarTimeoutInatividade(phone, null);
+          }
+          break;
+
+      // NOVO ESTADO V22: MENU DE OPÇÕES (RECADASTRO OU MANTER DADOS)
+      case 'CONFIRMANDO_RECADASTRO':
+          if (textoIn === '1') {
+              atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE' });
+              await enviarFluxo(phone, TEXTOS.T04, "04");
+              configurarTimeoutInatividade(phone, mem.UC);
+          } else if (textoIn === '2') {
+              // Cancela a operação de recadastro, mas MANTÉM OS DADOS no banco.
+              // Volta o status para CONCLUIDO.
+              atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'CONCLUIDO' });
+              await enviarMensagem(phone, TEXTOS.T29);
+              cancelarTimeout(phone);
+          } else {
+              await enviarMensagem(phone, "Opção inválida. Digite *1* para Novo Cadastro ou *2* para Cancelar e manter seguro.");
+              configurarTimeoutInatividade(phone, mem.UC);
           }
           break;
 
@@ -664,4 +682,4 @@ async function enviarAudioDireto(phone, prefixo, textoDaMensagem) {
     }
 }
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 21 - VENCIMENTO E CONTA MES)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 22 - RECADASTRO SEGURO)`));
