@@ -206,10 +206,10 @@ app.post('/webhook/igreen', async (req, res) => {
                       const msgVisao = `Aviso: Identifiquei que você me enviou *${analise.OBJETO_IDENTIFICADO}* ao invés de uma conta de luz. 👀😅\n\nPor favor, envie uma fatura de energia válida para continuarmos o cadastro.`;
                       await enviarMensagem(phone, msgVisao);
                       await new Promise(r => setTimeout(r, 2000));
-                      // Envia o áudio 27 da Kore
+                      // Envia o áudio 27 físico
                       await enviarAudioDireto(phone, "27", TEXTOS.T27);
                   } else {
-                      // Fatura apenas borrada/ilegível -> usa o áudio gravado padrão
+                      // Fatura apenas borrada/ilegível
                       await enviarFluxo(phone, TEXTOS.T09, "09");
                   }
                   
@@ -626,7 +626,7 @@ function buscarAudioRecursivo(diretorio, prefixo) {
     return null;
 }
 
-// MOTOR DE ÁUDIO COM BUSCA INTELIGENTE
+// MOTOR DE ÁUDIO COM BUSCA INTELIGENTE (KILL SWITCH DO GOOGLE)
 async function enviarAudioDireto(phone, prefixo, textoDaMensagem) {
     try {
         const numeroLimpo = String(phone).replace(/\D/g, ''); 
@@ -636,12 +636,13 @@ async function enviarAudioDireto(phone, prefixo, textoDaMensagem) {
         const filePath = buscarAudioRecursivo(__dirname, prefixo);
         
         if (filePath) {
-            console.log(`🔊 [ÁUDIO] Arquivo FÍSICO encontrado! Usando voz profissional: ${filePath}`);
+            console.log(`🔊 [ÁUDIO] Arquivo FÍSICO encontrado! Usando voz profissional da Kore: ${filePath}`);
             const base64Audio = fs.readFileSync(filePath, { encoding: 'base64' });
             dataUri = `data:audio/mpeg;base64,${base64Audio}`;
         } else {
-            console.log(`⚠️ [AVISO] O áudio '${prefixo}' não foi encontrado. Certifique-se de fazer o upload dele no GitHub.`);
-            return; // Se não achar o mp3, não envia voz de robô. Fica só no texto!
+            // MATÁMOS O GOOGLE TTS DE VEZ AQUI!
+            console.log(`⚠️ [AVISO] O áudio '${prefixo}' não foi encontrado no seu GitHub. Por favor, faça o upload dele.`);
+            return; // Desiste e NÃO envia áudio robótico.
         }
 
         if (dataUri) {
@@ -655,4 +656,4 @@ async function enviarAudioDireto(phone, prefixo, textoDaMensagem) {
     }
 }
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON!`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 20 - SEM GOOGLE TTS)`));
