@@ -510,7 +510,7 @@ function nomesCompativeis(nomeFatura, nomeDoc) {
     return matches >= 2 || (arrayFatura.length === 1 && matches === 1);
 }
 
-// 🧠 MOTOR IA DEFINITIVO COM IDENTIFICAÇÃO DE OBJETOS
+// 🧠 MOTOR IA DEFINITIVO COM IDENTIFICAÇÃO DE OBJETOS + DATAS EXTRAS (V21)
 async function auditarFaturaIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${GEMINI_API_KEY}`;
@@ -521,6 +521,11 @@ async function auditarFaturaIA(base64, mimeType) {
     🚨 REGRA ANTI-LIXO VISUAL E ILEGIBILIDADE 🚨:
     Você tem a capacidade de visão computacional. Se a imagem enviada for uma selfie humana, uma foto de paisagem, de um animal, uma lata de bebida, ou QUALQUER objeto que NÃO SEJA uma fatura de luz, você DEVE retornar "VALIDO": false.
     ⭐ MUITO IMPORTANTE: Se você identificar que NÃO É UMA FATURA, descreva de forma curta e direta o que você está vendo (ex: "uma lata de bebida", "um teclado", "uma foto de pessoa") no campo "OBJETO_IDENTIFICADO". Se for uma fatura, deixe como "".
+
+    🚨 REGRA - DADOS GERAIS E DATAS EXTRAS 🚨:
+    1. Identifique o Mês de Referência da fatura (ex: 04/2026, Abril/2026, etc) e coloque no campo "CONTA_MES".
+    2. Identifique a Data de Vencimento e coloque no campo "VENCIMENTO" (formato DD/MM/AAAA).
+    3. Se não encontrar, preencha com "Não consta".
 
     🚨 REGRA - CPF E CNPJ MASCARADOS (PARA IDENTIFICAR PF OU PJ) 🚨:
     1. Procure a máscara (ex: ***.123.456-** ou **.***.***/0001-**).
@@ -543,6 +548,7 @@ async function auditarFaturaIA(base64, mimeType) {
       "MASCARA_CNPJ": "Não consta",
       "CNPJ": "Não consta",
       "DATA_NASCIMENTO": "Não consta",
+      "EMAIL": "Não consta",
       "CEP": "00000-000",
       "ENDERECO": "Endereco",
       "ENDERECO_NUMERO": "Numero",
@@ -550,6 +556,8 @@ async function auditarFaturaIA(base64, mimeType) {
       "DISTRIBUIDORA": "Nome",
       "TIPO_LIGACAO": "Monofasico",
       "UC": "Numero da UC",
+      "CONTA_MES": "Não consta",
+      "VENCIMENTO": "Não consta",
       "VALOR_FATURA": 0.00,
       "MEDIA_CONSUMO": 0,
       "CONSUMO_MES_1": 0,
@@ -656,4 +664,4 @@ async function enviarAudioDireto(phone, prefixo, textoDaMensagem) {
     }
 }
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 20 - SEM GOOGLE TTS)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 21 - VENCIMENTO E CONTA MES)`));
