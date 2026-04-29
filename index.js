@@ -102,6 +102,14 @@ app.post('/webhook/igreen', async (req, res) => {
   if (data.fromMe) return;
 
   const phone = data.phone;
+  
+  // 🛡️ NOVO ESCUDO ANTI-GRUPOS (V25) 🛡️
+  // Ignora imediatamente qualquer mensagem que venha de um Grupo de WhatsApp
+  if (data.isGroup || String(phone).toLowerCase().includes('group') || String(phone).toLowerCase().includes('@g.us')) {
+      console.log(`🚫 [BLOQUEIO] Mensagem de grupo ignorada: ${phone}`);
+      return;
+  }
+
   const isImage = data.type === 'image' || data.isImage === true || data.type === 'photo' || (data.image && data.image.imageUrl) || (data.photo && data.photo.photoUrl);
   const isPDF = data.type === 'document' || data.isDocument === true || (data.document && data.document.documentUrl);
   const textoIn = data.text?.message?.trim() || "";
@@ -291,7 +299,6 @@ app.post('/webhook/igreen', async (req, res) => {
                   let payloadUpdate = {};
                   
                   if (proximoStatus === 'CONFIRMANDO_RECADASTRO') {
-                      // O Robô APENAS atualiza o mês e o vencimento. Nome e CPF do banco ficam seguros!
                       payloadUpdate = {
                           STATUS_CADASTRO: proximoStatus,
                           DATA_PROCESSAMENTO: admin.apps.length > 0 ? admin.firestore.Timestamp.now() : new Date(),
@@ -300,7 +307,6 @@ app.post('/webhook/igreen', async (req, res) => {
                       if (analise.CONTA_MES && analise.CONTA_MES !== "Não consta") payloadUpdate.CONTA_MES = analise.CONTA_MES;
                       if (analise.VENCIMENTO && analise.VENCIMENTO !== "Não consta") payloadUpdate.VENCIMENTO = analise.VENCIMENTO;
                   } else {
-                      // Se for cliente NOVO, pode injetar tudo livremente
                       payloadUpdate = {
                           ...analise,
                           STATUS_CADASTRO: proximoStatus,
@@ -337,7 +343,6 @@ app.post('/webhook/igreen', async (req, res) => {
               await enviarFluxo(phone, TEXTOS.T04, "04");
               configurarTimeoutInatividade(phone, mem.UC);
           } else if (tLimpo === '2' || textoIn.toLowerCase().includes('nao') || textoIn.toLowerCase().includes('cancelar')) {
-              // Devolve ao status de CONCLUÍDO. O nome antigo está seguro devido ao escudo na V24!
               atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'CONCLUIDO' });
               await enviarMensagem(phone, TEXTOS.T29); 
               cancelarTimeout(phone);
@@ -524,118 +529,21 @@ async function baixarArquivo(mediaUrl) {
 }
 
 async function enviarFluxo(phone, texto, prefixoAudio) {
-    await enviarMensagem(phone, texto);
-    if (prefixoAudio) {
-        console.log(`⏱️ Pausa de 2s antes do áudio...`);
-        await new Promise(r => setTimeout(r, 2000));
-        await enviarAudioDireto(phone, prefixoAudio, texto);
+    const numeroLimpo = String(phone).replace(/\D/g, ''); 
+    try {
+        await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, { 
+            phone: numeroLimpo, 
+            message: String(texto) 
+        }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } });
+        
+        if (prefixoAudio) {
+            console.log(`⏱️ Pausa de 2s antes do áudio...`);
+            await new Promise(r => setTimeout(r, 2000));
+            await enviarAudioDireto(phone, prefixoAudio, texto);
+        }
+    } catch (e) {
+        console.error("[Z-API ERRO]:", e.response ? JSON.stringify(e.response.data) : e.message); 
     }
-}
-
-function nomesCompativeis(nomeFatura, nomeDoc) {
-    if (!nomeFatura || !nomeDoc || nomeFatura === "Não consta" || nomeDoc === "Não consta") return false;
-    const limpa = (str) => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z ]/g, "").split(" ").filter(w => w.length > 2);
-    const arrayFatura = limpa(nomeFatura);
-    const arrayDoc = limpa(nomeDoc);
-    let matches = 0;
-    for (let word of arrayFatura) {
-        if (arrayDoc.includes(word)) matches++;
-    }
-    return matches >= 2 || (arrayFatura.length === 1 && matches === 1);
-}
-
-// 🧠 MOTOR IA DEFINITIVO COM IDENTIFICAÇÃO DE OBJETOS + DATAS EXTRAS
-async function auditarFaturaIA(base64, mimeType) {
-  if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${GEMINI_API_KEY}`;
-  const prompt = `
-    Aja como um auditor de dados rigoroso da iGreen.
-    ATENÇÃO: O documento anexo PODE SER UMA FOTO DE UMA TELA DE COMPUTADOR. Isso é 100% VÁLIDO. 
-
-    🚨 REGRA ANTI-LIXO VISUAL E ILEGIBILIDADE 🚨:
-    Você tem a capacidade de visão computacional. Se a imagem enviada for uma selfie humana, uma foto de paisagem, de um animal, uma lata de bebida, ou QUALQUER objeto que NÃO SEJA uma fatura de luz, você DEVE retornar "VALIDO": false.
-    ⭐ MUITO IMPORTANTE: Se você identificar que NÃO É UMA FATURA, descreva de forma curta e direta o que você está vendo (ex: "uma lata de bebida", "um teclado", "uma foto de pessoa") no campo "OBJETO_IDENTIFICADO". Se for uma fatura, deixe como "".
-
-    🚨 REGRA - DADOS GERAIS E DATAS EXTRAS 🚨:
-    1. Identifique o Mês de Referência da fatura (ex: 04/2026, Abril/2026, etc) e coloque no campo "CONTA_MES".
-    2. Identifique a Data de Vencimento e coloque no campo "VENCIMENTO" (formato DD/MM/AAAA).
-    3. Se não encontrar, preencha com "Não consta".
-
-    🚨 REGRA - CPF E CNPJ MASCARADOS (PARA IDENTIFICAR PF OU PJ) 🚨:
-    1. Procure a máscara (ex: ***.123.456-** ou **.***.***/0001-**).
-    2. Formato CPF -> "MASCARA_CPF" e "TIPO_PERFIL" = "PESSOA FISICA".
-    3. Formato CNPJ -> "MASCARA_CNPJ" e "TIPO_PERFIL" = "PESSOA JURIDICA".
-    4. "CPF", "CNPJ" completos e "DATA_NASCIMENTO" devem continuar como "Não consta".
-
-    🚨 REGRA DE HISTÓRICO DE CONSUMO 🚨:
-    Extraia apenas os NÚMEROS de kWh para os meses. Se não existir, preencha com 0. Retorne 0 no campo "MEDIA_CONSUMO".
-    
-    Responda EXATAMENTE com este objeto JSON:
-    {
-      "VALIDO": true,
-      "OBJETO_IDENTIFICADO": "",
-      "TARIFA_SOCIAL": false,
-      "TIPO_PERFIL": "PESSOA FISICA",
-      "NOME_CLIENTE": "Nome",
-      "MASCARA_CPF": "Não consta",
-      "CPF": "Não consta",
-      "MASCARA_CNPJ": "Não consta",
-      "CNPJ": "Não consta",
-      "DATA_NASCIMENTO": "Não consta",
-      "EMAIL": "Não consta",
-      "CEP": "00000-000",
-      "ENDERECO": "Endereco",
-      "ENDERECO_NUMERO": "Numero",
-      "ESTADO": "UF",
-      "DISTRIBUIDORA": "Nome",
-      "TIPO_LIGACAO": "Monofasico",
-      "UC": "Numero da UC",
-      "CONTA_MES": "Não consta",
-      "VENCIMENTO": "Não consta",
-      "VALOR_FATURA": 0.00,
-      "MEDIA_CONSUMO": 0,
-      "CONSUMO_MES_1": 0,
-      "CONSUMO_MES_2": 0,
-      "CONSUMO_MES_3": 0,
-      "CONSUMO_MES_4": 0,
-      "CONSUMO_MES_5": 0,
-      "CONSUMO_MES_6": 0,
-      "CONSUMO_MES_7": 0,
-      "CONSUMO_MES_8": 0,
-      "CONSUMO_MES_9": 0,
-      "CONSUMO_MES_10": 0,
-      "CONSUMO_MES_11": 0,
-      "CONSUMO_MES_12": 0
-    }
-  `;
-  const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType, data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
-  const res = await axios.post(url, payload);
-  let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
-  return JSON.parse(textoLimpo);
-}
-
-async function analisarDocumentoIA(base64) {
-  if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${GEMINI_API_KEY}`;
-  const prompt = `
-    A imagem anexa é uma foto CLARA de um documento de identidade brasileiro (RG ou CNH)? 
-    🚨 REGRA ANTI-LIXO VISUAL 🚨: 
-    Se a imagem for uma xícara de café, selfie, uma paisagem, ou qualquer objeto que NÃO SEJA um RG/CNH válido, defina "VALIDO": false.
-    ⭐ MUITO IMPORTANTE: Se não for um documento válido, descreva de forma curta o que você está vendo (ex: "uma lata", "uma caneca", "uma parede") no campo "OBJETO_IDENTIFICADO". Se for um documento, deixe "".
-    
-    Responda APENAS com este JSON:
-    {
-      "VALIDO": true,
-      "OBJETO_IDENTIFICADO": "",
-      "NOME_DOCUMENTO": "NOME DO TITULAR",
-      "CPF": "00000000000",
-      "DATA_NASCIMENTO": "DD/MM/AAAA"
-    }
-  `;
-  const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
-  const res = await axios.post(url, payload);
-  let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
-  return JSON.parse(textoLimpo);
 }
 
 async function enviarMensagem(phone, message) {
@@ -646,7 +554,7 @@ async function enviarMensagem(phone, message) {
           message: String(message) 
       }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } });
   } catch (e) {
-      console.error("[Z-API ERRO]:", e.response ? JSON.stringify(e.response.data) : e.message); 
+      console.error("[Z-API ERRO TEXTO]:", e.response ? JSON.stringify(e.response.data) : e.message); 
   }
 }
 
@@ -668,7 +576,7 @@ function buscarAudioRecursivo(diretorio, prefixo) {
     return null;
 }
 
-// MOTOR DE ÁUDIO COM BUSCA INTELIGENTE (KILL SWITCH DO GOOGLE)
+// MOTOR DE ÁUDIO COM BUSCA INTELIGENTE
 async function enviarAudioDireto(phone, prefixo, textoDaMensagem) {
     try {
         const numeroLimpo = String(phone).replace(/\D/g, ''); 
@@ -678,11 +586,11 @@ async function enviarAudioDireto(phone, prefixo, textoDaMensagem) {
         const filePath = buscarAudioRecursivo(__dirname, prefixo);
         
         if (filePath) {
-            console.log(`🔊 [ÁUDIO] Arquivo FÍSICO encontrado! Usando voz profissional da Kore: ${filePath}`);
+            console.log(`🔊 [ÁUDIO] Arquivo FÍSICO encontrado! Usando voz profissional: ${filePath}`);
             const base64Audio = fs.readFileSync(filePath, { encoding: 'base64' });
             dataUri = `data:audio/mpeg;base64,${base64Audio}`;
         } else {
-            console.log(`⚠️ [AVISO] O áudio '${prefixo}' não foi encontrado no seu GitHub. Por favor, faça o upload dele.`);
+            console.log(`⚠️ [AVISO] O áudio '${prefixo}' não foi encontrado no seu GitHub.`);
             return; 
         }
 
@@ -697,4 +605,4 @@ async function enviarAudioDireto(phone, prefixo, textoDaMensagem) {
     }
 }
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 24 - PROTEÇÃO DE DADOS)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 25 - ESCUDO ANTI-GRUPOS)`));
