@@ -324,7 +324,6 @@ app.post('/webhook/igreen', async (req, res) => {
                   memoriaEstado.delete(phone); 
               }
           } catch (e) {
-              // CORREÇÃO V26: Tratamento de Erro Honesto. Não culpa a imagem do utilizador se o servidor da Google falhar.
               console.error("❌ ERRO FATURA [SISTEMA/IA]:", e.message);
               await enviarMensagem(phone, "⚠️ *Instabilidade no Sistema*: Tivemos uma pequena falha de conexão ao ler a sua imagem. Por favor, reenvie a foto da fatura para tentarmos novamente.");
               memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', TELEFONE: phone });
@@ -606,7 +605,19 @@ async function enviarAudioDireto(phone, prefixo, textoDaMensagem) {
     }
 }
 
-// 🧠 PROMPT IA REFEITO PARA TOLERÂNCIA VISUAL MÁXIMA (V26) 🧠
+function nomesCompativeis(nomeFatura, nomeDoc) {
+    if (!nomeFatura || !nomeDoc || nomeFatura === "Não consta" || nomeDoc === "Não consta") return false;
+    const limpa = (str) => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z ]/g, "").split(" ").filter(w => w.length > 2);
+    const arrayFatura = limpa(nomeFatura);
+    const arrayDoc = limpa(nomeDoc);
+    let matches = 0;
+    for (let word of arrayFatura) {
+        if (arrayDoc.includes(word)) matches++;
+    }
+    return matches >= 2 || (arrayFatura.length === 1 && matches === 1);
+}
+
+// 🧠 PROMPT IA REFEITO PARA TOLERÂNCIA VISUAL MÁXIMA
 async function auditarFaturaIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${GEMINI_API_KEY}`;
@@ -676,7 +687,7 @@ async function auditarFaturaIA(base64, mimeType) {
   return JSON.parse(textoLimpo);
 }
 
-// 🧠 PROMPT IA REFEITO PARA TOLERÂNCIA VISUAL MÁXIMA (V26) 🧠
+// 🧠 PROMPT IA REFEITO PARA TOLERÂNCIA VISUAL MÁXIMA
 async function analisarDocumentoIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${GEMINI_API_KEY}`;
@@ -698,8 +709,8 @@ async function analisarDocumentoIA(base64, mimeType) {
   `;
   const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: mimeType || "image/jpeg", data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
   const res = await axios.post(url, payload);
-  let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
+  let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/Clipjson/g, '').trim();
   return JSON.parse(textoLimpo);
 }
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 27 - CORRECAO DOCUMENTO)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 28 - SISTEMA COMPLETO RESTAURADO)`));  
