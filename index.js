@@ -32,7 +32,7 @@ try {
 const memoriaEstado = new Map();
 const timersInatividade = new Map();
 
-// DICIONÁRIO DE TEXTOS COMPLETOS (COM T29 ATUALIZADO)
+// DICIONÁRIO DE TEXTOS COMPLETOS
 const TEXTOS = {
     T01: "Seja muito bem-vinda à iGreen Energy. Pra começarmos a sua simulação, por favor, me envie uma foto bem nítida ou o PDF da sua conta de luz.",
     T02: "Estou analisando a sua fatura e a elegibilidade regional. Por favor, aguarde um instante.",
@@ -287,14 +287,30 @@ app.post('/webhook/igreen', async (req, res) => {
                       proximoAudio = "03";
                   }
 
-                  // GRAVAÇÃO IMEDIATA DO VENCIMENTO E MÊS
-                  atualizarEstado(phone, leadRef, {
-                      ...analise,
-                      STATUS_CADASTRO: proximoStatus,
-                      DATA_PROCESSAMENTO: admin.apps.length > 0 ? admin.firestore.Timestamp.now() : new Date(),
-                      LINK_FATURA: mediaUrl,
-                      TELEFONE: phone
-                  });
+                  // 🛡️ ESCUDO DE DADOS (V24): PROTEÇÃO CONTRA SOBRESCRITA INDEVIDA 🛡️
+                  let payloadUpdate = {};
+                  
+                  if (proximoStatus === 'CONFIRMANDO_RECADASTRO') {
+                      // O Robô APENAS atualiza o mês e o vencimento. Nome e CPF do banco ficam seguros!
+                      payloadUpdate = {
+                          STATUS_CADASTRO: proximoStatus,
+                          DATA_PROCESSAMENTO: admin.apps.length > 0 ? admin.firestore.Timestamp.now() : new Date(),
+                          TELEFONE: phone
+                      };
+                      if (analise.CONTA_MES && analise.CONTA_MES !== "Não consta") payloadUpdate.CONTA_MES = analise.CONTA_MES;
+                      if (analise.VENCIMENTO && analise.VENCIMENTO !== "Não consta") payloadUpdate.VENCIMENTO = analise.VENCIMENTO;
+                  } else {
+                      // Se for cliente NOVO, pode injetar tudo livremente
+                      payloadUpdate = {
+                          ...analise,
+                          STATUS_CADASTRO: proximoStatus,
+                          DATA_PROCESSAMENTO: admin.apps.length > 0 ? admin.firestore.Timestamp.now() : new Date(),
+                          LINK_FATURA: mediaUrl,
+                          TELEFONE: phone
+                      };
+                  }
+
+                  atualizarEstado(phone, leadRef, payloadUpdate);
                   
                   if (proximoTexto) {
                       await enviarFluxo(phone, proximoTexto, proximoAudio);
@@ -313,7 +329,6 @@ app.post('/webhook/igreen', async (req, res) => {
           }
           break;
 
-      // TRATAMENTO DA RESPOSTA DE RECADASTRO (CORREÇÃO DE SYNC)
       case 'CONFIRMANDO_RECADASTRO':
           const tLimpo = textoIn.replace(/\D/g, ''); 
           
@@ -322,7 +337,7 @@ app.post('/webhook/igreen', async (req, res) => {
               await enviarFluxo(phone, TEXTOS.T04, "04");
               configurarTimeoutInatividade(phone, mem.UC);
           } else if (tLimpo === '2' || textoIn.toLowerCase().includes('nao') || textoIn.toLowerCase().includes('cancelar')) {
-              // Devolve ao status de CONCLUÍDO e garante sincronização
+              // Devolve ao status de CONCLUÍDO. O nome antigo está seguro devido ao escudo na V24!
               atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'CONCLUIDO' });
               await enviarMensagem(phone, TEXTOS.T29); 
               cancelarTimeout(phone);
@@ -480,8 +495,6 @@ async function atualizarEstado(phone, leadRef, dados) {
     const atual = memoriaEstado.get(phone) || {};
     memoriaEstado.set(phone, { ...atual, ...dados });
     
-    // CORREÇÃO CRUCIAL V23: O Firestore agora vai gravar e atualizar a tela em 100% das vezes
-    // sem precisar de validação extra. (Isto remove o Efeito Congelamento!)
     if (leadRef) {
         await leadRef.set(dados, { merge: true }).catch(e => console.error("Aviso: Falha ao salvar no DB.", e));
     }
@@ -684,4 +697,4 @@ async function enviarAudioDireto(phone, prefixo, textoDaMensagem) {
     }
 }
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 23 - SYNC PERFEITO)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 24 - PROTEÇÃO DE DADOS)`));
