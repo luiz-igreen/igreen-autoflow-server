@@ -103,10 +103,8 @@ app.post('/webhook/igreen', async (req, res) => {
 
   const phone = data.phone;
   
-  // 🛡️ NOVO ESCUDO ANTI-GRUPOS (V25) 🛡️
-  // Ignora imediatamente qualquer mensagem que venha de um Grupo de WhatsApp
+  // 🛡️ ESCUDO ANTI-GRUPOS
   if (data.isGroup || String(phone).toLowerCase().includes('group') || String(phone).toLowerCase().includes('@g.us')) {
-      console.log(`🚫 [BLOQUEIO] Mensagem de grupo ignorada: ${phone}`);
       return;
   }
 
@@ -151,7 +149,7 @@ app.post('/webhook/igreen', async (req, res) => {
       }
   }
 
-  console.log(`\n📡 [RADAR] Cliente: ${phone} | Estado: [${status}] | Tipo Msg: ${data.type} | Texto: ${textoIn}`);
+  console.log(`\n📡 [RADAR] Cliente: ${phone} | Estado: [${status}] | Tipo Msg: ${data.type}`);
 
   if (textoIn.toLowerCase() === 'cancelar') {
       await enviarFluxo(phone, TEXTOS.T13, "13");
@@ -295,9 +293,7 @@ app.post('/webhook/igreen', async (req, res) => {
                       proximoAudio = "03";
                   }
 
-                  // 🛡️ ESCUDO DE DADOS (V24): PROTEÇÃO CONTRA SOBRESCRITA INDEVIDA 🛡️
                   let payloadUpdate = {};
-                  
                   if (proximoStatus === 'CONFIRMANDO_RECADASTRO') {
                       payloadUpdate = {
                           STATUS_CADASTRO: proximoStatus,
@@ -328,8 +324,9 @@ app.post('/webhook/igreen', async (req, res) => {
                   memoriaEstado.delete(phone); 
               }
           } catch (e) {
-              console.error("❌ ERRO FATURA:", e.message);
-              await enviarFluxo(phone, TEXTOS.T09, "09");
+              // CORREÇÃO V26: Tratamento de Erro Honesto. Não culpa a imagem do utilizador se o servidor da Google falhar.
+              console.error("❌ ERRO FATURA [SISTEMA/IA]:", e.message);
+              await enviarMensagem(phone, "⚠️ *Instabilidade no Sistema*: Tivemos uma pequena falha de conexão ao ler a sua imagem. Por favor, reenvie a foto da fatura para tentarmos novamente.");
               memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', TELEFONE: phone });
               configurarTimeoutInatividade(phone, null);
           }
@@ -405,7 +402,8 @@ app.post('/webhook/igreen', async (req, res) => {
                   configurarTimeoutInatividade(phone, mem.UC);
               }
           } catch (e) {
-              await enviarFluxo(phone, TEXTOS.T11, "11");
+              console.error("❌ ERRO DOC FRENTE [SISTEMA/IA]:", e.message);
+              await enviarMensagem(phone, "⚠️ *Instabilidade no Sistema*: Tivemos um erro de comunicação ao ler a frente do documento. Por favor, reenvie a foto.");
               configurarTimeoutInatividade(phone, mem.UC);
           }
           break;
@@ -463,7 +461,8 @@ app.post('/webhook/igreen', async (req, res) => {
                   configurarTimeoutInatividade(phone, mem.UC);
               }
           } catch (e) {
-              await enviarFluxo(phone, TEXTOS.T11, "11");
+              console.error("❌ ERRO DOC VERSO [SISTEMA/IA]:", e.message);
+              await enviarMensagem(phone, "⚠️ *Instabilidade no Sistema*: Tivemos um erro de comunicação ao ler o verso do documento. Por favor, reenvie a foto.");
               configurarTimeoutInatividade(phone, mem.UC);
           }
           break;
@@ -605,4 +604,100 @@ async function enviarAudioDireto(phone, prefixo, textoDaMensagem) {
     }
 }
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 25 - ESCUDO ANTI-GRUPOS)`));
+// 🧠 PROMPT IA REFEITO PARA TOLERÂNCIA VISUAL MÁXIMA (V26) 🧠
+async function auditarFaturaIA(base64, mimeType) {
+  if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${GEMINI_API_KEY}`;
+  
+  const prompt = `
+    Aja como um auditor de dados da iGreen.
+    
+    🚨 REGRA 1 - TOLERÂNCIA VISUAL MÁXIMA 🚨:
+    Se a imagem contiver UMA FATURA DE ENERGIA (mesmo que seja foto de uma tela de computador, com reflexo, dedos aparecendo ou um pouco borrada), VOCÊ DEVE RETORNAR "VALIDO": true.
+    SÓ retorne "VALIDO": false se for ABSOLUTAMENTE um objeto aleatório sem fatura (ex: lata de bebida, pessoa, carro). Neste caso único, descreva o que é em "OBJETO_IDENTIFICADO" (ex: "uma lata de bebida"). Se for fatura, deixe "".
+
+    🚨 REGRA 2 - DATAS EXTRAS 🚨:
+    1. Identifique o Mês de Referência (ex: 04/2026, Abril/2026) e coloque em "CONTA_MES".
+    2. Identifique o Vencimento e coloque em "VENCIMENTO" (DD/MM/AAAA).
+    Se não achar, use "Não consta".
+
+    🚨 REGRA 3 - PF OU PJ (MÁSCARAS) 🚨:
+    Procure máscaras (***.123.456-** ou **.***.***/0001-**).
+    Se achar CPF -> "MASCARA_CPF" e "TIPO_PERFIL" = "PESSOA FISICA".
+    Se achar CNPJ -> "MASCARA_CNPJ" e "TIPO_PERFIL" = "PESSOA JURIDICA".
+    "CPF", "CNPJ" e "DATA_NASCIMENTO" exatos devem continuar "Não consta".
+
+    🚨 REGRA 4 - CONSUMO 🚨:
+    Extraia APENAS NÚMEROS de kWh para os meses. Se não existir, preencha com 0. Retorne 0 no campo "MEDIA_CONSUMO" (o sistema calcula depois).
+    
+    Responda EXATAMENTE com este objeto JSON:
+    {
+      "VALIDO": true,
+      "OBJETO_IDENTIFICADO": "",
+      "TARIFA_SOCIAL": false,
+      "TIPO_PERFIL": "PESSOA FISICA",
+      "NOME_CLIENTE": "Nome",
+      "MASCARA_CPF": "Não consta",
+      "CPF": "Não consta",
+      "MASCARA_CNPJ": "Não consta",
+      "CNPJ": "Não consta",
+      "DATA_NASCIMENTO": "Não consta",
+      "EMAIL": "Não consta",
+      "CEP": "00000-000",
+      "ENDERECO": "Endereco",
+      "ENDERECO_NUMERO": "Numero",
+      "ESTADO": "UF",
+      "DISTRIBUIDORA": "Nome",
+      "TIPO_LIGACAO": "Monofasico",
+      "UC": "Numero da UC",
+      "CONTA_MES": "Não consta",
+      "VENCIMENTO": "Não consta",
+      "VALOR_FATURA": 0.00,
+      "MEDIA_CONSUMO": 0,
+      "CONSUMO_MES_1": 0,
+      "CONSUMO_MES_2": 0,
+      "CONSUMO_MES_3": 0,
+      "CONSUMO_MES_4": 0,
+      "CONSUMO_MES_5": 0,
+      "CONSUMO_MES_6": 0,
+      "CONSUMO_MES_7": 0,
+      "CONSUMO_MES_8": 0,
+      "CONSUMO_MES_9": 0,
+      "CONSUMO_MES_10": 0,
+      "CONSUMO_MES_11": 0,
+      "CONSUMO_MES_12": 0
+    }
+  `;
+  const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType, data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
+  const res = await axios.post(url, payload);
+  let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
+  return JSON.parse(textoLimpo);
+}
+
+// 🧠 PROMPT IA REFEITO PARA TOLERÂNCIA VISUAL MÁXIMA (V26) 🧠
+async function analisarDocumentoIA(base64) {
+  if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${GEMINI_API_KEY}`;
+  
+  const prompt = `
+    A imagem anexa é um documento de identidade brasileiro (RG ou CNH)? 
+    🚨 REGRA TOLERÂNCIA MÁXIMA 🚨: 
+    Se for um documento, MESMO QUE com reflexo ou na tela do PC, defina "VALIDO": true e deixe "OBJETO_IDENTIFICADO" como "".
+    SÓ retorne "VALIDO": false se for CLARAMENTE outro objeto (ex: lata de bebida, foto de paisagem). Nesse caso, escreva o nome do objeto em "OBJETO_IDENTIFICADO".
+    
+    Responda APENAS com este JSON:
+    {
+      "VALIDO": true,
+      "OBJETO_IDENTIFICADO": "",
+      "NOME_DOCUMENTO": "NOME DO TITULAR",
+      "CPF": "00000000000",
+      "DATA_NASCIMENTO": "DD/MM/AAAA"
+    }
+  `;
+  const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
+  const res = await axios.post(url, payload);
+  let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
+  return JSON.parse(textoLimpo);
+}
+
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 26 - FOCO IA TOLERANTE)`));
