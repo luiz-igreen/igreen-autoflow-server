@@ -32,7 +32,7 @@ try {
 const memoriaEstado = new Map();
 const timersInatividade = new Map();
 
-// DICIONÁRIO DE TEXTOS COMPLETOS (COM T28 E T29)
+// DICIONÁRIO DE TEXTOS COMPLETOS (COM T29 ATUALIZADO)
 const TEXTOS = {
     T01: "Seja muito bem-vinda à iGreen Energy. Pra começarmos a sua simulação, por favor, me envie uma foto bem nítida ou o PDF da sua conta de luz.",
     T02: "Estou analisando a sua fatura e a elegibilidade regional. Por favor, aguarde um instante.",
@@ -62,7 +62,7 @@ const TEXTOS = {
     T26: "✅ Os seus documentos foram atualizados com sucesso e o seu cadastro agora está **COMPLETO** no nosso sistema! 🎉\n\nA iGreen Energy agradece a sua confiança.",
     T27: "Aviso: A nossa Inteligência Artificial analisou a imagem e identificou que você enviou um objeto diferente, ao invés do documento solicitado. Por favor, envie a foto correta para continuarmos o seu cadastro.",
     T28: "⚡ Identifiquei que esta fatura já está cadastrada no nosso sistema!\n\nComo encontrei campos em branco no seu cadastro antigo, já aproveitei para os *atualizar* com as informações de Vencimento e Mês da Conta extraídas desta imagem.\n\nDeseja continuar e fazer um *NOVO* cadastro substituindo os documentos enviados anteriormente?\n\nDigite *1* para SIM (Novo Cadastro)\nDigite *2* para CANCELAR (Manter os dados atuais seguros)",
-    T29: "Operação cancelada com sucesso! ✅\n\nOs seus dados atualizados foram mantidos em total segurança no nosso Banco de Dados."
+    T29: "Operação cancelada com sucesso! ✅\n\nOs seus dados atualizados foram mantidos em total segurança no nosso Banco de Dados.\n\nA iGreen Energy agradece o seu contato e a sua confiança! Tenha um excelente dia! 💚"
 };
 
 function cancelarTimeout(phone) {
@@ -143,7 +143,7 @@ app.post('/webhook/igreen', async (req, res) => {
       }
   }
 
-  console.log(`\n📡 [RADAR] Cliente: ${phone} | Estado: [${status}] | Tipo Msg: ${data.type}`);
+  console.log(`\n📡 [RADAR] Cliente: ${phone} | Estado: [${status}] | Tipo Msg: ${data.type} | Texto: ${textoIn}`);
 
   if (textoIn.toLowerCase() === 'cancelar') {
       await enviarFluxo(phone, TEXTOS.T13, "13");
@@ -167,11 +167,12 @@ app.post('/webhook/igreen', async (req, res) => {
   }
   
   if (status === 'CONFIRMANDO_CANCELAMENTO') {
-      if (textoIn === '1') {
+      const txtLimpo = textoIn.replace(/\D/g, '');
+      if (txtLimpo === '1') {
           if (leadRef) await leadRef.delete();
           memoriaEstado.delete(phone);
-          await enviarMensagem(phone, "Cancelamento confirmado. Dados apagados.");
-      } else if (textoIn === '2') {
+          await enviarMensagem(phone, "Cancelamento confirmado. Dados apagados. A iGreen agradece o seu contato!");
+      } else if (txtLimpo === '2') {
           await enviarMensagem(phone, "Cancelamento abortado. Por favor, envie o documento solicitado anteriormente.");
           const prev = memoriaEstado.get(phone)?.PREV_STATUS || 'NOVO';
           atualizarEstado(phone, leadRef, { STATUS_CADASTRO: prev });
@@ -276,10 +277,9 @@ app.post('/webhook/igreen', async (req, res) => {
                           proximoTexto = null;
                           proximoAudio = null;
                       } else if (dadosAnteriores.STATUS_CADASTRO === 'CONCLUIDO') {
-                          // MUDANÇA V22: RECADASTRO INTELIGENTE COM CONFIRMAÇÃO
                           proximoStatus = 'CONFIRMANDO_RECADASTRO';
                           proximoTexto = TEXTOS.T28;
-                          proximoAudio = null; // Sem áudio para não chatear nas opções
+                          proximoAudio = null; 
                       }
                   } else if (!analise.ENDERECO_NUMERO || analise.ENDERECO_NUMERO.trim() === '') {
                       proximoStatus = 'AGUARDANDO_CASA';
@@ -287,7 +287,7 @@ app.post('/webhook/igreen', async (req, res) => {
                       proximoAudio = "03";
                   }
 
-                  // ISTO GARANTE QUE O VENCIMENTO E CONTA MÊS SÃO GRAVADOS IMEDIATAMENTE!
+                  // GRAVAÇÃO IMEDIATA DO VENCIMENTO E MÊS
                   atualizarEstado(phone, leadRef, {
                       ...analise,
                       STATUS_CADASTRO: proximoStatus,
@@ -313,17 +313,18 @@ app.post('/webhook/igreen', async (req, res) => {
           }
           break;
 
-      // NOVO ESTADO V22: MENU DE OPÇÕES (RECADASTRO OU MANTER DADOS)
+      // TRATAMENTO DA RESPOSTA DE RECADASTRO (CORREÇÃO DE SYNC)
       case 'CONFIRMANDO_RECADASTRO':
-          if (textoIn === '1') {
+          const tLimpo = textoIn.replace(/\D/g, ''); 
+          
+          if (tLimpo === '1' || textoIn.toLowerCase().includes('sim') || textoIn.toLowerCase().includes('novo')) {
               atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE' });
               await enviarFluxo(phone, TEXTOS.T04, "04");
               configurarTimeoutInatividade(phone, mem.UC);
-          } else if (textoIn === '2') {
-              // Cancela a operação de recadastro, mas MANTÉM OS DADOS no banco.
-              // Volta o status para CONCLUIDO.
+          } else if (tLimpo === '2' || textoIn.toLowerCase().includes('nao') || textoIn.toLowerCase().includes('cancelar')) {
+              // Devolve ao status de CONCLUÍDO e garante sincronização
               atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'CONCLUIDO' });
-              await enviarMensagem(phone, TEXTOS.T29);
+              await enviarMensagem(phone, TEXTOS.T29); 
               cancelarTimeout(phone);
           } else {
               await enviarMensagem(phone, "Opção inválida. Digite *1* para Novo Cadastro ou *2* para Cancelar e manter seguro.");
@@ -479,8 +480,10 @@ async function atualizarEstado(phone, leadRef, dados) {
     const atual = memoriaEstado.get(phone) || {};
     memoriaEstado.set(phone, { ...atual, ...dados });
     
-    if (leadRef && dados.UC) {
-        await leadRef.set(dados, { merge: true }).catch(e => console.log("Aviso: Falha ao salvar no DB."));
+    // CORREÇÃO CRUCIAL V23: O Firestore agora vai gravar e atualizar a tela em 100% das vezes
+    // sem precisar de validação extra. (Isto remove o Efeito Congelamento!)
+    if (leadRef) {
+        await leadRef.set(dados, { merge: true }).catch(e => console.error("Aviso: Falha ao salvar no DB.", e));
     }
 }
 
@@ -528,7 +531,7 @@ function nomesCompativeis(nomeFatura, nomeDoc) {
     return matches >= 2 || (arrayFatura.length === 1 && matches === 1);
 }
 
-// 🧠 MOTOR IA DEFINITIVO COM IDENTIFICAÇÃO DE OBJETOS + DATAS EXTRAS (V21)
+// 🧠 MOTOR IA DEFINITIVO COM IDENTIFICAÇÃO DE OBJETOS + DATAS EXTRAS
 async function auditarFaturaIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${GEMINI_API_KEY}`;
@@ -666,9 +669,8 @@ async function enviarAudioDireto(phone, prefixo, textoDaMensagem) {
             const base64Audio = fs.readFileSync(filePath, { encoding: 'base64' });
             dataUri = `data:audio/mpeg;base64,${base64Audio}`;
         } else {
-            // MATÁMOS O GOOGLE TTS DE VEZ AQUI!
             console.log(`⚠️ [AVISO] O áudio '${prefixo}' não foi encontrado no seu GitHub. Por favor, faça o upload dele.`);
-            return; // Desiste e NÃO envia áudio robótico.
+            return; 
         }
 
         if (dataUri) {
@@ -682,4 +684,4 @@ async function enviarAudioDireto(phone, prefixo, textoDaMensagem) {
     }
 }
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 22 - RECADASTRO SEGURO)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 23 - SYNC PERFEITO)`));
