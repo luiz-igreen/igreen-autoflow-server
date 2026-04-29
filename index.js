@@ -709,8 +709,9 @@ async function analisarDocumentoIA(base64, mimeType) {
   `;
   const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: mimeType || "image/jpeg", data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
   const res = await axios.post(url, payload);
-  let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/Clipjson/g, '').trim();
+  // CORREÇÃO CRUCIAL AQUI: Limpar corretamente as crases da resposta da IA.
+  let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
   return JSON.parse(textoLimpo);
 }
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 28 - SISTEMA COMPLETO RESTAURADO)`));  
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 29 - LEITURA DOC CORRIGIDA)`));
