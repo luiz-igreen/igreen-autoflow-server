@@ -199,17 +199,16 @@ app.post('/webhook/igreen', async (req, res) => {
 
               const analise = await auditarFaturaIA(base64Data, mimeType);
 
-              // VALIDAÇÃO COM O NOVO PODER DE VISÃO DE OBJETOS
+              // VALIDAÇÃO COM VISÃO DE OBJETOS E VOZ DINÂMICA
               if (!analise.VALIDO) {
-                  // Se a IA identificou um objeto estranho (ex: lata de refrigerante)
                   if (analise.OBJETO_IDENTIFICADO && analise.OBJETO_IDENTIFICADO.trim() !== "") {
                       const msgVisao = `Aviso: Identifiquei que você me enviou *${analise.OBJETO_IDENTIFICADO}* ao invés de uma conta de luz. 👀😅\n\nPor favor, envie uma fatura de energia válida para continuarmos o cadastro.`;
                       await enviarMensagem(phone, msgVisao);
-                      // Espera 2 segundos e envia o áudio padrão de Fatura Inválida
                       await new Promise(r => setTimeout(r, 2000));
-                      await enviarAudioDireto(phone, "09", TEXTOS.T09);
+                      // Aqui está o truque: em vez de pedir o áudio '09', enviamos 'FORCAR_TTS' e o texto dinâmico.
+                      await enviarAudioDireto(phone, "FORCAR_TTS", `Aviso: Identifiquei que você me enviou ${analise.OBJETO_IDENTIFICADO} ao invés de uma conta de luz. Por favor, envie uma fatura de energia válida para continuarmos o cadastro.`);
                   } else {
-                      // Se for só uma fatura borrada ou ilegível, envia o texto/áudio padrão
+                      // Fatura apenas borrada/ilegível -> usa o áudio gravado padrão
                       await enviarFluxo(phone, TEXTOS.T09, "09");
                   }
                   
@@ -355,12 +354,11 @@ app.post('/webhook/igreen', async (req, res) => {
                   await enviarFluxo(phone, TEXTOS.T05, "05");
                   configurarTimeoutInatividade(phone, mem.UC);
               } else {
-                  // MENSAGEM DINÂMICA DE VISÃO PARA O DOCUMENTO
                   if (analiseDoc.OBJETO_IDENTIFICADO && analiseDoc.OBJETO_IDENTIFICADO.trim() !== "") {
                       const msgVisaoDoc = `Aviso: Identifiquei que você me enviou *${analiseDoc.OBJETO_IDENTIFICADO}* ao invés de um documento de identidade. 👀\n\nPor favor, reenvie a foto do seu RG ou CNH com mais foco.`;
                       await enviarMensagem(phone, msgVisaoDoc);
                       await new Promise(r => setTimeout(r, 2000));
-                      await enviarAudioDireto(phone, "11", TEXTOS.T11);
+                      await enviarAudioDireto(phone, "FORCAR_TTS", `Aviso: Identifiquei que você me enviou ${analiseDoc.OBJETO_IDENTIFICADO} ao invés de um documento de identidade. Por favor, reenvie a foto do seu RG ou CNH com mais foco.`);
                   } else {
                       await enviarFluxo(phone, TEXTOS.T11, "11");
                   }
@@ -414,12 +412,11 @@ app.post('/webhook/igreen', async (req, res) => {
                       }
                   }, 4000); 
               } else {
-                  // MENSAGEM DINÂMICA DE VISÃO PARA O DOCUMENTO
                   if (analiseDoc.OBJETO_IDENTIFICADO && analiseDoc.OBJETO_IDENTIFICADO.trim() !== "") {
                       const msgVisaoDoc = `Aviso: Identifiquei que você me enviou *${analiseDoc.OBJETO_IDENTIFICADO}* ao invés do verso do documento. 👀\n\nPor favor, reenvie a foto do verso do seu RG ou CNH.`;
                       await enviarMensagem(phone, msgVisaoDoc);
                       await new Promise(r => setTimeout(r, 2000));
-                      await enviarAudioDireto(phone, "11", TEXTOS.T11);
+                      await enviarAudioDireto(phone, "FORCAR_TTS", `Aviso: Identifiquei que você me enviou ${analiseDoc.OBJETO_IDENTIFICADO} ao invés do verso do documento. Por favor, reenvie a foto do verso do seu RG ou CNH.`);
                   } else {
                       await enviarFluxo(phone, TEXTOS.T11, "11");
                   }
@@ -521,8 +518,8 @@ async function auditarFaturaIA(base64, mimeType) {
     ATENÇÃO: O documento anexo PODE SER UMA FOTO DE UMA TELA DE COMPUTADOR. Isso é 100% VÁLIDO. 
 
     🚨 REGRA ANTI-LIXO VISUAL E ILEGIBILIDADE 🚨:
-    Você tem a capacidade de visão computacional. Se a imagem enviada for uma selfie humana, uma foto de paisagem, de um animal, uma lata de refrigerante, ou QUALQUER objeto que NÃO SEJA uma fatura de luz, você DEVE retornar "VALIDO": false.
-    ⭐ MUITO IMPORTANTE: Se você identificar que NÃO É UMA FATURA, descreva de forma curta e direta o que você está vendo (ex: "uma lata de refrigerante", "um teclado de computador", "uma foto de uma pessoa") no campo "OBJETO_IDENTIFICADO". Se for uma fatura de energia, deixe como "".
+    Você tem a capacidade de visão computacional. Se a imagem enviada for uma selfie humana, uma foto de paisagem, de um animal, uma lata de bebida, ou QUALQUER objeto que NÃO SEJA uma fatura de luz, você DEVE retornar "VALIDO": false.
+    ⭐ MUITO IMPORTANTE: Se você identificar que NÃO É UMA FATURA, descreva de forma curta e direta o que você está vendo (ex: "uma lata de bebida energética", "um teclado de computador", "uma foto de uma pessoa") no campo "OBJETO_IDENTIFICADO". Se for uma fatura de energia, deixe como "".
 
     🚨 REGRA - CPF E CNPJ MASCARADOS (PARA IDENTIFICAR PF OU PJ) 🚨:
     1. Procure a máscara (ex: ***.123.456-** ou **.***.***/0001-**).
@@ -581,7 +578,7 @@ async function analisarDocumentoIA(base64) {
     A imagem anexa é uma foto CLARA de um documento de identidade brasileiro (RG ou CNH)? 
     🚨 REGRA ANTI-LIXO VISUAL 🚨: 
     Se a imagem for uma xícara de café, selfie, uma paisagem, ou qualquer objeto que NÃO SEJA um RG/CNH válido, defina "VALIDO": false.
-    ⭐ MUITO IMPORTANTE: Se não for um documento válido, descreva de forma curta o que você está vendo (ex: "uma lata de refrigerante", "uma caneca", "uma parede") no campo "OBJETO_IDENTIFICADO". Se for um documento, deixe "".
+    ⭐ MUITO IMPORTANTE: Se não for um documento válido, descreva de forma curta o que você está vendo (ex: "uma lata de bebida energética", "uma caneca", "uma parede") no campo "OBJETO_IDENTIFICADO". Se for um documento, deixe "".
     
     Responda APENAS com este JSON:
     {
@@ -628,22 +625,32 @@ function buscarAudioRecursivo(diretorio, prefixo) {
     return null;
 }
 
-// PLANO B DE VOZ (TTS SINTÉTICO SE O MP3 NÃO FOR ACHADO NO GITHUB)
+// PLANO B DE VOZ E VOZ DINÂMICA
 async function enviarAudioDireto(phone, prefixo, textoDaMensagem) {
     try {
-        console.log(`[ÁUDIO] Procurando o arquivo MP3 com prefixo '${prefixo}' no GitHub...`);
-        
-        const filePath = buscarAudioRecursivo(__dirname, prefixo);
         const numeroLimpo = String(phone).replace(/\D/g, ''); 
         let dataUri = "";
-        
-        if (filePath) {
-            console.log(`🔊 [ÁUDIO] Arquivo FÍSICO encontrado! Usando voz profissional: ${filePath}`);
-            const base64Audio = fs.readFileSync(filePath, { encoding: 'base64' });
-            dataUri = `data:audio/mpeg;base64,${base64Audio}`;
-        } else if (textoDaMensagem) {
-            console.log(`⚠️ [AVISO] O áudio '${prefixo}' não foi encontrado na pasta do GitHub. Usando voz do Google como fallback...`);
+        let usarVozSintetica = false;
+
+        // Se a instrução for "FORCAR_TTS", ignoramos a busca local e criamos a voz na hora
+        if (prefixo === "FORCAR_TTS") {
+            console.log(`🔊 [ÁUDIO DINÂMICO] Gerando voz na hora para o objeto identificado...`);
+            usarVozSintetica = true;
+        } else {
+            console.log(`[ÁUDIO] Procurando o arquivo MP3 com prefixo '${prefixo}' no GitHub...`);
+            const filePath = buscarAudioRecursivo(__dirname, prefixo);
             
+            if (filePath) {
+                console.log(`🔊 [ÁUDIO] Arquivo FÍSICO encontrado! Usando voz profissional: ${filePath}`);
+                const base64Audio = fs.readFileSync(filePath, { encoding: 'base64' });
+                dataUri = `data:audio/mpeg;base64,${base64Audio}`;
+            } else {
+                console.log(`⚠️ [AVISO] O áudio '${prefixo}' não foi encontrado. Usando voz do Google como fallback...`);
+                usarVozSintetica = true;
+            }
+        }
+
+        if (usarVozSintetica && textoDaMensagem) {
             let textoAdaptado = textoDaMensagem.replace(/iGreen Energy/gi, "Ai Grín Énergy").replace(/iGreen/gi, "Ai Grín");
             const textoCurto = textoAdaptado.substring(0, 200);
             
