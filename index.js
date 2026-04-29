@@ -363,7 +363,7 @@ app.post('/webhook/igreen', async (req, res) => {
           break;
 
       case 'AGUARDANDO_DOC_FRENTE':
-          if (!isImage) {
+          if (!isImage && !isPDF) {
               await enviarFluxo(phone, TEXTOS.T11, "11");
               configurarTimeoutInatividade(phone, mem.UC);
               return;
@@ -371,7 +371,8 @@ app.post('/webhook/igreen', async (req, res) => {
           try {
               let mediaUrlF = obterMediaUrl(data);
               const base64Frente = await baixarArquivo(mediaUrlF);
-              const analiseDoc = await analisarDocumentoIA(base64Frente);
+              const mimeTypeDoc = isPDF ? "application/pdf" : "image/jpeg";
+              const analiseDoc = await analisarDocumentoIA(base64Frente, mimeTypeDoc);
 
               if (analiseDoc.VALIDO) {
                   const nomeDoc = analiseDoc.NOME_DOCUMENTO || "";
@@ -409,7 +410,7 @@ app.post('/webhook/igreen', async (req, res) => {
           break;
 
       case 'AGUARDANDO_DOC_VERSO':
-          if (!isImage) {
+          if (!isImage && !isPDF) {
               await enviarFluxo(phone, TEXTOS.T11, "11");
               configurarTimeoutInatividade(phone, mem.UC);
               return;
@@ -417,7 +418,8 @@ app.post('/webhook/igreen', async (req, res) => {
           try {
               let mediaUrlV = obterMediaUrl(data);
               const base64Verso = await baixarArquivo(mediaUrlV);
-              const analiseDoc = await analisarDocumentoIA(base64Verso); 
+              const mimeTypeDoc = isPDF ? "application/pdf" : "image/jpeg";
+              const analiseDoc = await analisarDocumentoIA(base64Verso, mimeTypeDoc); 
 
               if (analiseDoc.VALIDO) {
                   const nomeDoc = analiseDoc.NOME_DOCUMENTO || "";
@@ -675,7 +677,7 @@ async function auditarFaturaIA(base64, mimeType) {
 }
 
 // 🧠 PROMPT IA REFEITO PARA TOLERÂNCIA VISUAL MÁXIMA (V26) 🧠
-async function analisarDocumentoIA(base64) {
+async function analisarDocumentoIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${GEMINI_API_KEY}`;
   
@@ -694,10 +696,10 @@ async function analisarDocumentoIA(base64) {
       "DATA_NASCIMENTO": "DD/MM/AAAA"
     }
   `;
-  const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
+  const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: mimeType || "image/jpeg", data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
   const res = await axios.post(url, payload);
   let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
   return JSON.parse(textoLimpo);
 }
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 26 - FOCO IA TOLERANTE)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 27 - CORRECAO DOCUMENTO)`));
