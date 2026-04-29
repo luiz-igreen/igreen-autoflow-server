@@ -617,10 +617,12 @@ function nomesCompativeis(nomeFatura, nomeDoc) {
     return matches >= 2 || (arrayFatura.length === 1 && matches === 1);
 }
 
-// 🧠 PROMPT IA REFEITO PARA TOLERÂNCIA VISUAL MÁXIMA
+// 🧠 PROMPT IA MUDADO PARA GEMINI-2.5-FLASH (ALTA VELOCIDADE) ⚡
 async function auditarFaturaIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${GEMINI_API_KEY}`;
+  
+  // V30: Usando o modelo FLASH para máxima velocidade e performance para escalar 300+ clientes/dia
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
   
   const prompt = `
     Aja como um auditor de dados da iGreen.
@@ -687,10 +689,12 @@ async function auditarFaturaIA(base64, mimeType) {
   return JSON.parse(textoLimpo);
 }
 
-// 🧠 PROMPT IA REFEITO PARA TOLERÂNCIA VISUAL MÁXIMA
+// 🧠 PROMPT IA MUDADO PARA GEMINI-2.5-FLASH (ALTA VELOCIDADE) ⚡
 async function analisarDocumentoIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${GEMINI_API_KEY}`;
+  
+  // V30: Usando o modelo FLASH para máxima velocidade
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
   
   const prompt = `
     A imagem anexa é um documento de identidade brasileiro (RG ou CNH)? 
@@ -709,9 +713,8 @@ async function analisarDocumentoIA(base64, mimeType) {
   `;
   const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: mimeType || "image/jpeg", data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
   const res = await axios.post(url, payload);
-  // CORREÇÃO CRUCIAL AQUI: Limpar corretamente as crases da resposta da IA.
   let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
   return JSON.parse(textoLimpo);
 }
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 29 - LEITURA DOC CORRIGIDA)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 30 - MÁXIMA VELOCIDADE FLASH)`));
