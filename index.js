@@ -151,7 +151,6 @@ app.post('/webhook/igreen', async (req, res) => {
 
   console.log(`\n📡 [RADAR] Cliente: ${phone} | Estado: [${status}] | Msg: ${textoIn}`);
 
-  // V35: TODOS OS COMANDOS GLOBAIS COM 'AWAIT' PARA GARANTIR ESTABILIDADE E EVITAR CRASHES
   if (textoIn.toLowerCase() === 'cancelar' && status !== 'CONFIRMANDO_RECADASTRO' && status !== 'CONFIRMANDO_CANCELAMENTO') {
       await enviarFluxo(phone, TEXTOS.T13, "13"); 
       await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'CONFIRMANDO_CANCELAMENTO', PREV_STATUS: status });
@@ -243,13 +242,15 @@ app.post('/webhook/igreen', async (req, res) => {
                   }
               }
 
-              // V35 - CORREÇÃO DA MÉDIA: Prioridade total para o valor que a IA leu impresso na fatura.
-              let mediaIA = Number(analise.MEDIA_CONSUMO) || 0;
+              // V36: LIMPADOR NUMÉRICO (Remove letras como "kWh" que quebravam a média)
+              let mediaStr = String(analise.MEDIA_CONSUMO || "0").replace(/[^0-9]/g, '');
+              let mediaIA = parseInt(mediaStr, 10) || 0;
+
               if (mediaIA > 0) {
-                  analise.MEDIA_CONSUMO = mediaIA; // Confia na impressora
+                  analise.MEDIA_CONSUMO = mediaIA; // Agora salva os 166 puros e confia na fatura!
               } else {
                   if (mesesComDados > 0) {
-                      analise.MEDIA_CONSUMO = Math.round(somaConsumo / mesesComDados); // Faz a conta se não achar
+                      analise.MEDIA_CONSUMO = Math.round(somaConsumo / mesesComDados); // Matemática de reserva
                   } else {
                       analise.MEDIA_CONSUMO = 0; 
                   }
@@ -405,8 +406,13 @@ app.post('/webhook/igreen', async (req, res) => {
                   }
 
                   let dadosDoc = { LINK_DOC_FRENTE: mediaUrlF, STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO' };
-                  if (analiseDoc.CPF && analiseDoc.CPF !== "Não consta") dadosDoc.CPF = analiseDoc.CPF;
-                  if (analiseDoc.DATA_NASCIMENTO && analiseDoc.DATA_NASCIMENTO !== "Não consta") dadosDoc.DATA_NASCIMENTO = analiseDoc.DATA_NASCIMENTO;
+                  
+                  // V36: PROTEÇÃO E INJEÇÃO SEGURA DO CPF/NASCIMENTO DA FRENTE
+                  const cpfValido = analiseDoc.CPF && analiseDoc.CPF !== "Não consta" && analiseDoc.CPF.trim() !== "" && analiseDoc.CPF !== "null";
+                  if (cpfValido) dadosDoc.CPF = analiseDoc.CPF;
+
+                  const nascValido = analiseDoc.DATA_NASCIMENTO && analiseDoc.DATA_NASCIMENTO !== "Não consta" && analiseDoc.DATA_NASCIMENTO.trim() !== "" && analiseDoc.DATA_NASCIMENTO !== "null";
+                  if (nascValido) dadosDoc.DATA_NASCIMENTO = analiseDoc.DATA_NASCIMENTO;
                   
                   await atualizarEstado(phone, leadRef, dadosDoc);
                   await enviarFluxo(phone, TEXTOS.T05, "05");
@@ -447,8 +453,13 @@ app.post('/webhook/igreen', async (req, res) => {
                   const proximoStatus = jaTemEmail ? 'CONCLUIDO' : 'AGUARDANDO_EMAIL';
                   
                   let dadosDoc = { LINK_DOC_VERSO: mediaUrlV, STATUS_CADASTRO: proximoStatus };
-                  if (analiseDoc.CPF && analiseDoc.CPF !== "Não consta") dadosDoc.CPF = analiseDoc.CPF;
-                  if (analiseDoc.DATA_NASCIMENTO && analiseDoc.DATA_NASCIMENTO !== "Não consta") dadosDoc.DATA_NASCIMENTO = analiseDoc.DATA_NASCIMENTO;
+                  
+                  // V36: PROTEÇÃO E INJEÇÃO SEGURA DO CPF/NASCIMENTO DO VERSO
+                  const cpfValido = analiseDoc.CPF && analiseDoc.CPF !== "Não consta" && analiseDoc.CPF.trim() !== "" && analiseDoc.CPF !== "null";
+                  if (cpfValido) dadosDoc.CPF = analiseDoc.CPF;
+
+                  const nascValido = analiseDoc.DATA_NASCIMENTO && analiseDoc.DATA_NASCIMENTO !== "Não consta" && analiseDoc.DATA_NASCIMENTO.trim() !== "" && analiseDoc.DATA_NASCIMENTO !== "null";
+                  if (nascValido) dadosDoc.DATA_NASCIMENTO = analiseDoc.DATA_NASCIMENTO;
                   
                   await atualizarEstado(phone, leadRef, dadosDoc);
                   
@@ -486,11 +497,10 @@ app.post('/webhook/igreen', async (req, res) => {
           }
           const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
           if (emailRegex.test(textoIn)) {
-              // V35: AWAIT inserido para garantir que não sofre crash antes do envio!
               await atualizarEstado(phone, leadRef, { EMAIL: textoIn, STATUS_CADASTRO: 'CONCLUIDO' });
               await enviarFluxo(phone, TEXTOS.T08, "08");
               
-              memoriaEstado.delete(phone); // Só limpa a memória no fim de tudo
+              memoriaEstado.delete(phone); 
               cancelarTimeout(phone); 
           } else {
               await enviarFluxo(phone, TEXTOS.T12, "12");
@@ -542,7 +552,6 @@ async function baixarArquivo(mediaUrl) {
     throw new Error("Falha ao baixar arquivo após 3 tentativas");
 }
 
-// V35: AWAIT DEVOLVIDO AO AXIOS.POST PARA EVITAR CRASH FATAL DA API
 async function enviarFluxo(phone, texto, prefixoAudio) {
     const numeroLimpo = String(phone).replace(/\D/g, ''); 
     try {
@@ -652,8 +661,8 @@ async function auditarFaturaIA(base64, mimeType) {
     Se achar CPF -> "MASCARA_CPF" e "TIPO_PERFIL" = "PESSOA FISICA".
     Se achar CNPJ -> "MASCARA_CNPJ" e "TIPO_PERFIL" = "PESSOA JURIDICA".
 
-    🚨 REGRA 4 - CONSUMO E MÉDIA 🚨:
-    1. Tente encontrar o "Consumo Médio" ou "Média de Consumo" em kWh impresso na fatura. Se encontrar, extraia o valor exato APENAS EM NÚMEROS para "MEDIA_CONSUMO". Se não encontrar, retorne 0.
+    🚨 REGRA 4 - CONSUMO E MÉDIA (MUITO IMPORTANTE) 🚨:
+    1. Procure a palavra "Média" ou "Consumo Médio" IMPRESSA na fatura. Retorne APENAS OS NÚMEROS no campo "MEDIA_CONSUMO". Se não achar a média impressa, retorne 0.
     2. Extraia os números de kWh dos meses anteriores.
     
     Responda EXATAMENTE com este objeto JSON:
@@ -707,22 +716,24 @@ async function analisarDocumentoIA(base64, mimeType) {
   
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
   
-  // V35: MODO CAÇADOR AGRESSIVO ATIVADO PARA CPF E DATA NASCIMENTO
+  // V36: MODO CAÇADOR EXTREMO PARA CPF E DATA NASCIMENTO
   const prompt = `
-    A imagem anexa é um documento de identidade brasileiro (RG ou CNH)? 
-    Se for, defina "VALIDO": true e deixe "OBJETO_IDENTIFICADO" como "".
-    SÓ retorne "VALIDO": false se for CLARAMENTE outro objeto. Nesse caso, escreva o nome do objeto em "OBJETO_IDENTIFICADO".
+    Você é um perito em extração de dados (OCR) de CNH e RG brasileiros.
+    A imagem anexa é uma das faces do documento de identidade.
     
-    🚨 REGRA DE DADOS VITAIS 🚨:
-    Procure com LUPA pelo número do CPF (11 dígitos, com ou sem pontuação) e pela Data de Nascimento (DD/MM/AAAA). 
-    Eles podem estar na frente ou no verso do documento, procure em toda a imagem! Se achar, preencha os campos "CPF" e "DATA_NASCIMENTO". Se não achar de forma alguma, retorne "Não consta".
+    🚨 EXTRAÇÃO DE DADOS VITAIS (CRÍTICO) 🚨:
+    1. NOME_DOCUMENTO: Nome do Titular.
+    2. CPF: Procure o número do CPF (11 dígitos). Na CNH, fica geralmente abaixo da foto na frente. No RG, pode estar no verso ou na frente. Extraia APENAS o número.
+    3. DATA_NASCIMENTO: Procure a data de nascimento (DD/MM/AAAA).
+    
+    Se visualizar os dados, preencha as chaves. Se a face da imagem não contiver esses dados (ex: verso de CNH sem CPF), retorne "Não consta".
     
     Responda APENAS com este JSON:
     {
       "VALIDO": true,
       "OBJETO_IDENTIFICADO": "",
       "NOME_DOCUMENTO": "NOME DO TITULAR",
-      "CPF": "00000000000",
+      "CPF": "000.000.000-00",
       "DATA_NASCIMENTO": "DD/MM/AAAA"
     }
   `;
@@ -732,4 +743,4 @@ async function analisarDocumentoIA(base64, mimeType) {
   return JSON.parse(textoLimpo);
 }
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 35 - BLINDAGEM QA)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 36 - BLINDAGEM MEDIA E CPF)`));
