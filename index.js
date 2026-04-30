@@ -61,7 +61,7 @@ const TEXTOS = {
     T25: "Olá! Agradecemos muito o seu interesse. 💚\n\nApós analisar a sua fatura, verificamos que a sua média de consumo está abaixo do mínimo exigido no momento para a sua região.\n\nPor isso, não poderemos prosseguir com o cadastro agora. Guardaremos o seu contacto para o avisar em futuras oportunidades!",
     T26: "✅ Os seus documentos foram atualizados com sucesso e o seu cadastro agora está **COMPLETO** no nosso sistema! 🎉\n\nA iGreen Energy agradece a sua confiança.",
     T27: "Aviso: A nossa Inteligência Artificial analisou a imagem e identificou que você enviou um objeto diferente, ao invés do documento solicitado. Por favor, envie a foto correta para continuarmos o seu cadastro.",
-    T28: "⚡ Identifiquei que esta fatura já está cadastrada no nosso sistema!\n\nComo encontrei campos em branco no seu cadastro antigo, já aproveitei para os *atualizar* com as informações de Vencimento e Mês da Conta extraídas desta imagem.\n\nDeseja continuar e fazer um *NOVO* cadastro substituindo os documentos enviados anteriormente?\n\nDigite *1* para SIM (Novo Cadastro)\nDigite *2* para CANCELAR (Manter os dados atuais seguros)",
+    T28: "⚡ Identifiquei que esta fatura já está cadastrada no nosso sistema!\n\nComo encontrei campos em branco no seu cadastro antigo, já aproveitei para os *atualizar* com as informações de Vencimento, Bairro e Cidade extraídas desta imagem.\n\nDeseja continuar e fazer um *NOVO* cadastro substituindo os documentos enviados anteriormente?\n\nDigite *1* para SIM (Novo Cadastro)\nDigite *2* para CANCELAR (Manter os dados atuais seguros)",
     T29: "Operação cancelada com sucesso! ✅\n\nOs seus dados atualizados foram mantidos em total segurança no nosso Banco de Dados.\n\nA iGreen Energy agradece o seu contato e a sua confiança! Tenha um excelente dia! 💚"
 };
 
@@ -300,8 +300,16 @@ app.post('/webhook/igreen', async (req, res) => {
                           DATA_PROCESSAMENTO: admin.apps.length > 0 ? admin.firestore.Timestamp.now() : new Date(),
                           TELEFONE: phone
                       };
+                      // V32: ESCUDO DE PROTEÇÃO ABERTO PARA ATUALIZAR A MORADA
                       if (analise.CONTA_MES && analise.CONTA_MES !== "Não consta") payloadUpdate.CONTA_MES = analise.CONTA_MES;
                       if (analise.VENCIMENTO && analise.VENCIMENTO !== "Não consta") payloadUpdate.VENCIMENTO = analise.VENCIMENTO;
+                      
+                      // Agora o Recadastro também atualiza o Bairro, Cidade e Endereço Completo
+                      if (analise.BAIRRO && analise.BAIRRO !== "Não consta") payloadUpdate.BAIRRO = analise.BAIRRO;
+                      if (analise.CIDADE && analise.CIDADE !== "Não consta") payloadUpdate.CIDADE = analise.CIDADE;
+                      if (analise.ENDERECO && analise.ENDERECO !== "Não consta") payloadUpdate.ENDERECO = analise.ENDERECO;
+                      if (analise.CEP && analise.CEP !== "Não consta") payloadUpdate.CEP = analise.CEP;
+                      if (analise.ESTADO && analise.ESTADO !== "Não consta") payloadUpdate.ESTADO = analise.ESTADO;
                   } else {
                       payloadUpdate = {
                           ...analise,
@@ -621,7 +629,6 @@ function nomesCompativeis(nomeFatura, nomeDoc) {
 async function auditarFaturaIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
   
-  // V31: GAVETAS DE BAIRRO E CIDADE ATIVAS E PREPARADAS NO PROMPT
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
   
   const prompt = `
@@ -696,7 +703,6 @@ async function auditarFaturaIA(base64, mimeType) {
 async function analisarDocumentoIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
   
-  // V31: Usando o modelo FLASH para máxima velocidade
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
   
   const prompt = `
@@ -720,4 +726,4 @@ async function analisarDocumentoIA(base64, mimeType) {
   return JSON.parse(textoLimpo);
 }
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 31 - CORREÇÃO ENDEREÇO ATIVA)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 32 - ESCUDO DE MORADA ABERTO)`));
