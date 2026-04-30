@@ -621,7 +621,7 @@ function nomesCompativeis(nomeFatura, nomeDoc) {
 async function auditarFaturaIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
   
-  // V30: Usando o modelo FLASH para máxima velocidade e performance para escalar 300+ clientes/dia
+  // V31: GAVETAS DE BAIRRO E CIDADE ATIVAS E PREPARADAS NO PROMPT
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
   
   const prompt = `
@@ -631,9 +631,10 @@ async function auditarFaturaIA(base64, mimeType) {
     Se a imagem contiver UMA FATURA DE ENERGIA (mesmo que seja foto de uma tela de computador, com reflexo, dedos aparecendo ou um pouco borrada), VOCÊ DEVE RETORNAR "VALIDO": true.
     SÓ retorne "VALIDO": false se for ABSOLUTAMENTE um objeto aleatório sem fatura (ex: lata de bebida, pessoa, carro). Neste caso único, descreva o que é em "OBJETO_IDENTIFICADO" (ex: "uma lata de bebida"). Se for fatura, deixe "".
 
-    🚨 REGRA 2 - DATAS EXTRAS 🚨:
+    🚨 REGRA 2 - DATAS E ENDEREÇOS EXTRAS 🚨:
     1. Identifique o Mês de Referência (ex: 04/2026, Abril/2026) e coloque em "CONTA_MES".
     2. Identifique o Vencimento e coloque em "VENCIMENTO" (DD/MM/AAAA).
+    3. Identifique rigorosamente o Bairro e a Cidade presentes no endereço e coloque em "BAIRRO" e "CIDADE".
     Se não achar, use "Não consta".
 
     🚨 REGRA 3 - PF OU PJ (MÁSCARAS) 🚨:
@@ -661,6 +662,8 @@ async function auditarFaturaIA(base64, mimeType) {
       "CEP": "00000-000",
       "ENDERECO": "Endereco",
       "ENDERECO_NUMERO": "Numero",
+      "BAIRRO": "Bairro",
+      "CIDADE": "Cidade",
       "ESTADO": "UF",
       "DISTRIBUIDORA": "Nome",
       "TIPO_LIGACAO": "Monofasico",
@@ -693,7 +696,7 @@ async function auditarFaturaIA(base64, mimeType) {
 async function analisarDocumentoIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
   
-  // V30: Usando o modelo FLASH para máxima velocidade
+  // V31: Usando o modelo FLASH para máxima velocidade
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
   
   const prompt = `
@@ -717,4 +720,4 @@ async function analisarDocumentoIA(base64, mimeType) {
   return JSON.parse(textoLimpo);
 }
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 30 - MÁXIMA VELOCIDADE FLASH)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 31 - CORREÇÃO ENDEREÇO ATIVA)`));
