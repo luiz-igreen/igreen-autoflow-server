@@ -662,8 +662,9 @@ async function auditarFaturaIA(base64, mimeType) {
     Se achar CNPJ -> "MASCARA_CNPJ" e "TIPO_PERFIL" = "PESSOA JURIDICA".
 
     🚨 REGRA 4 - CONSUMO E MÉDIA (MUITO IMPORTANTE) 🚨:
-    1. Procure a palavra "Média" ou "Consumo Médio" IMPRESSA na fatura. Retorne APENAS OS NÚMEROS no campo "MEDIA_CONSUMO". Se não achar a média impressa, retorne 0.
-    2. Extraia os números de kWh dos meses anteriores.
+    1. Procure as palavras "Média", "Consumo Médio" ou "Média de Consumo" IMPRESSA na fatura. Extraia o NÚMERO EXATO que está impresso lá (ex: 166) para o campo "MEDIA_CONSUMO".
+    2. É PROIBIDO FAZER CÁLCULOS MATEMÁTICOS! Não some os meses. Leia apenas o valor que está escrito no papel. Se não achar a palavra média no papel, retorne 0.
+    3. Extraia os números de kWh dos meses anteriores.
     
     Responda EXATAMENTE com este objeto JSON:
     {
