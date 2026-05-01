@@ -84,6 +84,7 @@ function cancelarTimeout(phone) {
 function configurarTimeoutInatividade(phone, ucInacabada = null) {
     cancelarTimeout(phone); 
     const timeoutId = setTimeout(async () => {
+        console.log(`[TIMEOUT] Cancelando espera do cliente ${phone}`);
         await enviarFluxo(phone, TEXTOS.T21, "21");
         if (ucInacabada) {
             const db = admin.apps.length > 0 ? admin.firestore() : null;
@@ -94,7 +95,7 @@ function configurarTimeoutInatividade(phone, ucInacabada = null) {
         }
         memoriaEstado.delete(phone);
         timersInatividade.delete(phone);
-    }, 15 * 60 * 1000); 
+    }, 15 * 60 * 1000); // 15 Minutos de Inatividade
     timersInatividade.set(phone, timeoutId);
 }
 
@@ -116,28 +117,37 @@ app.post('/webhook/igreen', async (req, res) => {
   cancelarTimeout(phone);
   
   // ==============================================================================================
-  // VIA VERDE (BYPASS): VELOCIDADE MÁXIMA PARA O MENU INICIAL, IGNORANDO O FIREBASE COMPLETAMENTE
+  // VIA VERDE (BYPASS): VELOCIDADE MÁXIMA PARA O MENU E ATALHO 'NOVO'
   // ==============================================================================================
-  const chamadasMenu = ['oi', 'olá', 'ola', 'menu', 'novo', 'iniciar'];
+  const chamadasMenu = ['oi', 'olá', 'ola', 'menu', 'iniciar'];
+  const chamadasNovo = ['novo', 'nova'];
   
-  if (!isImage && !isPDF && chamadasMenu.includes(txtL)) {
-      console.log(`⚡ [VIA VERDE] Comando '${txtL}' recebido de ${phone}. Enviando Menu INSTANTÂNEO!`);
+  if (!isImage && !isPDF) {
+      // 1. O CLIENTE SÓ DISSE 'OI' (Mostra Menu Cavalheiro)
+      if (chamadasMenu.includes(txtL)) {
+          console.log(`⚡ [VIA VERDE] Comando '${txtL}' recebido de ${phone}. Enviando Menu INSTANTÂNEO!`);
+          const saudacao = obterSaudacao();
+          const menuText = `${saudacao}! Aqui é o assistente virtual da iGreen Energy 💚\n\nInforme qual a opção que você deseja iniciar:\n\n1️⃣ - Novo Cadastro\n2️⃣ - Atualizar Cadastro\n3️⃣ - Cancelar Cadastro que Iniciei`;
+          enviarMensagem(phone, menuText); 
+          memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_OPCAO_MENU', TELEFONE: phone });
+          configurarTimeoutInatividade(phone, null);
+          return; 
+      }
       
-      const saudacao = obterSaudacao();
-      const menuText = `${saudacao}! Aqui é da iGreen Energy 💚\n\nInforme qual a opção que você deseja iniciar:\n\n1️⃣ - Novo Cadastro\n2️⃣ - Atualizar Cadastro\n3️⃣ - Cancelar Cadastro que Iniciei`;
-      
-      // Envia a resposta sem "await", não espera! Resposta em 0.5s!
-      enviarMensagem(phone, menuText); 
-      
-      // Salva o estado em background (em memória) para avançar
-      memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_OPCAO_MENU', TELEFONE: phone });
-      configurarTimeoutInatividade(phone, null);
-      return; 
+      // 2. O CLIENTE JÁ DIGITOU 'NOVO' (Ignora Menu, vai direto para Fatura)
+      if (chamadasNovo.includes(txtL)) {
+          console.log(`⚡ [VIA VERDE] Comando 'NOVO' recebido de ${phone}. Pedindo Fatura INSTANTÂNEO!`);
+          memoriaEstado.delete(phone); // Limpa resquícios antigos
+          enviarFluxo(phone, TEXTOS.T01, "01"); // Envia mensagem da conta de luz na hora
+          memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', TELEFONE: phone });
+          configurarTimeoutInatividade(phone, null);
+          return;
+      }
   }
 
   // ==============================================================================================
-  
-  // SÓ VAI AO FIREBASE DEPOIS DE VALIDAR SE NÃO É UMA CHAMADA DE MENU RÁPIDA
+  // FOCO NA MEMÓRIA PRIMEIRO (Evitar lentidão do Firebase)
+  // ==============================================================================================
   const db = admin.apps.length > 0 ? admin.firestore() : null;
   const appId = 'igreen-autoflow-v4';
   
@@ -146,14 +156,14 @@ app.post('/webhook/igreen', async (req, res) => {
   let mem = memoriaEstado.get(phone);
   let leadData = mem || {};
 
-  if (db) {
-      const leadsColl = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('leads');
-      
-      if (mem && mem.UC) {
-          leadRef = leadsColl.doc(mem.UC);
-          status = mem.STATUS_CADASTRO;
-      } else {
-          // Esta linha que estava causando lentidão no NOVO, mas agora o NOVO passa direto antes daqui!
+  if (mem && mem.STATUS_CADASTRO) {
+      status = mem.STATUS_CADASTRO;
+      if (db && mem.UC) {
+          leadRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('leads').doc(mem.UC);
+      }
+  } else if (db) {
+      try {
+          const leadsColl = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('leads');
           const snapshot = await leadsColl.where('TELEFONE', '==', phone).get();
           if (!snapshot.empty) {
               let docs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -171,6 +181,8 @@ app.post('/webhook/igreen', async (req, res) => {
                   memoriaEstado.set(phone, latest);
               }
           }
+      } catch(e) {
+          console.error("⚠️ Erro ao consultar histórico no banco de dados (Tolerado).");
       }
   }
 
@@ -191,7 +203,7 @@ app.post('/webhook/igreen', async (req, res) => {
   }
 
   // ==========================================
-  // O GRANDE CÉREBRO E OS STATUS
+  // O CÉREBRO E OS STATUS DA CONVERSA
   // ==========================================
   if (status === 'CONFIRMANDO_CANCELAMENTO') {
       const txtLimpo = textoIn.replace(/\D/g, '');
@@ -220,6 +232,7 @@ app.post('/webhook/igreen', async (req, res) => {
           }
           const opMenu = textoIn.replace(/\D/g, '');
           if (opMenu === '1') {
+              console.log(`🎯 Cliente ${phone} escolheu Opção 1 (Novo). Avançando...`);
               await enviarFluxo(phone, TEXTOS.T01, "01"); // Envia texto da fatura
               await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'AGUARDANDO_FATURA' });
               configurarTimeoutInatividade(phone, null);
@@ -240,9 +253,8 @@ app.post('/webhook/igreen', async (req, res) => {
       case 'NOVO':
       case 'AGUARDANDO_FATURA':
           if (!isImage && !isPDF) {
-              // Se digitar texto perdido, mostra o Menu!
               const saudacaoRep = obterSaudacao();
-              const menuRep = `${saudacaoRep}! Aqui é da iGreen Energy 💚\n\nInforme qual a opção que você deseja iniciar:\n\n1️⃣ - Novo Cadastro\n2️⃣ - Atualizar Cadastro\n3️⃣ - Cancelar Cadastro que Iniciei`;
+              const menuRep = `${saudacaoRep}! Aqui é o assistente virtual da iGreen Energy 💚\n\nInforme qual a opção que você deseja iniciar:\n\n1️⃣ - Novo Cadastro\n2️⃣ - Atualizar Cadastro\n3️⃣ - Cancelar Cadastro que Iniciei`;
               await enviarMensagem(phone, menuRep);
               await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'AGUARDANDO_OPCAO_MENU' });
               configurarTimeoutInatividade(phone, null);
@@ -327,6 +339,7 @@ app.post('/webhook/igreen', async (req, res) => {
                       docExistente = await leadRef.get();
                   }
 
+                  // A SUA LÓGICA DE REAPROVEITAMENTO SILENCIOSO DA UC
                   if (docExistente && docExistente.exists) {
                       const dadosAnteriores = docExistente.data();
                       const faltaDocs = !dadosAnteriores.LINK_DOC_FRENTE || !dadosAnteriores.CPF || dadosAnteriores.CPF === "Não consta";
@@ -575,7 +588,7 @@ app.post('/webhook/igreen', async (req, res) => {
       case 'CONCLUIDO':
           if (textoIn && !isImage && !isPDF) {
               const saudacaoRep = obterSaudacao();
-              const menuRep = `${saudacaoRep}! Aqui é da iGreen Energy 💚\n\nInforme qual a opção que você deseja iniciar:\n\n1️⃣ - Novo Cadastro\n2️⃣ - Atualizar Cadastro\n3️⃣ - Cancelar Cadastro que Iniciei`;
+              const menuRep = `${saudacaoRep}! Aqui é o assistente virtual da iGreen Energy 💚\n\nInforme qual a opção que você deseja iniciar:\n\n1️⃣ - Novo Cadastro\n2️⃣ - Atualizar Cadastro\n3️⃣ - Cancelar Cadastro que Iniciei`;
               await enviarMensagem(phone, menuRep);
               await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'AGUARDANDO_OPCAO_MENU' });
           } else if (isImage || isPDF) {
@@ -745,4 +758,4 @@ async function analisarDocumentoIA(base64, mimeType, faceEsperada) {
   return JSON.parse(textoLimpo);
 }
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 41 - MENU INTELIGENTE E VIA VERDE ATIVADOS)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 43 - NOVO EXCLUSIVO E DIRETO)`));
