@@ -470,7 +470,9 @@ app.post('/webhook/igreen', async (req, res) => {
                   const nomeDoc = analiseDoc.NOME_DOCUMENTO || "";
                   const nomeFatura = leadData.NOME_CLIENTE || "";
 
+                  // Verificação de segurança apenas se o nome existir na frente do doc
                   if (nomeDoc !== "Não consta" && !nomesCompativeis(nomeFatura, nomeDoc)) {
+                      // Nota: Se você estiver usando faturas de teste e documentos com nomes diferentes, o robô vai rejeitar!
                       await enviarFluxo(phone, TEXTOS.T22, "22");
                       configurarTimeoutInatividade(phone, mem.UC);
                       return; 
@@ -489,7 +491,7 @@ app.post('/webhook/igreen', async (req, res) => {
                   configurarTimeoutInatividade(phone, mem.UC);
               } else {
                   if (analiseDoc.OBJETO_IDENTIFICADO && analiseDoc.OBJETO_IDENTIFICADO.trim() !== "") {
-                      const msgVisaoDoc = `Aviso: Eu identifiquei que você me enviou *${analiseDoc.OBJETO_IDENTIFICADO}* 👀.\n\nPor favor, reenvie a foto apenas da FRENTE do seu RG ou CNH com mais foco.`;
+                      const msgVisaoDoc = `Aviso: Eu identifiquei que você me enviou *${analiseDoc.OBJETO_IDENTIFICADO}* 👀.\n\nPor favor, reenvie a foto apenas da FRENTE do seu RG ou CNH.`;
                       await enviarMensagem(phone, msgVisaoDoc);
                       setTimeout(async () => await enviarAudioDireto(phone, "27", TEXTOS.T27), 2000);
                   } else {
@@ -699,6 +701,10 @@ function nomesCompativeis(nomeFatura, nomeDoc) {
     return matches >= 2 || (arrayFatura.length === 1 && matches === 1);
 }
 
+// =========================================================================
+// O CÉREBRO DA IA (ATUALIZADO NA V44 COM O "CURSO DE DOCUMENTOS BRASILEIROS")
+// =========================================================================
+
 // IA DA FATURA
 async function auditarFaturaIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave ausente!");
@@ -732,23 +738,30 @@ async function auditarFaturaIA(base64, mimeType) {
   return JSON.parse(textoLimpo);
 }
 
-// IA DE DOCUMENTOS
+// IA DE DOCUMENTOS (ATUALIZADA)
 async function analisarDocumentoIA(base64, mimeType, faceEsperada) {
   if (!GEMINI_API_KEY) throw new Error("Chave ausente!");
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+  
   const prompt = `
-    Você é um perito em extração de dados de CNH e RG. O sistema solicitou: **${faceEsperada}**.
-    🚨 REGRA DE VALIDAÇÃO (FRENTE VS VERSO) 🚨:
-    1. FRENTE: É obrigatório ter a FOTO do rosto do titular.
-    2. VERSO: É a parte que NÃO TEM a foto do rosto.
-    
-    Se a imagem NÃO for documento, retorne VALIDO: false e diga o que viu em OBJETO_IDENTIFICADO.
-    Se a imagem for documento, mas a face ERRADA, retorne VALIDO: false e em OBJETO_IDENTIFICADO escreva: "a face errada do documento (você enviou o lado contrário)".
-    
+    Você é um perito em extração de dados de CNH e RG brasileiros com Visão Computacional avançada.
+    O sistema solicitou a face: **${faceEsperada}**.
+
+    🚨 COMO RECONHECER CNH E RG BRASILEIROS 🚨:
+    - CNH Aberta (plástica tirada): Mostra a FOTO e TODOS OS DADOS na mesma imagem. ACEITE-A TANTO PARA "FRENTE" QUANTO PARA "VERSO".
+    - RG Frente: Tem a FOTO do rosto, polegar e assinatura. Não tem os dados de texto.
+    - RG Verso: NÃO tem a foto do rosto. Tem todo o texto (Nome, Filiação, CPF, Data de Nascimento).
+    - CNH Frente (dobrada): Tem a FOTO do rosto e os dados principais.
+    - CNH Verso (dobrada): NÃO tem foto do rosto, apenas dados do documento e validade.
+
+    🚨 REGRA DE APROVAÇÃO 🚨:
+    1. Se a imagem NÃO for documento (ex: selfie, paisagem), retorne VALIDO: false e descreva o objeto em OBJETO_IDENTIFICADO.
+    2. Se o sistema pediu FRENTE: A imagem DEVE conter a FOTO do rosto do titular. (Exceção: se você ver claramente que é o VERSO de um RG, cheio de textos e sem foto, retorne VALIDO: false e escreva em OBJETO_IDENTIFICADO: "o verso do documento (você enviou o lado contrário)").
+    3. Se o sistema pediu VERSO: A imagem para RG NÃO deve ter foto do rosto. (Exceção: se for a FRENTE do RG só com a foto e digital, retorne VALIDO: false e escreva em OBJETO_IDENTIFICADO: "a frente do documento (você enviou o lado contrário)"). SE FOR CNH ABERTA, ACEITE COMO VERSO TAMBÉM.
+
     🚨 EXTRAÇÃO VITAL 🚨:
-    Se for a face correta (${faceEsperada}), extraia:
-    NOME_DOCUMENTO, CPF, DATA_NASCIMENTO. Se não achar, retorne "Não consta", mas mantenha VALIDO: true se for a face certa.
-    
+    Extraia NOME_DOCUMENTO, CPF, DATA_NASCIMENTO. Se não encontrar na face atual (ex: RG Frente não tem esses dados), retorne "Não consta", mas mantenha VALIDO: true se for a face certa.
+
     Responda APENAS com JSON:
     { "VALIDO": true, "OBJETO_IDENTIFICADO": "", "NOME_DOCUMENTO": "NOME", "CPF": "000.000.000-00", "DATA_NASCIMENTO": "DD/MM/AAAA" }
   `;
@@ -758,4 +771,4 @@ async function analisarDocumentoIA(base64, mimeType, faceEsperada) {
   return JSON.parse(textoLimpo);
 }
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 43 - NOVO EXCLUSIVO E DIRETO)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 44 - CURSO DE RG E CNH PARA A IA)`));
