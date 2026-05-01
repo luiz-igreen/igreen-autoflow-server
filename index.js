@@ -149,7 +149,7 @@ app.post('/webhook/igreen', async (req, res) => {
       }
   }
 
-  console.log(`\n📡 [RADAR] Cliente: ${phone} | Estado: [${status}] | Msg: ${textoIn}`);
+  console.log(`\n📡 [RADAR] Cliente: ${phone} | Estado: [${status}] | Msg/Img: ${isImage ? 'IMAGEM' : textoIn}`);
 
   if (textoIn.toLowerCase() === 'cancelar' && status !== 'CONFIRMANDO_RECADASTRO' && status !== 'CONFIRMANDO_CANCELAMENTO') {
       await enviarFluxo(phone, TEXTOS.T13, "13"); 
@@ -242,15 +242,14 @@ app.post('/webhook/igreen', async (req, res) => {
                   }
               }
 
-              // V36: LIMPADOR NUMÉRICO (Remove letras como "kWh" que quebravam a média)
               let mediaStr = String(analise.MEDIA_CONSUMO || "0").replace(/[^0-9]/g, '');
               let mediaIA = parseInt(mediaStr, 10) || 0;
 
               if (mediaIA > 0) {
-                  analise.MEDIA_CONSUMO = mediaIA; // Agora salva os 166 puros e confia na fatura!
+                  analise.MEDIA_CONSUMO = mediaIA; 
               } else {
                   if (mesesComDados > 0) {
-                      analise.MEDIA_CONSUMO = Math.round(somaConsumo / mesesComDados); // Matemática de reserva
+                      analise.MEDIA_CONSUMO = Math.round(somaConsumo / mesesComDados); 
                   } else {
                       analise.MEDIA_CONSUMO = 0; 
                   }
@@ -345,6 +344,12 @@ app.post('/webhook/igreen', async (req, res) => {
           break;
 
       case 'CONFIRMANDO_RECADASTRO':
+          // V39: ESCUDO ANTI-PARALISIA PARA IMAGENS ONDE DEVERIA SER TEXTO
+          if (isImage || isPDF) {
+              await enviarMensagem(phone, "Por favor, digite *1*, *2* ou *3* para escolher uma das opções acima antes de me enviar novos documentos. 🎯");
+              configurarTimeoutInatividade(phone, mem.UC);
+              return;
+          }
           const tLimpo = textoIn.replace(/\D/g, ''); 
           
           if (tLimpo === '1' || textoIn.toLowerCase() === 'novo') {
@@ -371,6 +376,12 @@ app.post('/webhook/igreen', async (req, res) => {
           break;
 
       case 'AGUARDANDO_CASA':
+          // V39: ESCUDO ANTI-PARALISIA PARA IMAGENS
+          if (isImage || isPDF) {
+              await enviarMensagem(phone, "Aviso: Eu pedi para você digitar o número da residência, mas você me enviou um documento/imagem. 😅\n\nPor favor, *digite* apenas o número da sua casa ou apartamento.");
+              configurarTimeoutInatividade(phone, mem.UC);
+              return;
+          }
           if (!textoIn) {
               configurarTimeoutInatividade(phone, mem.UC);
               return;
@@ -393,7 +404,8 @@ app.post('/webhook/igreen', async (req, res) => {
               let mediaUrlF = obterMediaUrl(data);
               const base64Frente = await baixarArquivo(mediaUrlF);
               const mimeTypeDoc = isPDF ? "application/pdf" : "image/jpeg";
-              const analiseDoc = await analisarDocumentoIA(base64Frente, mimeTypeDoc);
+              
+              const analiseDoc = await analisarDocumentoIA(base64Frente, mimeTypeDoc, "FRENTE");
 
               if (analiseDoc.VALIDO) {
                   const nomeDoc = analiseDoc.NOME_DOCUMENTO || "";
@@ -407,7 +419,6 @@ app.post('/webhook/igreen', async (req, res) => {
 
                   let dadosDoc = { LINK_DOC_FRENTE: mediaUrlF, STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO' };
                   
-                  // V36: PROTEÇÃO E INJEÇÃO SEGURA DO CPF/NASCIMENTO DA FRENTE
                   const cpfValido = analiseDoc.CPF && analiseDoc.CPF !== "Não consta" && analiseDoc.CPF.trim() !== "" && analiseDoc.CPF !== "null";
                   if (cpfValido) dadosDoc.CPF = analiseDoc.CPF;
 
@@ -419,7 +430,8 @@ app.post('/webhook/igreen', async (req, res) => {
                   configurarTimeoutInatividade(phone, mem.UC);
               } else {
                   if (analiseDoc.OBJETO_IDENTIFICADO && analiseDoc.OBJETO_IDENTIFICADO.trim() !== "") {
-                      const msgVisaoDoc = `Aviso: Identifiquei que você me enviou *${analiseDoc.OBJETO_IDENTIFICADO}* ao invés de um documento de identidade. 👀\n\nPor favor, reenvie a foto do seu RG ou CNH com mais foco.`;
+                      // O Robô visual em ação!
+                      const msgVisaoDoc = `Aviso: Eu identifiquei que você me enviou *${analiseDoc.OBJETO_IDENTIFICADO}* 👀.\n\nPor favor, reenvie a foto apenas da FRENTE do seu RG ou CNH com mais foco.`;
                       await enviarMensagem(phone, msgVisaoDoc);
                       setTimeout(async () => await enviarAudioDireto(phone, "27", TEXTOS.T27), 2000);
                   } else {
@@ -444,7 +456,8 @@ app.post('/webhook/igreen', async (req, res) => {
               let mediaUrlV = obterMediaUrl(data);
               const base64Verso = await baixarArquivo(mediaUrlV);
               const mimeTypeDoc = isPDF ? "application/pdf" : "image/jpeg";
-              const analiseDoc = await analisarDocumentoIA(base64Verso, mimeTypeDoc); 
+              
+              const analiseDoc = await analisarDocumentoIA(base64Verso, mimeTypeDoc, "VERSO"); 
 
               if (analiseDoc.VALIDO) {
                   await enviarFluxo(phone, TEXTOS.T06, "06");
@@ -454,7 +467,6 @@ app.post('/webhook/igreen', async (req, res) => {
                   
                   let dadosDoc = { LINK_DOC_VERSO: mediaUrlV, STATUS_CADASTRO: proximoStatus };
                   
-                  // V36: PROTEÇÃO E INJEÇÃO SEGURA DO CPF/NASCIMENTO DO VERSO
                   const cpfValido = analiseDoc.CPF && analiseDoc.CPF !== "Não consta" && analiseDoc.CPF.trim() !== "" && analiseDoc.CPF !== "null";
                   if (cpfValido) dadosDoc.CPF = analiseDoc.CPF;
 
@@ -475,7 +487,8 @@ app.post('/webhook/igreen', async (req, res) => {
                   }, 4000); 
               } else {
                   if (analiseDoc.OBJETO_IDENTIFICADO && analiseDoc.OBJETO_IDENTIFICADO.trim() !== "") {
-                      const msgVisaoDoc = `Aviso: Identifiquei que você me enviou *${analiseDoc.OBJETO_IDENTIFICADO}* ao invés do verso do documento. 👀\n\nPor favor, reenvie a foto do verso do seu RG ou CNH.`;
+                      // O Robô visual em ação!
+                      const msgVisaoDoc = `Aviso: Eu identifiquei que você me enviou *${analiseDoc.OBJETO_IDENTIFICADO}* 👀.\n\nPor favor, reenvie a foto apenas do VERSO do seu RG ou CNH.`;
                       await enviarMensagem(phone, msgVisaoDoc);
                       setTimeout(async () => await enviarAudioDireto(phone, "27", TEXTOS.T27), 2000);
                   } else {
@@ -491,10 +504,18 @@ app.post('/webhook/igreen', async (req, res) => {
           break;
 
       case 'AGUARDANDO_EMAIL':
+          // V39: ESCUDO ANTI-PARALISIA - O GRANDE CORRETIVO DO E-MAIL
+          if (isImage || isPDF) {
+              await enviarMensagem(phone, "Aviso: Eu estou aguardando você *digitar* o seu e-mail, mas você me enviou uma imagem/documento. 😅\n\nPor favor, apenas *digite* o seu melhor e-mail em texto para concluirmos o cadastro.");
+              configurarTimeoutInatividade(phone, mem.UC);
+              return; // O robô para aqui, não avança e não crasha!
+          }
           if (!textoIn) {
+              await enviarFluxo(phone, TEXTOS.T12, "12");
               configurarTimeoutInatividade(phone, mem.UC);
               return;
           }
+          
           const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
           if (emailRegex.test(textoIn)) {
               await atualizarEstado(phone, leadRef, { EMAIL: textoIn, STATUS_CADASTRO: 'CONCLUIDO' });
@@ -639,6 +660,7 @@ function nomesCompativeis(nomeFatura, nomeDoc) {
     return matches >= 2 || (arrayFatura.length === 1 && matches === 1);
 }
 
+// V39: VISÃO COMPUTACIONAL EXTREMA PARA A FATURA
 async function auditarFaturaIA(base64, mimeType) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
   
@@ -647,9 +669,10 @@ async function auditarFaturaIA(base64, mimeType) {
   const prompt = `
     Aja como um auditor de dados da iGreen.
     
-    🚨 REGRA 1 - TOLERÂNCIA VISUAL MÁXIMA 🚨:
+    🚨 REGRA 1 - TOLERÂNCIA VISUAL MÁXIMA E DETECÇÃO DE OBJETOS 🚨:
     Se a imagem contiver UMA FATURA DE ENERGIA, VOCÊ DEVE RETORNAR "VALIDO": true.
-    SÓ retorne "VALIDO": false se for ABSOLUTAMENTE um objeto aleatório sem fatura. Neste caso, descreva o que é em "OBJETO_IDENTIFICADO".
+    SÓ retorne "VALIDO": false se for ABSOLUTAMENTE um objeto aleatório sem fatura. 
+    Neste caso, USE A SUA VISÃO COMPUTACIONAL e descreva EXATAMENTE o que você está vendo no campo "OBJETO_IDENTIFICADO" (ex: "uma foto de um RG", "um cachorro", "uma lata de bebida", "um teclado").
 
     🚨 REGRA 2 - DATAS E ENDEREÇOS EXTRAS 🚨:
     1. Identifique o Mês de Referência (ex: 04/2026) e coloque em "CONTA_MES".
@@ -712,22 +735,29 @@ async function auditarFaturaIA(base64, mimeType) {
   return JSON.parse(textoLimpo);
 }
 
-async function analisarDocumentoIA(base64, mimeType) {
+// V39: VISÃO COMPUTACIONAL EXTREMA PARA OS DOCUMENTOS
+async function analisarDocumentoIA(base64, mimeType, faceEsperada) {
   if (!GEMINI_API_KEY) throw new Error("Chave Gemini ausente!");
   
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
   
-  // V36: MODO CAÇADOR EXTREMO PARA CPF E DATA NASCIMENTO
   const prompt = `
-    Você é um perito em extração de dados (OCR) de CNH e RG brasileiros.
-    A imagem anexa é uma das faces do documento de identidade.
+    Você é um perito em extração de dados (OCR) de CNH e RG brasileiros e tem Visão Computacional.
+    O sistema está solicitando que o cliente envie a face: **${faceEsperada}** do documento.
     
-    🚨 EXTRAÇÃO DE DADOS VITAIS (CRÍTICO) 🚨:
+    🚨 REGRA DE VALIDAÇÃO DA FACE (FRENTE VS VERSO) E DETECÇÃO 🚨:
+    1. FRENTE: É obrigatório ter a FOTO do rosto do titular. (Se a CNH estiver aberta mostrando os dois lados de uma vez, aceite como FRENTE).
+    2. VERSO: É a parte que NÃO TEM a foto do rosto (contém apenas texto como filiação, órgão emissor, QR code, polegar, etc).
+    
+    Se a imagem enviada NÃO for um documento de identidade (exemplo, o cliente mandou uma fatura, uma foto de paisagem ou uma garrafa), retorne VALIDO: false e DEIXE CLARO O QUE VOCÊ VIU no campo OBJETO_IDENTIFICADO (ex: "uma foto de uma conta de luz", "uma garrafa de água", "uma selfie").
+    Se a imagem for um documento, mas for a face ERRADA (ex: o sistema pediu ${faceEsperada}, mas a imagem é o lado contrário), retorne VALIDO: false e em OBJETO_IDENTIFICADO escreva: "a face errada do documento (você enviou o lado contrário)".
+    
+    🚨 EXTRAÇÃO DE DADOS VITAIS 🚨:
+    Se for a face correta (${faceEsperada}), tente extrair:
     1. NOME_DOCUMENTO: Nome do Titular.
-    2. CPF: Procure o número do CPF (11 dígitos). Na CNH, fica geralmente abaixo da foto na frente. No RG, pode estar no verso ou na frente. Extraia APENAS o número.
-    3. DATA_NASCIMENTO: Procure a data de nascimento (DD/MM/AAAA).
-    
-    Se visualizar os dados, preencha as chaves. Se a face da imagem não contiver esses dados (ex: verso de CNH sem CPF), retorne "Não consta".
+    2. CPF: Número do CPF (11 dígitos).
+    3. DATA_NASCIMENTO: Data de nascimento (DD/MM/AAAA).
+    Se a face atual não tiver esses dados, retorne "Não consta" para eles, mas se for a face certa, mantenha VALIDO: true.
     
     Responda APENAS com este JSON:
     {
@@ -744,4 +774,4 @@ async function analisarDocumentoIA(base64, mimeType) {
   return JSON.parse(textoLimpo);
 }
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 36 - BLINDAGEM MEDIA E CPF)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 39 - OLHOS ABERTOS E ANTI-PARALISIA)`));
