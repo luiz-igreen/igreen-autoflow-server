@@ -1,7 +1,7 @@
 {
   "name": "igreen-autoflow-server",
-  "version": "1.0.0",
-  "description": "Servidor IA para faturas iGreen",
+  "version": "2.0.0",
+  "description": "Servidor IA + RPA Autônomo para iGreen Energy",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -9,11 +9,11 @@
   "dependencies": {
     "express": "^4.18.2",
     "axios": "^1.6.7",
-    "firebase-admin": "^12.0.0"
+    "firebase-admin": "^12.0.0",
+    "puppeteer": "^22.6.0"
   },
   "engines": {
     "node": ">=18.0.0"
   },
   "author": "Luiz Jorge",
   "license": "ISC"
-}
