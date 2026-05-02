@@ -1,605 +1,516 @@
-const express = require('express');
-const axios = require('axios');
-const admin = require('firebase-admin');
-const path = require('path');
-const fs = require('fs');
-const puppeteer = require('puppeteer'); // O motor do Navegador Fantasma (RPA)
-
-const app = express();
-app.use(express.json());
-
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
-
-// CHAVES DA Z-API CENTRALIZADAS
-const ZAPI_INSTANCE = process.env.ZAPI_INSTANCE || "3F14E2A7F66AC2180C0BBA4D31290A14";
-const ZAPI_TOKEN = process.env.ZAPI_TOKEN || "88F232A54C5DC27793994637";
-const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN || "F177679f2434d425e9a3e58ddec1d4cf0S"; 
-
-// CREDENCIAIS DA IGREEN PARA O ROBÔ
-const IGREEN_USER = process.env.IGREEN_USER || "";
-const IGREEN_PASS = process.env.IGREEN_PASS || "";
-
-// Conexão com o Banco de Dados (Firestore)
-try {
-  const firebaseConfig = process.env.FIREBASE_CONFIG ? JSON.parse(process.env.FIREBASE_CONFIG) : null;
-  if (firebaseConfig) {
-    if (admin.apps.length === 0) {
-      admin.initializeApp({ credential: admin.credential.cert(firebaseConfig) });
-    }
-    console.log("✅ Banco de Dados conectado com sucesso!");
-  } else {
-    console.log("⚠️ Banco de Dados aguardando credenciais.");
-  }
-} catch (e) {
-  console.error("Erro na base de dados:", e.message);
-}
-
-const memoriaEstado = new Map();
-const timersInatividade = new Map();
-const audioCache = new Map();
-
-// DICIONÁRIO DE TEXTOS COMPLETOS (Inclui textos do RPA)
-const TEXTOS = {
-    T01: "Seja muito bem-vinda à iGreen Energy. Pra começarmos a sua simulação, por favor, me envie uma foto bem nítida ou o PDF da sua conta de luz.",
-    T02: "Estou analisando a sua fatura e a elegibilidade regional. Por favor, aguarde um instante.",
-    T03: "Fatura auditada com sucesso. Identifiquei o seu CEP, mas não encontrei o número da residência. Por favor, digite o número da sua casa ou apartamento pra prosseguirmos.",
-    T04: "Fatura auditada com sucesso. Pra darmos continuidade, por favor, envie uma foto nítida apenas da frente do seu RG ou CNH.",
-    T05: "Frente guardada. Agora, por favor, envie a foto do verso do documento, onde ficam o número de registro e o órgão emissor.",
-    T06: "Estou executando a leitura biométrica avançada, cruzando os dados da frente e do verso. Por favor, aguarde.",
-    T07: "Registrado. Pra finalizar, digite o seu melhor e-mail.",
-    T08: "Prontinho. O seu pré-cadastro foi concluído com sucesso. Os seus dados já foram enviados pro nosso sistema e muito em breve você receberá o seu link para assinatura. A iGreen Energy agradece a sua confiança.",
-    T09: "Aviso: Esta fatura de energia ou conta de luz, não é válida. Está ilegível. Enviar uma fatura de energia ou conta de luz válida para continuarmos o nosso processamento cadastral.",
-    T10: "Atenção, identificamos que a sua conta possui a classificação de baixa renda ou tarifa social. Para proteger o seu benefício governamental, a iGreen não atende esta modalidade, pois a alteração poderia causar a perda do seu subsídio. O processo foi encerrado por segurança. Agradecemos o seu contacto!",
-    T11: "Aviso, a imagem enviada não é um documento de identificação (RG/CNH) válido ou está muito ilegível. Por favor, reenvie a foto do documento com mais foco.",
-    T12: "E-mail inválido. Por favor, verifique se digitou corretamente, lembrando que deve conter a @ e envie novamente.",
-    T13: "Atenção, você solicitou o cancelamento. Tem certeza que deseja excluir todos os dados enviados até agora? Digite um para sim, cancelar tudo, ou dois para não, e continuar o cadastro.",
-    T14: "O seu contrato chegou. A sua proposta de economia já está pronta. Clique no link da mensagem pra ler os termos e assinar digitalmente de forma rápida e segura. Qualquer dúvida, estou aqui.",
-    T15: "Falta muito pouco pra começar a poupar. Verificamos que ainda não assinou o seu termo de adesão da iGreen Energy. Lembre-se, não há custos de adesão, obras ou fidelidade. O link ainda está disponível na mensagem.",
-    T16: "Parabéns. A sua concessionária local acabou de aprovar a injeção da nossa energia solar na sua rede. A partir do próximo ciclo, você já começará a notar a redução no valor da sua fatura.",
-    T17: "A sua fatura iGreen está pronta. Este mês a sua energia mais barata já foi processada. Segue na mensagem o seu boleto unificado. Parabéns por poupar com energia limpa.",
-    T18: "Você já ativou o seu iGreen Club? Como nosso cliente, você tem descontos em milhares de estabelecimentos no Brasil. Baixe o nosso aplicativo no link da mensagem e comece a aproveitar hoje mesmo.",
-    T19: "Quer zerar a sua conta de luz? Na iGreen Energy você ganha cashback por cada amigo ou familiar que indicar. Acesse o seu aplicativo, pegue seu link de indicação e partilhe.",
-    T20: "Entendido. Vou transferir o seu atendimento pra um de nossos consultores especialistas. Aguarde um instante, por favor.",
-    T21: "Devido à falta de resposta por um longo período, o seu pré-cadastro foi cancelado por medida de segurança.\n\nQuando estiver com os seus documentos em mãos, basta enviar a palavra *NOVO* para recomeçarmos o processo. A iGreen agradece!",
-    T22: "⚠️ *Divergência Detectada*\n\nO nome no documento enviado não corresponde ao titular da fatura de energia.\n\nPor medidas de segurança antifraude, o processo foi bloqueado. Por favor, envie a foto do documento de identificação do titular correto da fatura.",
-    T23: "⚡ Identifiquei a sua Unidade Consumidora, mas notei que **faltam documentos** no seu cadastro.\n\nVamos fazer uma rápida atualização cadastral para garantir o seu desconto! Por favor, envie uma foto nítida apenas da frente do seu RG ou CNH.",
-    T24: "⚡ Identifiquei que esta Unidade Consumidora já possui um cadastro **COMPLETO** e ativo no nosso sistema!\n\nVocê enviou esta fatura por engano? 🤔\n\nSe deseja cadastrar um **outro imóvel** em seu nome, por favor, envie a foto da fatura dessa **outra** instalação (com uma UC diferente desta).\n\nEstou no aguardo!",
-    T25: "Olá! Agradecemos muito o seu interesse. 💚\n\nApós analisar a sua fatura, verificamos que a sua média de consumo está abaixo do mínimo exigido no momento para a sua região.\n\nPor isso, não poderemos prosseguir com o cadastro agora. Guardaremos o seu contacto para o avisar em futuras oportunidades!",
-    T26: "✅ Os seus documentos foram atualizados com sucesso e o seu cadastro agora está **COMPLETO** no nosso sistema! 🎉\n\nA iGreen Energy agradece a sua confiança.",
-    T27: "Aviso: A nossa Inteligência Artificial analisou a imagem e identificou que você enviou um objeto diferente, ao invés do documento solicitado. Por favor, envie a foto correta para continuarmos o seu cadastro.",
-    T28: "⚡ Identifiquei que esta fatura já está cadastrada no nosso sistema!\n\nComo encontrei campos em branco no seu cadastro antigo, já aproveitei para os *atualizar* com as informações desta nova imagem.\n\nO que deseja fazer agora?\n\nDigite *1* para NOVO CADASTRO (Substituir todos os documentos)\nDigite *2* para CONTINUAR (Manter os documentos que já estão no sistema)\nDigite *3* para CANCELAR (Descartar processo atual)",
-    T29: "Operação cancelada com sucesso! ✅\n\nO sistema está livre para o próximo atendimento.\nA iGreen Energy agradece o seu contato e a sua confiança! Tenha um excelente dia! 💚",
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitor Oficial RPA - iGreen AutoFlow</title>
     
-    // NOVOS TEXTOS RPA
-    T_RPA_START: "🤖 *Aviso do Sistema*: O Robô iGreen acaba de iniciar a digitação automática dos seus dados no portal oficial. O seu contrato será gerado em instantes.",
-    T_RPA_SUCCESS: "✅ *Sucesso Total!* O seu contrato foi gerado no portal oficial com sucesso. Você receberá o link da Clicksign para assinatura em instantes no seu e-mail e aqui no WhatsApp."
-};
-
-// =========================================================================
-// O MOTOR RPA (PUPPETEER) - O ROBÔ QUE NAVEGA NAS NUVENS
-// =========================================================================
-async function executarRPAIgreen(dados) {
-    console.log(`🚀 [RPA] A iniciar navegação fantasma para: ${dados.NOME_CLIENTE}`);
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
-    const browser = await puppeteer.launch({
-        headless: "new",
-        args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
-    });
-
-    try {
-        const page = await browser.newPage();
-        await page.setViewport({ width: 1280, height: 800 });
-
-        // 1. LOGIN NO PORTAL OFICIAL
-        console.log("🔑 [RPA] Acedendo ao login...");
-        await page.goto('https://mundoigreen.com.br/login', { waitUntil: 'networkidle2' });
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800;900&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600&display=swap');
         
-        if (await page.$('#email')) {
-            await page.type('#email', IGREEN_USER);
-            await page.type('#password', IGREEN_PASS);
-            await page.click('button[type="submit"]');
-            await page.waitForNavigation();
-            console.log("🔑 [RPA] Login efetuado com sucesso.");
+        body { 
+            font-family: 'Montserrat', sans-serif; 
+            background-color: #0f172a; /* Fundo principal escuro */
+            color: #f8fafc; 
+            margin: 0; 
+            height: 100vh; 
+            overflow: hidden; 
+            display: flex; 
+            flex-direction: column; 
         }
+        
+        /* Emulador Mobile (Estilo Dark/White misto do print) */
+        .mobile-container { 
+            width: 380px; 
+            height: 780px; 
+            background-color: #1e293b; 
+            border-radius: 40px; 
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); 
+            border: 10px solid #020617; 
+            display: flex; 
+            flex-direction: column; 
+            position: relative; 
+            overflow: hidden; 
+        }
+        
+        .step-content { display: none; height: 100%; flex-direction: column; background: #ffffff; border-radius: 30px 30px 0 0; }
+        .step-content.active { display: flex; animation: fadeIn 0.4s ease-out forwards; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
-        // 2. NAVEGAR PARA O FORMULÁRIO DE NOVA CONEXÃO
-        console.log("📂 [RPA] Indo para Nova Conexão...");
-        await page.goto('https://mundoigreen.com.br/dashboard/conexao-green/novo', { waitUntil: 'networkidle2' });
+        .igreen-input { 
+            width: 100%; background-color: #ffffff; border: 1px solid #e2e8f0; 
+            padding: 14px 16px; border-radius: 12px; font-size: 13px; color: #1e293b; 
+            font-weight: 700; outline: none; transition: all 0.2s; 
+        }
+        .igreen-input.robot-typing { 
+            border-color: #10b981; background-color: #f0fdf4; 
+            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2); transform: scale(1.01); 
+        }
+        
+        .upload-box { 
+            border: 2px dashed #cbd5e1; background: #ffffff; border-radius: 16px; 
+            padding: 16px; text-align: center; transition: all 0.3s; 
+        }
+        .upload-box.injected { border-color: #10b981; background: #f0fdf4; transform: scale(1.05); }
 
-        // 3. PREENCHER OS DADOS (Extraídos pela IA)
-        console.log("✍️ [RPA] Injetando dados do cliente...");
-        const camposTexto = {
-            'input[name="nome"]': dados.NOME_CLIENTE || "",
-            'input[name="cpf"]': dados.CPF || dados.MASCARA_CPF || "",
-            'input[name="email"]': dados.EMAIL || "",
-            'input[name="whatsapp"]': dados.TELEFONE || ""
+        .console-font { font-family: 'Fira Code', monospace; }
+        .log-entry { margin-bottom: 8px; animation: slideDown 0.3s ease-out; padding-left: 10px; border-left: 2px solid transparent; }
+        .log-entry.active { border-left-color: #10b981; background: rgba(16, 185, 129, 0.1); border-radius: 0 4px 4px 0;}
+        @keyframes slideDown { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
+    </style>
+</head>
+<body class="p-6">
+
+    <!-- HEADER TOPO -->
+    <header class="flex justify-between items-center mb-6 bg-[#1e293b] p-5 rounded-2xl border border-slate-700 shrink-0 shadow-xl">
+        <div class="flex items-center gap-5">
+            <div class="bg-gradient-to-br from-emerald-400 to-emerald-600 w-14 h-14 rounded-2xl shadow-[0_0_20px_rgba(16,185,129,0.3)] flex items-center justify-center text-white">
+                <i class="fas fa-robot text-3xl"></i>
+            </div>
+            <div>
+                <h1 class="text-2xl font-black text-white tracking-tight">Monitor RPA Oficial <span class="text-emerald-400">V46</span></h1>
+                <p class="text-[10px] font-bold text-blue-400 uppercase tracking-widest flex items-center mt-1">
+                    <i class="fas fa-satellite-dish mr-2 animate-pulse"></i>
+                    Sincronizado com o servidor nas nuvens
+                </p>
+            </div>
+        </div>
+        <button onclick="location.reload()" class="bg-[#334155] hover:bg-[#475569] text-white px-6 py-3 rounded-xl text-xs font-bold transition-colors border border-slate-600 shadow-md">
+            <i class="fas fa-sync-alt mr-2"></i> Atualizar Conexão
+        </button>
+    </header>
+
+    <div class="flex flex-1 gap-8 min-h-0">
+        
+        <!-- COLUNA ESQUERDA: O TELEMÓVEL DO ROBÔ -->
+        <div class="flex flex-col items-center shrink-0 relative">
+            <div class="absolute -top-4 bg-emerald-500/10 text-emerald-400 px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border border-emerald-500/20 flex items-center gap-2 shadow-[0_0_10px_rgba(16,185,129,0.1)] z-10">
+                <i class="fas fa-eye"></i> Visão do Robô
+            </div>
+            
+            <div class="mobile-container mt-4">
+                <header class="bg-[#1e293b] text-white p-6 flex items-center gap-4 shrink-0">
+                    <div class="w-10 h-10 bg-emerald-500 rounded-xl flex items-center justify-center font-black italic text-base shadow-inner">iG</div>
+                    <div>
+                        <h2 class="text-sm font-black uppercase tracking-widest">Portal iGreen</h2>
+                        <p class="text-[10px] text-emerald-400 font-bold mt-0.5">Injeção Autônoma</p>
+                    </div>
+                </header>
+
+                <div class="flex-1 overflow-y-auto relative p-6 pb-24" id="appScrollArea">
+                    <!-- Camada de bloqueio visual -->
+                    <div class="absolute inset-0 z-50 cursor-not-allowed"></div>
+
+                    <!-- PASSO 1: DADOS PESSOAIS -->
+                    <div id="step1" class="step-content active pt-6">
+                        <h3 class="text-lg font-black text-slate-800 mb-6 flex items-center gap-3">
+                            <span class="bg-slate-200 w-8 h-8 flex items-center justify-center rounded-full text-sm text-slate-600">1</span> 
+                            Dados Pessoais
+                        </h3>
+                        <div class="space-y-4 px-2">
+                            <div><label class="text-[10px] text-slate-500 font-bold uppercase ml-1 tracking-widest">Nome Completo</label><input type="text" id="app_nome" class="igreen-input mt-1" placeholder="..."></div>
+                            <div><label class="text-[10px] text-slate-500 font-bold uppercase ml-1 tracking-widest">CPF / CNPJ</label><input type="text" id="app_cpf" class="igreen-input font-mono text-emerald-600 mt-1" placeholder="..."></div>
+                            <div><label class="text-[10px] text-slate-500 font-bold uppercase ml-1 tracking-widest">Data de Nascimento</label><input type="text" id="app_nasc" class="igreen-input font-mono mt-1" placeholder="..."></div>
+                            <div><label class="text-[10px] text-slate-500 font-bold uppercase ml-1 tracking-widest">E-mail</label><input type="text" id="app_email" class="igreen-input text-blue-600 mt-1" placeholder="..."></div>
+                            <div><label class="text-[10px] text-slate-500 font-bold uppercase ml-1 tracking-widest">WhatsApp</label><input type="text" id="app_tel" class="igreen-input font-mono mt-1" placeholder="..."></div>
+                        </div>
+                    </div>
+
+                    <!-- PASSO 2: ENDEREÇO -->
+                    <div id="step2" class="step-content pt-6">
+                        <h3 class="text-lg font-black text-slate-800 mb-6 flex items-center gap-3">
+                            <span class="bg-slate-200 w-8 h-8 flex items-center justify-center rounded-full text-sm text-slate-600">2</span> 
+                            Endereço
+                        </h3>
+                        <div class="space-y-4 px-2">
+                            <div><label class="text-[10px] text-slate-500 font-bold uppercase ml-1 tracking-widest">CEP</label><input type="text" id="app_cep" class="igreen-input font-mono text-emerald-600 mt-1" placeholder="..."></div>
+                            <div><label class="text-[10px] text-slate-500 font-bold uppercase ml-1 tracking-widest">Rua / Logradouro</label><input type="text" id="app_rua" class="igreen-input mt-1" placeholder="..."></div>
+                            <div class="grid grid-cols-3 gap-3">
+                                <div class="col-span-1"><label class="text-[10px] text-slate-500 font-bold uppercase ml-1 tracking-widest text-red-500">Número</label><input type="text" id="app_num" class="igreen-input font-black mt-1" placeholder="..."></div>
+                                <div class="col-span-2"><label class="text-[10px] text-slate-500 font-bold uppercase ml-1 tracking-widest">Bairro</label><input type="text" id="app_bairro" class="igreen-input mt-1" placeholder="..."></div>
+                            </div>
+                            <div class="grid grid-cols-4 gap-3">
+                                <div class="col-span-3"><label class="text-[10px] text-slate-500 font-bold uppercase ml-1 tracking-widest">Cidade</label><input type="text" id="app_cidade" class="igreen-input mt-1" placeholder="..."></div>
+                                <div class="col-span-1"><label class="text-[10px] text-slate-500 font-bold uppercase ml-1 tracking-widest">UF</label><input type="text" id="app_uf" class="igreen-input font-black text-center mt-1" placeholder="..."></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- PASSO 3: TÉCNICOS E UPLOADS -->
+                    <div id="step3" class="step-content pt-6">
+                        <h3 class="text-lg font-black text-slate-800 mb-6 flex items-center gap-3">
+                            <span class="bg-slate-200 w-8 h-8 flex items-center justify-center rounded-full text-sm text-slate-600">3</span> 
+                            Conta e Anexos
+                        </h3>
+                        <div class="space-y-4 px-2">
+                            <div><label class="text-[10px] text-slate-500 font-bold uppercase ml-1 tracking-widest">Distribuidora</label><input type="text" id="app_dist" class="igreen-input font-bold mt-1" placeholder="..."></div>
+                            <div><label class="text-[10px] text-slate-500 font-bold uppercase ml-1 tracking-widest">Nº Instalação (UC)</label><input type="text" id="app_uc" class="igreen-input font-mono font-black text-indigo-600 mt-1" placeholder="..."></div>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div><label class="text-[10px] text-slate-500 font-bold uppercase ml-1 tracking-widest">Mês Ref.</label><input type="text" id="app_mes" class="igreen-input font-mono text-center mt-1" placeholder="..."></div>
+                                <div><label class="text-[10px] text-slate-500 font-bold uppercase ml-1 tracking-widest">Média (kWh)</label><input type="text" id="app_media" class="igreen-input font-mono font-bold text-emerald-600 text-center mt-1" placeholder="..."></div>
+                            </div>
+                            
+                            <div class="pt-6 border-t border-slate-100 mt-6">
+                                <p class="text-[10px] font-bold text-slate-500 mb-4 uppercase tracking-widest">Injeção de Arquivos (Upload)</p>
+                                <div class="grid grid-cols-3 gap-3">
+                                    <div id="box_fat" class="upload-box"><i id="icon_fat" class="fas fa-file-pdf text-2xl text-slate-300 mb-2"></i><p id="lbl_fat" class="text-[9px] font-bold text-slate-400 uppercase">Fatura</p></div>
+                                    <div id="box_fre" class="upload-box"><i id="icon_fre" class="fas fa-id-card text-2xl text-slate-300 mb-2"></i><p id="lbl_fre" class="text-[9px] font-bold text-slate-400 uppercase">Frente RG</p></div>
+                                    <div id="box_ver" class="upload-box"><i id="icon_ver" class="fas fa-id-card text-2xl text-slate-300 mb-2"></i><p id="lbl_ver" class="text-[9px] font-bold text-slate-400 uppercase">Verso RG</p></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- PASSO 4: SUCESSO -->
+                    <div id="step4" class="step-content bg-emerald-50 relative">
+                        <div class="absolute inset-0 flex flex-col items-center justify-center text-center p-6">
+                            <div class="w-28 h-28 bg-emerald-500 rounded-full flex items-center justify-center shadow-[0_0_50px_rgba(16,185,129,0.4)] mb-8">
+                                <i class="fas fa-check text-6xl text-white"></i>
+                            </div>
+                            <h2 class="text-3xl font-black text-slate-800 mb-3 tracking-tight">Simulação Concluída!</h2>
+                            <p class="text-sm font-medium text-slate-600 leading-relaxed">A Máquina de Guerra injetou todos os campos da nova jornada da iGreen.</p>
+                        </div>
+                    </div>
+
+                </div>
+
+                <!-- Botão Fixo de Avanço do Robô -->
+                <div id="formFooter" class="absolute bottom-0 left-0 w-full p-6 bg-white/90 backdrop-blur-sm z-20 shrink-0">
+                    <button id="btnApp" class="w-full bg-slate-200 text-slate-400 font-black py-4 rounded-2xl text-sm uppercase tracking-widest transition-all">
+                        Aguardando IA...
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- COLUNA DIREITA: PAINEL DE DADOS E TERMINAL -->
+        <div class="flex-1 flex flex-col gap-6 min-w-0">
+            
+            <!-- A GRELHA DE DADOS REAL (DARK MODE NEON) -->
+            <div class="bg-[#1e293b] rounded-[2rem] border border-slate-700 shadow-2xl overflow-hidden flex-1 flex flex-col">
+                <div class="bg-[#0f172a]/60 p-6 border-b border-slate-700 flex justify-between items-center shrink-0">
+                    <div class="flex items-center gap-4">
+                        <div class="bg-blue-500/20 p-2.5 rounded-xl border border-blue-500/30">
+                            <i class="fas fa-database text-blue-400 text-xl"></i>
+                        </div>
+                        <div>
+                            <h2 class="text-white font-black text-sm tracking-widest uppercase">Base de Dados <span class="text-emerald-500">iGreen (21 Campos)</span></h2>
+                            <p class="text-slate-400 text-[10px] mt-1 font-bold">Espelho exato do que a Inteligência Artificial extraiu.</p>
+                        </div>
+                    </div>
+                    <span id="badgeStatus" class="bg-slate-700 text-slate-400 border border-slate-600 px-4 py-2 rounded-xl text-[10px] font-black tracking-widest uppercase">
+                        Conectando...
+                    </span>
+                </div>
+                
+                <div class="p-6 overflow-y-auto bg-[#1e293b] relative flex-1">
+                    <div id="loadingDb" class="absolute inset-0 bg-[#1e293b]/95 z-10 flex flex-col items-center justify-center transition-opacity duration-500">
+                        <i class="fas fa-spinner fa-spin text-5xl text-emerald-500 mb-6"></i>
+                        <p class="text-white font-black tracking-widest text-sm uppercase">A escutar o servidor (WhatsApp)...</p>
+                    </div>
+
+                    <!-- Campos Reais Mapeados da IA -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div class="bg-[#0f172a]/50 p-4 rounded-xl border border-slate-700/80"><p class="text-[9px] text-slate-400 font-bold uppercase mb-1.5 tracking-widest">TIPO_PERFIL</p><p class="text-xs font-bold text-white" id="db_tipo">-</p></div>
+                        <div class="bg-[#0f172a]/50 p-4 rounded-xl border border-slate-700/80 lg:col-span-2"><p class="text-[9px] text-slate-400 font-bold uppercase mb-1.5 tracking-widest">NOME_CLIENTE</p><p class="text-sm font-black text-white truncate" id="db_nome">-</p></div>
+                        <div class="bg-[#0f172a]/50 p-4 rounded-xl border border-slate-700/80"><p class="text-[9px] text-slate-400 font-bold uppercase mb-1.5 tracking-widest">CPF / CNPJ</p><p class="text-sm font-mono font-bold text-emerald-400" id="db_cpf">-</p></div>
+                        
+                        <div class="bg-[#0f172a]/50 p-4 rounded-xl border border-slate-700/80"><p class="text-[9px] text-slate-400 font-bold uppercase mb-1.5 tracking-widest">DATA_NASCIMENTO</p><p class="text-xs font-mono font-bold text-white" id="db_nasc">-</p></div>
+                        <div class="bg-[#0f172a]/50 p-4 rounded-xl border border-slate-700/80 lg:col-span-2"><p class="text-[9px] text-slate-400 font-bold uppercase mb-1.5 tracking-widest">EMAIL</p><p class="text-xs font-bold text-blue-400 truncate" id="db_email">-</p></div>
+                        <div class="bg-[#0f172a]/50 p-4 rounded-xl border border-slate-700/80"><p class="text-[9px] text-slate-400 font-bold uppercase mb-1.5 tracking-widest">WHATSAPP</p><p class="text-xs font-mono font-bold text-white" id="db_tel">-</p></div>
+
+                        <div class="bg-[#0f172a]/50 p-4 rounded-xl border border-slate-700/80"><p class="text-[9px] text-slate-400 font-bold uppercase mb-1.5 tracking-widest">CEP</p><p class="text-xs font-mono font-bold text-emerald-400" id="db_cep">-</p></div>
+                        <div class="bg-[#0f172a]/50 p-4 rounded-xl border border-slate-700/80 lg:col-span-2"><p class="text-[9px] text-slate-400 font-bold uppercase mb-1.5 tracking-widest">ENDERECO</p><p class="text-xs font-bold text-white truncate" id="db_rua">-</p></div>
+                        <div class="bg-[#0f172a]/50 p-4 rounded-xl border border-slate-700/80"><p class="text-[9px] text-slate-400 font-bold uppercase mb-1.5 tracking-widest">NUMERO</p><p class="text-sm font-black text-red-400" id="db_numero">-</p></div>
+                        
+                        <div class="bg-[#0f172a]/50 p-4 rounded-xl border border-slate-700/80"><p class="text-[9px] text-slate-400 font-bold uppercase mb-1.5 tracking-widest">BAIRRO</p><p class="text-xs font-bold text-white truncate" id="db_bairro">-</p></div>
+                        <div class="bg-[#0f172a]/50 p-4 rounded-xl border border-slate-700/80 lg:col-span-2"><p class="text-[9px] text-slate-400 font-bold uppercase mb-1.5 tracking-widest">CIDADE</p><p class="text-xs font-bold text-white truncate" id="db_cidade">-</p></div>
+                        <div class="bg-[#0f172a]/50 p-4 rounded-xl border border-slate-700/80"><p class="text-[9px] text-slate-400 font-bold uppercase mb-1.5 tracking-widest">ESTADO</p><p class="text-sm font-black text-white" id="db_uf">-</p></div>
+
+                        <div class="bg-[#0f172a]/50 p-4 rounded-xl border border-slate-700/80 lg:col-span-2"><p class="text-[9px] text-slate-400 font-bold uppercase mb-1.5 tracking-widest">DISTRIBUIDORA</p><p class="text-xs font-bold text-white truncate" id="db_dist">-</p></div>
+                        <div class="bg-emerald-900/20 p-4 rounded-xl border border-emerald-500/30"><p class="text-[9px] text-emerald-500 font-black uppercase mb-1.5 tracking-widest">UC_INSTALACAO</p><p class="text-sm font-mono font-black text-emerald-400" id="db_uc">-</p></div>
+                        <div class="bg-emerald-900/20 p-4 rounded-xl border border-emerald-500/30"><p class="text-[9px] text-emerald-500 font-black uppercase mb-1.5 tracking-widest">MEDIA_CONSUMO</p><p class="text-sm font-mono font-black text-emerald-400" id="db_media">-</p></div>
+
+                        <div class="bg-[#0f172a]/50 p-4 rounded-xl border border-slate-700/80"><p class="text-[9px] text-slate-400 font-bold uppercase mb-1.5 tracking-widest">CONTA_MES</p><p class="text-xs font-bold text-blue-300" id="db_mes">-</p></div>
+                        <div class="bg-[#0f172a]/50 p-4 rounded-xl border border-slate-700/80"><p class="text-[9px] text-slate-400 font-bold uppercase mb-1.5 tracking-widest">VENCIMENTO</p><p class="text-xs font-bold text-red-300" id="db_venc">-</p></div>
+                        <div class="bg-[#0f172a]/50 p-4 rounded-xl border border-slate-700/80 lg:col-span-2"><p class="text-[9px] text-slate-400 font-bold uppercase mb-1.5 tracking-widest">VALOR_FATURA</p><p class="text-sm font-mono font-bold text-slate-300" id="db_valor">-</p></div>
+
+                        <div class="bg-[#0f172a]/50 p-4 rounded-xl border border-slate-700/80 lg:col-span-4"><p class="text-[9px] text-slate-400 font-bold uppercase mb-1.5 tracking-widest"><i class="fas fa-link mr-1"></i> LINK_FATURA</p><p class="text-[10px] text-blue-400 break-all" id="db_link_fat">-</p></div>
+                        <div class="bg-[#0f172a]/50 p-4 rounded-xl border border-slate-700/80 lg:col-span-2"><p class="text-[9px] text-slate-400 font-bold uppercase mb-1.5 tracking-widest"><i class="fas fa-link mr-1"></i> LINK_FRENTE</p><p class="text-[10px] text-orange-400 break-all" id="db_link_fre">-</p></div>
+                        <div class="bg-[#0f172a]/50 p-4 rounded-xl border border-slate-700/80 lg:col-span-2"><p class="text-[9px] text-slate-400 font-bold uppercase mb-1.5 tracking-widest"><i class="fas fa-link mr-1"></i> LINK_VERSO</p><p class="text-[10px] text-orange-400 break-all" id="db_link_ver">-</p></div>
+                    </div>
+                </div>
+
+                <div class="p-5 border-t border-slate-700 bg-[#1e293b] shrink-0">
+                    <button id="btnAutoStart" onclick="iniciarAutomacao()" disabled class="w-full bg-[#0f172a] text-slate-500 font-black py-5 rounded-2xl flex items-center justify-center gap-3 uppercase tracking-[0.2em] text-sm transition-all duration-300 border border-slate-800">
+                        <i class="fas fa-lock"></i> Aguardando Cliente
+                    </button>
+                </div>
+            </div>
+
+            <!-- TERMINAL DO ROBÔ -->
+            <div class="bg-[#0a0f1c] rounded-[2rem] border border-slate-800 shadow-2xl overflow-hidden flex flex-col h-72 shrink-0">
+                <div class="bg-[#1e293b] p-4 border-b border-slate-800 flex justify-between items-center shrink-0">
+                    <span class="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2"><i class="fas fa-terminal"></i> Terminal de Execução RPA</span>
+                    <i class="fas fa-circle text-slate-600 text-[8px]" id="statusLed"></i>
+                </div>
+                <div class="p-6 overflow-y-auto console-font text-xs flex-1 custom-scroll" id="terminal">
+                    <div class="text-slate-600 mb-4">// Servidor Node.js - Motor Puppeteer Preparado</div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        const firebaseConfig = {
+          apiKey: "AIzaSyB4bGHVNgOMFJmyKhHJVLScsmr1tWy2uhQ",
+          authDomain: "igreen-autoflow.firebaseapp.com",
+          projectId: "igreen-autoflow",
+          storageBucket: "igreen-autoflow.firebasestorage.app",
+          messagingSenderId: "1074994206249",
+          appId: "1:1074994206249:web:41dec2e150e137db11ae38"
         };
 
-        for (const [seletor, valor] of Object.entries(camposTexto)) {
-            const campo = await page.$(seletor);
-            if (campo) await page.type(seletor, valor);
-        }
-        
-        // 4. TRATAMENTO DE UPLOAD DA FATURA
-        if (dados.LINK_FATURA) {
-            console.log("📄 [RPA] A fazer upload da fatura original...");
-            const faturaPath = path.join(__dirname, `temp_fatura_${Date.now()}.pdf`);
-            const response = await axios({ url: dados.LINK_FATURA, responseType: 'stream' });
-            const writer = fs.createWriteStream(faturaPath);
-            response.data.pipe(writer);
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+        const appId = 'igreen-autoflow-v4';
+
+        let leadDB = {};
+        let ultimoLeadInjetado = ""; 
+
+        auth.signInAnonymously().then(() => {
+            logRPA("Conectado ao Firebase. Aguardando o cliente no WhatsApp...", "system");
+            const leadsRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('leads');
             
-            await new Promise((resolve) => writer.on('finish', resolve));
-            const inputUpload = await page.$('input[name="fatura_file"]');
-            if (inputUpload) await inputUpload.uploadFile(faturaPath);
-            
-            // Limpeza: Apaga o ficheiro temporário do servidor
-            setTimeout(() => { if (fs.existsSync(faturaPath)) fs.unlinkSync(faturaPath); }, 10000);
+            leadsRef.onSnapshot(snapshot => {
+                if (snapshot.empty) return;
+
+                let docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                docs.sort((a, b) => {
+                    const timeA = a.DATA_PROCESSAMENTO?.seconds || 0;
+                    const timeB = b.DATA_PROCESSAMENTO?.seconds || 0;
+                    return timeB - timeA;
+                });
+
+                const latestLead = docs[0];
+                const leadId = latestLead.id;
+
+                // Mapeamento EXATO dos campos que a IA extrai (Com blindagem de fallback)
+                leadDB = {
+                    TIPO_PERFIL: latestLead.TIPO_PERFIL || "",
+                    NOME: latestLead.NOME_CLIENTE || latestLead.nome_cliente || "",
+                    CPF: latestLead.CPF || latestLead.MASCARA_CPF || latestLead.CNPJ || latestLead.MASCARA_CNPJ || "",
+                    DATA_NASC: latestLead.DATA_NASCIMENTO || "Não informado",
+                    EMAIL: latestLead.EMAIL || "",
+                    TEL: latestLead.TELEFONE || latestLead.telefone || "",
+                    CEP: latestLead.CEP || "",
+                    RUA: latestLead.ENDERECO || "",
+                    NUMERO: latestLead.ENDERECO_NUMERO || "",
+                    BAIRRO: latestLead.BAIRRO || "",
+                    CIDADE: latestLead.CIDADE || "",
+                    UF: latestLead.ESTADO || "",
+                    DIST: latestLead.DISTRIBUIDORA || "",
+                    UC: latestLead.UC || "",
+                    CONTA_MES: latestLead.CONTA_MES || "Não identificado",
+                    VENCIMENTO: latestLead.VENCIMENTO || "Não identificado",
+                    VALOR: latestLead.VALOR_FATURA || "0.00",
+                    MEDIA: latestLead.MEDIA_CONSUMO || "0",
+                    LINK_FAT: latestLead.LINK_FATURA || latestLead.url_fatura || "",
+                    LINK_FRE: latestLead.LINK_DOC_FRENTE || "",
+                    LINK_VER: latestLead.LINK_DOC_VERSO || ""
+                };
+                
+                try { carregarPainelDB(); } catch (err) {}
+                
+                if (latestLead.STATUS_CADASTRO === 'CONCLUIDO') {
+                    document.getElementById('loadingDb').classList.add('opacity-0', 'pointer-events-none');
+                    document.getElementById('badgeStatus').className = "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 px-4 py-2 rounded-xl text-[10px] font-black tracking-widest uppercase shadow-[0_0_15px_rgba(16,185,129,0.3)]";
+                    document.getElementById('badgeStatus').innerHTML = "<i class='fas fa-check-circle mr-1'></i> PRONTO PARA INJEÇÃO";
+                    
+                    const btnAuto = document.getElementById('btnAutoStart');
+                    btnAuto.disabled = false;
+                    btnAuto.className = "w-full bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-slate-950 font-black py-5 rounded-2xl shadow-[0_0_40px_rgba(16,185,129,0.4)] flex items-center justify-center gap-3 uppercase tracking-[0.2em] text-sm cursor-pointer hover:scale-[1.02] transition-transform";
+                    btnAuto.innerHTML = `<i class="fas fa-bolt text-lg"></i> DISPARAR ROBÔ NA TELA`;
+                    
+                    if (ultimoLeadInjetado !== leadId) {
+                        ultimoLeadInjetado = leadId;
+                        logRPA("O WhatsApp terminou o atendimento. Status: CONCLUIDO.", "success");
+                        logRPA("Aguardando clique no botão verde para exibir a simulação...", "info");
+                    }
+                } else {
+                    document.getElementById('loadingDb').classList.remove('opacity-0', 'pointer-events-none');
+                    document.getElementById('loadingDb').innerHTML = `
+                        <i class="fab fa-whatsapp text-6xl text-emerald-500 mb-6 animate-pulse drop-shadow-[0_0_20px_rgba(16,185,129,0.5)]"></i>
+                        <p class="text-white font-black text-sm tracking-[0.2em] uppercase">A conversar com o cliente...</p>
+                        <p class="text-emerald-400 text-[10px] mt-4 font-mono bg-emerald-900/40 px-5 py-2.5 rounded-xl border border-emerald-500/40 uppercase tracking-widest">${latestLead.STATUS_CADASTRO || 'INICIANDO'}</p>
+                    `;
+                }
+            });
+        }).catch(err => { logRPA(`Erro DB: ${err.message}`, "error"); });
+
+        function carregarPainelDB() {
+            const safeSet = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val || "-"; };
+            const safeLink = (id, val) => { 
+                const el = document.getElementById(id); 
+                if (el) el.innerHTML = val ? `<a href="${val}" target="_blank" class="hover:text-emerald-300 underline"><i class="fas fa-external-link-alt text-[8px] mr-1"></i>Acessar Arquivo</a>` : "<span class='text-slate-600'>Não enviado</span>"; 
+            };
+
+            safeSet('db_tipo', leadDB.TIPO_PERFIL);
+            safeSet('db_nome', leadDB.NOME);
+            safeSet('db_cpf', leadDB.CPF);
+            safeSet('db_nasc', leadDB.DATA_NASC);
+            safeSet('db_email', leadDB.EMAIL);
+            safeSet('db_tel', leadDB.TEL);
+            safeSet('db_cep', leadDB.CEP);
+            safeSet('db_rua', leadDB.RUA);
+            safeSet('db_numero', leadDB.NUMERO);
+            safeSet('db_bairro', leadDB.BAIRRO);
+            safeSet('db_cidade', leadDB.CIDADE);
+            safeSet('db_uf', leadDB.UF);
+            safeSet('db_dist', leadDB.DIST);
+            safeSet('db_uc', leadDB.UC);
+            safeSet('db_mes', leadDB.CONTA_MES);
+            safeSet('db_venc', leadDB.VENCIMENTO);
+            safeSet('db_valor', leadDB.VALOR !== "" ? `R$ ${leadDB.VALOR}` : "-");
+            safeSet('db_media', leadDB.MEDIA !== "" ? `${leadDB.MEDIA} kWh` : "-");
+
+            safeLink('db_link_fat', leadDB.LINK_FAT);
+            safeLink('db_link_fre', leadDB.LINK_FRE);
+            safeLink('db_link_ver', leadDB.LINK_VER);
         }
 
-        // 5. FINALIZAÇÃO
-        // await page.click('#btn-gerar-contrato'); // Fica comentado até validarmos no painel oficial
-        console.log("✅ [RPA] Operação de injeção concluída com sucesso!");
-        return true;
+        function logRPA(message, type = "info") {
+            const terminal = document.getElementById('terminal');
+            const div = document.createElement('div');
+            let colorClass = "text-slate-500";
+            if(type === "action") colorClass = "text-blue-400 font-bold";
+            if(type === "success") colorClass = "text-emerald-400 font-bold";
+            if(type === "error") colorClass = "text-red-400 font-bold";
+            
+            div.className = `log-entry active ${colorClass}`;
+            div.innerHTML = `<span class="opacity-50 mr-2">[${new Date().toLocaleTimeString().split(' ')[0]}]</span> > ${message}`;
+            terminal.appendChild(div);
+            terminal.scrollTop = terminal.scrollHeight;
+            setTimeout(() => div.classList.remove('active'), 300);
+        }
 
-    } catch (error) {
-        console.error("❌ [RPA ERRO]:", error.message);
-        return false;
-    } finally {
-        await browser.close();
-    }
-}
+        // DIGITAÇÃO SUAVE E LENTA PARA O SHOW
+        async function robotType(elementId, text) {
+            const el = document.getElementById(elementId);
+            if (!el || !text || text === "-" || text === "Não informado") return;
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            await new Promise(r => setTimeout(r, 100)); 
+            el.classList.add('robot-typing');
+            el.value = "";
+            logRPA(`Preenchendo: ${elementId}...`, "action");
+            
+            for (let char of String(text)) {
+                el.value += char;
+                await new Promise(r => setTimeout(r, 40)); 
+            }
+            await new Promise(r => setTimeout(r, 200));
+            el.classList.remove('robot-typing');
+        }
 
-// FUNÇÃO PARA SAUDAÇÃO CAVALHEIRA
-function obterSaudacao() {
-    const horaAtual = new Date(new Date().toLocaleString("en-US", {timeZone: "America/Sao_Paulo"})).getHours();
-    if (horaAtual >= 5 && horaAtual < 12) return "Bom dia";
-    if (horaAtual >= 12 && horaAtual < 18) return "Boa tarde";
-    return "Boa noite";
-}
-
-function cancelarTimeout(phone) {
-    if (timersInatividade.has(phone)) {
-        clearTimeout(timersInatividade.get(phone));
-        timersInatividade.delete(phone);
-    }
-}
-
-function configurarTimeoutInatividade(phone, ucInacabada = null) {
-    cancelarTimeout(phone); 
-    const timeoutId = setTimeout(async () => {
-        console.log(`[TIMEOUT] Cancelando espera do cliente ${phone}`);
-        await enviarFluxo(phone, TEXTOS.T21, "21");
-        if (ucInacabada) {
-            const db = admin.apps.length > 0 ? admin.firestore() : null;
-            if (db) {
-                const appId = 'igreen-autoflow-v4';
-                await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('leads').doc(ucInacabada).delete().catch(()=>{});
+        function switchScreen(screenId, btnText) {
+            document.querySelectorAll('.step-content').forEach(el => el.classList.remove('active'));
+            const target = document.getElementById(screenId);
+            if (target) target.classList.add('active');
+            document.getElementById('appScrollArea').scrollTop = 0;
+            const btn = document.getElementById('btnApp');
+            if (btn && btnText) {
+                btn.innerText = btnText;
+                btn.className = `w-full bg-[#1e293b] text-slate-300 font-black py-4 rounded-2xl shadow-lg transition-all text-xs uppercase tracking-[0.2em] relative overflow-hidden`;
             }
         }
-        memoriaEstado.delete(phone);
-        timersInatividade.delete(phone);
-    }, 15 * 60 * 1000); 
-    timersInatividade.set(phone, timeoutId);
-}
 
-// ==========================================
-// WEBHOOK PRINCIPAL Z-API
-// ==========================================
-app.post('/webhook/igreen', async (req, res) => {
-  const data = req.body;
-  res.status(200).send("OK"); 
-
-  if (data.fromMe) return;
-
-  const phone = data.phone;
-  if (data.isGroup || String(phone).toLowerCase().includes('group') || String(phone).toLowerCase().includes('@g.us')) return;
-
-  const isImage = data.type === 'image' || data.isImage === true || data.type === 'photo' || (data.image && data.image.imageUrl) || (data.photo && data.photo.photoUrl);
-  const isPDF = data.type === 'document' || data.isDocument === true || (data.document && data.document.documentUrl);
-  const textoIn = data.text?.message?.trim() || "";
-  const txtL = textoIn.toLowerCase();
-  
-  cancelarTimeout(phone);
-  
-  const chamadasMenu = ['oi', 'olá', 'ola', 'menu', 'iniciar'];
-  const chamadasNovo = ['novo', 'nova'];
-  
-  if (!isImage && !isPDF) {
-      if (chamadasMenu.includes(txtL)) {
-          console.log(`⚡ [VIA VERDE] Menu INSTANTÂNEO para ${phone}`);
-          const saudacao = obterSaudacao();
-          const menuText = `${saudacao}! Aqui é o assistente virtual da iGreen Energy 💚\n\nInforme qual a opção que você deseja iniciar:\n\n1️⃣ - Novo Cadastro\n2️⃣ - Atualizar Cadastro\n3️⃣ - Cancelar Cadastro que Iniciei`;
-          enviarMensagem(phone, menuText); 
-          memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_OPCAO_MENU', TELEFONE: phone });
-          configurarTimeoutInatividade(phone, null);
-          return; 
-      }
-      
-      if (chamadasNovo.includes(txtL)) {
-          memoriaEstado.delete(phone); 
-          enviarFluxo(phone, TEXTOS.T01, "01"); 
-          memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', TELEFONE: phone });
-          configurarTimeoutInatividade(phone, null);
-          return;
-      }
-  }
-
-  const db = admin.apps.length > 0 ? admin.firestore() : null;
-  const appId = 'igreen-autoflow-v4';
-  
-  let status = 'NOVO';
-  let leadRef = null;
-  let mem = memoriaEstado.get(phone);
-  let leadData = mem || {};
-
-  if (mem && mem.STATUS_CADASTRO) {
-      status = mem.STATUS_CADASTRO;
-      if (db && mem.UC) {
-          leadRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('leads').doc(mem.UC);
-      }
-  } else if (db) {
-      try {
-          const leadsColl = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('leads');
-          const snapshot = await leadsColl.where('TELEFONE', '==', phone).get();
-          if (!snapshot.empty) {
-              let docs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-              docs.sort((a, b) => {
-                  const ta = a.DATA_PROCESSAMENTO?.toMillis ? a.DATA_PROCESSAMENTO.toMillis() : 0;
-                  const tb = b.DATA_PROCESSAMENTO?.toMillis ? b.DATA_PROCESSAMENTO.toMillis() : 0;
-                  return tb - ta; 
-              });
-              
-              const latest = docs[0];
-              if (!['CONCLUIDO', 'RECUSADO_CONSUMO', 'RECUSADO_TARIFA_SOCIAL', 'NOME_DIVERGENTE', 'CONFIRMANDO_CANCELAMENTO'].includes(latest.STATUS_CADASTRO)) {
-                  if (latest.UC) leadRef = leadsColl.doc(latest.UC);
-                  status = latest.STATUS_CADASTRO;
-                  leadData = latest;
-                  memoriaEstado.set(phone, latest);
-              }
-          }
-      } catch(e) { }
-  }
-
-  console.log(`\n📡 [RADAR] Cliente: ${phone} | Estado: [${status}]`);
-
-  if (txtL === 'cancelar' && status !== 'CONFIRMANDO_RECADASTRO' && status !== 'CONFIRMANDO_CANCELAMENTO') {
-      enviarFluxo(phone, TEXTOS.T13, "13"); 
-      atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'CONFIRMANDO_CANCELAMENTO', PREV_STATUS: status });
-      configurarTimeoutInatividade(phone, mem?.UC);
-      return;
-  }
-  
-  if (txtL.match(/(atendente|humano|consultor|especialista|falar com alg)/)) {
-      enviarFluxo(phone, TEXTOS.T20, "20"); 
-      atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'TRANSBORDO_HUMANO' });
-      return;
-  }
-
-  // ==========================================
-  // O CÉREBRO E OS STATUS DA CONVERSA
-  // ==========================================
-  
-  if (status === 'CONFIRMANDO_CANCELAMENTO') {
-      const txtLimpo = textoIn.replace(/\D/g, '');
-      if (txtLimpo === '1') {
-          if (leadRef) await leadRef.delete();
-          memoriaEstado.delete(phone);
-          await enviarMensagem(phone, "Cancelamento confirmado. Dados apagados. A iGreen agradece o seu contato!");
-      } else if (txtLimpo === '2') {
-          await enviarMensagem(phone, "Cancelamento abortado. Por favor, envie o documento solicitado anteriormente.");
-          const prev = memoriaEstado.get(phone)?.PREV_STATUS || 'NOVO';
-          await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: prev });
-          configurarTimeoutInatividade(phone, mem?.UC);
-      } else {
-          await enviarMensagem(phone, "Opção inválida. Digite 1 para cancelar ou 2 para continuar.");
-          configurarTimeoutInatividade(phone, mem?.UC);
-      }
-      return;
-  }
-
-  switch (status) {
-      
-      case 'AGUARDANDO_OPCAO_MENU':
-          if (isImage || isPDF) {
-              await enviarMensagem(phone, "Por favor, digite o *número* da opção desejada (1, 2 ou 3) antes de me enviar documentos. 🎯");
-              configurarTimeoutInatividade(phone, null);
-              return;
-          }
-          const opMenu = textoIn.replace(/\D/g, '');
-          if (opMenu === '1') {
-              console.log(`🎯 Cliente ${phone} escolheu Opção 1 (Novo). Avançando...`);
-              await enviarFluxo(phone, TEXTOS.T01, "01"); 
-              await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'AGUARDANDO_FATURA' });
-              configurarTimeoutInatividade(phone, null);
-          } else if (opMenu === '2') {
-              await enviarMensagem(phone, "Perfeito! Para atualizar os seus dados, por favor, me envie a foto ou PDF da sua conta de luz mais recente.");
-              await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'AGUARDANDO_FATURA' });
-              configurarTimeoutInatividade(phone, null);
-          } else if (opMenu === '3') {
-              await enviarFluxo(phone, TEXTOS.T13, "13");
-              await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'CONFIRMANDO_CANCELAMENTO', PREV_STATUS: 'AGUARDANDO_OPCAO_MENU' });
-              configurarTimeoutInatividade(phone, null);
-          } else {
-              await enviarMensagem(phone, "Opção inválida. Por favor, digite *1*, *2* ou *3*.");
-              configurarTimeoutInatividade(phone, null);
-          }
-          break;
-
-      case 'AGUARDANDO_FATURA':
-      case 'NOVO':
-          if (!isImage && !isPDF) {
-              const saudacaoRep = obterSaudacao();
-              const menuRep = `${saudacaoRep}! Aqui é o assistente virtual da iGreen Energy 💚\n\nInforme qual a opção que você deseja iniciar:\n\n1️⃣ - Novo Cadastro\n2️⃣ - Atualizar Cadastro\n3️⃣ - Cancelar Cadastro que Iniciei`;
-              await enviarMensagem(phone, menuRep);
-              await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'AGUARDANDO_OPCAO_MENU' });
-              return;
-          }
-          await enviarFluxo(phone, TEXTOS.T02, "02");
-          
-          try {
-              let mediaUrl = obterMediaUrl(data);
-              const base64Data = await baixarArquivo(mediaUrl);
-              const mimeType = isPDF ? "application/pdf" : "image/jpeg";
-              const analise = await auditarFaturaIA(base64Data, mimeType);
-
-              if (!analise.VALIDO) {
-                  await enviarFluxo(phone, TEXTOS.T09, "09");
-                  return;
-              }
-              if (analise.TARIFA_SOCIAL) {
-                  await enviarFluxo(phone, TEXTOS.T10, "10");
-                  return;
-              }
-
-              let mediaStr = String(analise.MEDIA_CONSUMO || "0").replace(/[^0-9]/g, '');
-              analise.MEDIA_CONSUMO = parseInt(mediaStr, 10) || 0;
-              analise.ELEGIVEL = analise.MEDIA_CONSUMO >= 150;
-
-              if (analise.ELEGIVEL) {
-                  let proximoStatus = 'AGUARDANDO_DOC_FRENTE';
-                  let proximoTexto = TEXTOS.T04;
-                  
-                  let ucLimpa = String(analise.UC || "").replace(/\D/g, '');
-                  if (!ucLimpa) ucLimpa = "SEM_UC_" + Date.now();
-                  analise.UC = ucLimpa;
-
-                  let leadsColl = db ? db.collection('artifacts').doc(appId).collection('public').doc('data').collection('leads') : null;
-                  if (leadsColl) leadRef = leadsColl.doc(ucLimpa);
-
-                  let payloadUpdate = {
-                      ...analise,
-                      STATUS_CADASTRO: proximoStatus,
-                      DATA_PROCESSAMENTO: admin.apps.length > 0 ? admin.firestore.Timestamp.now() : new Date(),
-                      LINK_FATURA: mediaUrl,
-                      TELEFONE: phone
-                  };
-
-                  await atualizarEstado(phone, leadRef, payloadUpdate);
-                  await enviarFluxo(phone, proximoTexto, "04");
-                  configurarTimeoutInatividade(phone, ucLimpa);
-              } else {
-                  await enviarFluxo(phone, TEXTOS.T25, "25");
-                  memoriaEstado.delete(phone); 
-              }
-          } catch (e) {
-              await enviarMensagem(phone, "⚠️ Falha ao ler imagem. Reenvie.");
-          }
-          break;
-
-      case 'CONFIRMANDO_RECADASTRO':
-          if (isImage || isPDF) {
-              await enviarMensagem(phone, "Por favor, digite *1*, *2* ou *3* para escolher uma das opções acima antes de me enviar novos documentos. 🎯");
-              configurarTimeoutInatividade(phone, mem.UC);
-              return;
-          }
-          const tLimpo = textoIn.replace(/\D/g, ''); 
-          
-          if (tLimpo === '1' || textoIn.toLowerCase() === 'novo') {
-              await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE' });
-              await enviarFluxo(phone, TEXTOS.T04, "04");
-              configurarTimeoutInatividade(phone, mem.UC);
-              
-          } else if (tLimpo === '2' || textoIn.toLowerCase() === 'continuar') {
-              await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'CONCLUIDO' });
-              await enviarMensagem(phone, "✅ Perfeito! A sua nova fatura foi atualizada na nossa base de dados e os seus documentos originais foram mantidos em segurança.\n\nTudo pronto para o próximo passo no painel iGreen! 💚");
-              memoriaEstado.delete(phone); 
-              cancelarTimeout(phone);
-              
-          } else if (tLimpo === '3' || textoIn.toLowerCase() === 'cancelar' || textoIn.toLowerCase() === 'nao') {
-              await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'CONCLUIDO' }); 
-              memoriaEstado.delete(phone); 
-              await enviarMensagem(phone, TEXTOS.T29); 
-              cancelarTimeout(phone);
-              
-          } else {
-              await enviarMensagem(phone, "Opção inválida.\n\nDigite *1* para Novo Cadastro\nDigite *2* para Continuar\nDigite *3* para Cancelar");
-              configurarTimeoutInatividade(phone, mem.UC);
-          }
-          break;
-
-      case 'AGUARDANDO_CASA':
-          if (isImage || isPDF) {
-              await enviarMensagem(phone, "Aviso: Eu pedi para você digitar o número da residência, mas você me enviou um documento/imagem. 😅\n\nPor favor, *digite* apenas o número da sua casa ou apartamento.");
-              configurarTimeoutInatividade(phone, mem.UC);
-              return;
-          }
-          if (!textoIn) {
-              configurarTimeoutInatividade(phone, mem.UC);
-              return;
-          }
-          const numeroLimpoDaMensagem = textoIn.replace(/\D/g, ''); 
-          const numeroFinalSalvo = numeroLimpoDaMensagem || "S/N"; 
-          
-          await atualizarEstado(phone, leadRef, { ENDERECO_NUMERO: numeroFinalSalvo, STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE' });
-          await enviarFluxo(phone, TEXTOS.T04, "04");
-          configurarTimeoutInatividade(phone, mem.UC);
-          break;
-
-      case 'AGUARDANDO_DOC_FRENTE':
-          if (!isImage && !isPDF) { await enviarFluxo(phone, TEXTOS.T11, "11"); return; }
-          try {
-              let mediaUrlF = obterMediaUrl(data);
-              const base64Frente = await baixarArquivo(mediaUrlF);
-              const analiseDoc = await analisarDocumentoIA(base64Frente, isPDF ? "application/pdf" : "image/jpeg", "FRENTE");
-
-              if (analiseDoc.VALIDO) {
-                  let dadosDoc = { LINK_DOC_FRENTE: mediaUrlF, STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO' };
-                  if (analiseDoc.CPF && analiseDoc.CPF !== "Não consta") dadosDoc.CPF = analiseDoc.CPF;
-                  
-                  await atualizarEstado(phone, leadRef, dadosDoc);
-                  await enviarFluxo(phone, TEXTOS.T05, "05");
-                  configurarTimeoutInatividade(phone, mem.UC);
-              } else {
-                  await enviarFluxo(phone, TEXTOS.T11, "11");
-              }
-          } catch (e) { await enviarMensagem(phone, "⚠️ Erro doc frente."); }
-          break;
-
-      case 'AGUARDANDO_DOC_VERSO':
-          if (!isImage && !isPDF) { await enviarFluxo(phone, TEXTOS.T11, "11"); return; }
-          try {
-              let mediaUrlV = obterMediaUrl(data);
-              const base64Verso = await baixarArquivo(mediaUrlV);
-              const analiseDocV = await analisarDocumentoIA(base64Verso, isPDF ? "application/pdf" : "image/jpeg", "VERSO");
-
-              if (analiseDocV.VALIDO) {
-                  await enviarFluxo(phone, TEXTOS.T06, "06");
-                  let dadosDocV = { LINK_DOC_VERSO: mediaUrlV, STATUS_CADASTRO: 'AGUARDANDO_EMAIL' };
-                  if (analiseDocV.CPF && analiseDocV.CPF !== "Não consta") dadosDocV.CPF = analiseDocV.CPF;
-                  
-                  await atualizarEstado(phone, leadRef, dadosDocV);
-                  setTimeout(async () => { await enviarFluxo(phone, TEXTOS.T07, "07"); }, 4000);
-              } else {
-                  await enviarFluxo(phone, TEXTOS.T11, "11");
-              }
-          } catch (e) { await enviarMensagem(phone, "⚠️ Erro doc verso."); }
-          break;
-
-      case 'AGUARDANDO_EMAIL':
-          if (isImage || isPDF) {
-              await enviarMensagem(phone, "Por favor, apenas *digite* o seu melhor e-mail para concluirmos.");
-              return; 
-          }
-          if (!textoIn) return;
-          
-          const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-          if (emailRegex.test(textoIn)) {
-              
-              // SALVA O E-MAIL
-              await atualizarEstado(phone, leadRef, { EMAIL: textoIn, STATUS_CADASTRO: 'CONCLUIDO' });
-              
-              // GATILHO RPA: AVISA O CLIENTE E ACORDA O ROBÔ FANTASMA
-              await enviarMensagem(phone, TEXTOS.T08);
-              await enviarMensagem(phone, TEXTOS.T_RPA_START);
-              
-              if (leadRef) {
-                  const dadosParaRobo = (await leadRef.get()).data();
-                  
-                  // DISPARA O PUPPETEER EM SEGUNDO PLANO (Sem bloquear o Node)
-                  executarRPAIgreen(dadosParaRobo).then(sucesso => {
-                      if (sucesso) enviarMensagem(phone, TEXTOS.T_RPA_SUCCESS);
-                  });
-              }
-
-              memoriaEstado.delete(phone); 
-              cancelarTimeout(phone); 
-          } else {
-              await enviarFluxo(phone, TEXTOS.T12, "12");
-          }
-          break;
-  }
-});
-
-// === FUNÇÕES DE APOIO E MATEMÁTICA ===
-async function atualizarEstado(phone, leadRef, dados) {
-    const atual = memoriaEstado.get(phone) || {};
-    memoriaEstado.set(phone, { ...atual, ...dados });
-    if (leadRef) await leadRef.set(dados, { merge: true }).catch(e => console.error("Falha DB", e));
-}
-
-function obterMediaUrl(data) {
-    const url = data.link || (data.image && data.image.imageUrl) || (data.document && data.document.documentUrl) || "";
-    if (!url) throw new Error("Link vazio.");
-    return url;
-}
-
-async function baixarArquivo(mediaUrl) {
-    let res = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
-    return Buffer.from(res.data, 'binary').toString('base64');
-}
-
-// CORREÇÃO DA Z-API APLICADA AQUI
-async function enviarFluxo(phone, texto, prefixoAudio) {
-    const numLimpo = String(phone).replace(/\D/g, ''); 
-    try {
-        axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, { 
-            phone: numLimpo, message: String(texto) 
-        }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }).catch(()=>{});
-        
-        if (prefixoAudio) {
-            setTimeout(async () => await enviarAudioDireto(phone, prefixoAudio, texto), 2000);
+        async function animateUpload(boxId, iconId, lblId, link, msg) {
+            if(!link || link === "-") return;
+            const box = document.getElementById(boxId);
+            if (!box) return;
+            box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            await new Promise(r => setTimeout(r, 200));
+            box.classList.add('injected');
+            document.getElementById(iconId).className = 'fas fa-check-circle text-4xl text-emerald-500 mb-3';
+            document.getElementById(lblId).innerHTML = msg;
+            document.getElementById(lblId).classList.replace('text-slate-400', 'text-emerald-600');
+            logRPA(`Upload invisível de ficheiro injetado com sucesso.`, "success");
+            await new Promise(r => setTimeout(r, 600));
+            box.classList.remove('injected');
         }
-    } catch (e) {}
-}
 
-async function enviarMensagem(phone, message) {
-  const numLimpo = String(phone).replace(/\D/g, ''); 
-  try {
-      axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, { 
-          phone: numLimpo, message: String(message) 
-      }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }).catch(()=>{});
-  } catch (e) {}
-}
+        window.iniciarAutomacao = async function() {
+            const btnAuto = document.getElementById('btnAutoStart');
+            btnAuto.disabled = true;
+            btnAuto.className = "w-full bg-[#1e293b] text-emerald-500 font-black py-5 rounded-2xl flex items-center justify-center gap-3 uppercase tracking-[0.2em] text-sm transition-all duration-300 border border-emerald-500/30";
+            btnAuto.innerHTML = `<i class="fas fa-cogs animate-spin text-lg"></i> Robô a trabalhar...`;
 
-function buscarAudioRecursivo(diretorio, prefixo) {
-    if (audioCache.has(prefixo)) return audioCache.get(prefixo);
-    let arquivos = fs.readdirSync(diretorio);
-    for (let arquivo of arquivos) {
-        if (arquivo === 'node_modules' || arquivo === '.git') continue; 
-        let c = path.join(diretorio, arquivo);
-        if (fs.statSync(c).isDirectory()) {
-            let res = buscarAudioRecursivo(c, prefixo); 
-            if (res) return res;
-        } else if (arquivo.startsWith(prefixo) && arquivo.endsWith('.mp3')) {
-            audioCache.set(prefixo, c);
-            return c; 
-        }
-    }
-    return null;
-}
+            document.getElementById('statusLed').classList.replace('text-slate-600', 'text-emerald-500');
+            document.getElementById('statusLed').classList.add('animate-pulse');
+            logRPA("⚡ INJEÇÃO INICIADA! A MÁQUINA DE GUERRA ASSUMIU O COMANDO DA TELA.", "success");
 
-async function enviarAudioDireto(phone, prefixo, txt) {
-    try {
-        const numLimpo = String(phone).replace(/\D/g, ''); 
-        const filePath = buscarAudioRecursivo(__dirname, prefixo);
-        if (filePath) {
-            const b64 = fs.readFileSync(filePath, { encoding: 'base64' });
-            axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-audio`, 
-                { phone: numLimpo, audio: `data:audio/mpeg;base64,${b64}` }, 
-                { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }
-            ).catch(()=>{});
-        }
-    } catch (e) {}
-}
+            // ETAPA 1
+            switchScreen('step1', 'Avançar para Endereço >');
+            await new Promise(r => setTimeout(r, 600));
+            await robotType('app_nome', leadDB.NOME);
+            await robotType('app_cpf', leadDB.CPF);
+            await robotType('app_nasc', leadDB.DATA_NASC);
+            await robotType('app_email', leadDB.EMAIL);
+            await robotType('app_tel', leadDB.TEL);
+            logRPA("Clicou em Avançar.", "info");
 
-// IA DA FATURA
-async function auditarFaturaIA(base64, mimeType) {
-  if (!GEMINI_API_KEY) throw new Error("Chave ausente");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-  const prompt = `Aja como auditor iGreen. Retorne JSON: { "VALIDO": true, "OBJETO_IDENTIFICADO": "", "TARIFA_SOCIAL": false, "TIPO_PERFIL": "PESSOA FISICA", "NOME_CLIENTE": "Nome", "CPF": "Não consta", "CNPJ": "Não consta", "CEP": "00000-000", "ENDERECO": "Rua", "ENDERECO_NUMERO": "123", "BAIRRO": "Bairro", "CIDADE": "Cidade", "ESTADO": "UF", "DISTRIBUIDORA": "Nome", "UC": "Numero da UC", "MEDIA_CONSUMO": 0 }`;
-  const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType, data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
-  const res = await axios.post(url, payload);
-  return JSON.parse(res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim());
-}
+            // ETAPA 2
+            switchScreen('step2', 'Avançar para Técnicos >');
+            await new Promise(r => setTimeout(r, 600));
+            await robotType('app_cep', leadDB.CEP);
+            await robotType('app_rua', leadDB.RUA);
+            await robotType('app_num', leadDB.NUMERO);
+            await robotType('app_bairro', leadDB.BAIRRO); 
+            await robotType('app_cidade', leadDB.CIDADE); 
+            await robotType('app_uf', leadDB.UF);
+            logRPA("Clicou em Avançar.", "info");
 
-// IA DOCUMENTO
-async function analisarDocumentoIA(base64, mimeType, faceEsperada) {
-  if (!GEMINI_API_KEY) throw new Error("Chave ausente");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-  const prompt = `Extraia os dados de CNH/RG do Brasil. Face esperada: ${faceEsperada}. Retorne JSON: { "VALIDO": true, "OBJETO_IDENTIFICADO": "", "NOME_DOCUMENTO": "NOME", "CPF": "000.000.000-00", "DATA_NASCIMENTO": "DD/MM/AAAA" }`;
-  const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType, data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
-  const res = await axios.post(url, payload);
-  return JSON.parse(res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim());
-}
+            // ETAPA 3
+            switchScreen('step3', 'Injetar e Finalizar Tudo!');
+            await new Promise(r => setTimeout(r, 600));
+            await robotType('app_dist', leadDB.DIST);
+            await robotType('app_uc', leadDB.UC);
+            await robotType('app_mes', leadDB.CONTA_MES);
+            await robotType('app_media', leadDB.MEDIA);
+            
+            logRPA("Iniciando injeção de Imagens e PDFs via script...", "action");
+            await animateUpload('box_fat', 'icon_fat', 'lbl_fat', leadDB.LINK_FAT, 'Fatura Anexada');
+            await animateUpload('box_fre', 'icon_fre', 'lbl_fre', leadDB.LINK_FRE, 'Frente Anexada');
+            await animateUpload('box_ver', 'icon_ver', 'lbl_ver', leadDB.LINK_VER, 'Verso Anexado');
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V46.1 (RPA CLOUD + MENU CORRIGIDO) ONLINE`));
+            logRPA("Clicou em Gerar Contrato.", "info");
+            await new Promise(r => setTimeout(r, 800));
+
+            // ETAPA FINAL
+            document.getElementById('formFooter').classList.add('hidden');
+            switchScreen('step4');
+            
+            logRPA("✅ SUCESSO ABSOLUTO! TODOS OS DADOS FORAM INJETADOS COM PERFEIÇÃO.", "success");
+            
+            document.getElementById('statusLed').classList.remove('animate-pulse');
+
+            btnAuto.className = "w-full bg-emerald-900/30 border border-emerald-500/50 text-emerald-400 font-black py-5 rounded-2xl flex items-center justify-center gap-3 uppercase tracking-[0.2em] text-sm";
+            btnAuto.innerHTML = `<i class="fas fa-check-double text-lg"></i> Injeção Finalizada`;
+        };
+    </script>
+</body>
+</html>
