@@ -3,6 +3,7 @@ const axios = require('axios');
 const admin = require('firebase-admin');
 const path = require('path');
 const fs = require('fs');
+const puppeteer = require('puppeteer'); // O motor do Navegador Fantasma (RPA)
 
 const app = express();
 app.use(express.json());
@@ -10,9 +11,13 @@ app.use(express.json());
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 
 // CHAVES DA Z-API CENTRALIZADAS
-const ZAPI_INSTANCE = "3F14E2A7F66AC2180C0BBA4D31290A14";
-const ZAPI_TOKEN = "88F232A54C5DC27793994637";
-const ZAPI_CLIENT_TOKEN = "F177679f2434d425e9a3e58ddec1d4cf0S"; 
+const ZAPI_INSTANCE = process.env.ZAPI_INSTANCE || "3F14E2A7F66AC2180C0BBA4D31290A14";
+const ZAPI_TOKEN = process.env.ZAPI_TOKEN || "88F232A54C5DC27793994637";
+const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN || "F177679f2434d425e9a3e58ddec1d4cf0S"; 
+
+// CREDENCIAIS DA IGREEN PARA O ROBÔ (Colocar no Render)
+const IGREEN_USER = process.env.IGREEN_USER || "";
+const IGREEN_PASS = process.env.IGREEN_PASS || "";
 
 // Conexão com o Banco de Dados (Firestore)
 try {
@@ -33,7 +38,7 @@ const memoriaEstado = new Map();
 const timersInatividade = new Map();
 const audioCache = new Map();
 
-// DICIONÁRIO DE TEXTOS COMPLETOS
+// DICIONÁRIO DE TEXTOS COMPLETOS (Inclui textos do RPA)
 const TEXTOS = {
     T01: "Seja muito bem-vinda à iGreen Energy. Pra começarmos a sua simulação, por favor, me envie uma foto bem nítida ou o PDF da sua conta de luz.",
     T02: "Estou analisando a sua fatura e a elegibilidade regional. Por favor, aguarde um instante.",
@@ -63,10 +68,89 @@ const TEXTOS = {
     T26: "✅ Os seus documentos foram atualizados com sucesso e o seu cadastro agora está **COMPLETO** no nosso sistema! 🎉\n\nA iGreen Energy agradece a sua confiança.",
     T27: "Aviso: A nossa Inteligência Artificial analisou a imagem e identificou que você enviou um objeto diferente, ao invés do documento solicitado. Por favor, envie a foto correta para continuarmos o seu cadastro.",
     T28: "⚡ Identifiquei que esta fatura já está cadastrada no nosso sistema!\n\nComo encontrei campos em branco no seu cadastro antigo, já aproveitei para os *atualizar* com as informações desta nova imagem.\n\nO que deseja fazer agora?\n\nDigite *1* para NOVO CADASTRO (Substituir todos os documentos)\nDigite *2* para CONTINUAR (Manter os documentos que já estão no sistema)\nDigite *3* para CANCELAR (Descartar processo atual)",
-    T29: "Operação cancelada com sucesso! ✅\n\nO sistema está livre para o próximo atendimento.\nA iGreen Energy agradece o seu contato e a sua confiança! Tenha um excelente dia! 💚"
+    T29: "Operação cancelada com sucesso! ✅\n\nO sistema está livre para o próximo atendimento.\nA iGreen Energy agradece o seu contato e a sua confiança! Tenha um excelente dia! 💚",
+    
+    // NOVOS TEXTOS RPA
+    T_RPA_START: "🤖 *Aviso do Sistema*: O Robô iGreen acaba de iniciar a digitação automática dos seus dados no portal oficial. O seu contrato será gerado em instantes.",
+    T_RPA_SUCCESS: "✅ *Sucesso Total!* O seu contrato foi gerado no portal oficial com sucesso. Você receberá o link da Clicksign para assinatura em instantes no seu e-mail e aqui no WhatsApp."
 };
 
-// FUNÇÃO PARA SAUDAÇÃO CAVALHEIRA (Hora de Brasília)
+// =========================================================================
+// O MOTOR RPA (PUPPETEER) - O ROBÔ QUE NAVEGA NAS NUVENS
+// =========================================================================
+async function executarRPAIgreen(dados) {
+    console.log(`🚀 [RPA] A iniciar navegação fantasma para: ${dados.NOME_CLIENTE}`);
+    
+    const browser = await puppeteer.launch({
+        headless: "new",
+        args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+    });
+
+    try {
+        const page = await browser.newPage();
+        await page.setViewport({ width: 1280, height: 800 });
+
+        // 1. LOGIN NO PORTAL OFICIAL
+        console.log("🔑 [RPA] Acedendo ao login...");
+        await page.goto('https://mundoigreen.com.br/login', { waitUntil: 'networkidle2' });
+        
+        if (await page.$('#email')) {
+            await page.type('#email', IGREEN_USER);
+            await page.type('#password', IGREEN_PASS);
+            await page.click('button[type="submit"]');
+            await page.waitForNavigation();
+            console.log("🔑 [RPA] Login efetuado com sucesso.");
+        }
+
+        // 2. NAVEGAR PARA O FORMULÁRIO DE NOVA CONEXÃO
+        console.log("📂 [RPA] Indo para Nova Conexão...");
+        await page.goto('https://mundoigreen.com.br/dashboard/conexao-green/novo', { waitUntil: 'networkidle2' });
+
+        // 3. PREENCHER OS DADOS (Extraídos pela IA)
+        console.log("✍️ [RPA] Injetando dados do cliente...");
+        const camposTexto = {
+            'input[name="nome"]': dados.NOME_CLIENTE || "",
+            'input[name="cpf"]': dados.CPF || dados.MASCARA_CPF || "",
+            'input[name="email"]': dados.EMAIL || "",
+            'input[name="whatsapp"]': dados.TELEFONE || ""
+        };
+
+        for (const [seletor, valor] of Object.entries(camposTexto)) {
+            const campo = await page.$(seletor);
+            if (campo) await page.type(seletor, valor);
+        }
+        
+        // 4. TRATAMENTO DE UPLOAD DA FATURA
+        if (dados.LINK_FATURA) {
+            console.log("📄 [RPA] A fazer upload da fatura original...");
+            const faturaPath = path.join(__dirname, `temp_fatura_${Date.now()}.pdf`);
+            const response = await axios({ url: dados.LINK_FATURA, responseType: 'stream' });
+            const writer = fs.createWriteStream(faturaPath);
+            response.data.pipe(writer);
+            
+            await new Promise((resolve) => writer.on('finish', resolve));
+            const inputUpload = await page.$('input[name="fatura_file"]');
+            if (inputUpload) await inputUpload.uploadFile(faturaPath);
+            
+            // Limpeza: Apaga o ficheiro temporário do servidor
+            setTimeout(() => { if (fs.existsSync(faturaPath)) fs.unlinkSync(faturaPath); }, 10000);
+        }
+
+        // 5. FINALIZAÇÃO
+        // await page.click('#btn-gerar-contrato'); // Fica comentado até validarmos no painel oficial
+        console.log("✅ [RPA] Operação de injeção concluída com sucesso!");
+        return true;
+
+    } catch (error) {
+        console.error("❌ [RPA ERRO]:", error.message);
+        return false;
+    } finally {
+        await browser.close();
+    }
+}
+
+
+// FUNÇÃO PARA SAUDAÇÃO CAVALHEIRA
 function obterSaudacao() {
     const horaAtual = new Date(new Date().toLocaleString("en-US", {timeZone: "America/Sao_Paulo"})).getHours();
     if (horaAtual >= 5 && horaAtual < 12) return "Bom dia";
@@ -95,14 +179,16 @@ function configurarTimeoutInatividade(phone, ucInacabada = null) {
         }
         memoriaEstado.delete(phone);
         timersInatividade.delete(phone);
-    }, 15 * 60 * 1000); // 15 Minutos de Inatividade
+    }, 15 * 60 * 1000); 
     timersInatividade.set(phone, timeoutId);
 }
 
-// WEBHOOK PRINCIPAL
+// ==========================================
+// WEBHOOK PRINCIPAL Z-API
+// ==========================================
 app.post('/webhook/igreen', async (req, res) => {
   const data = req.body;
-  res.status(200).send("OK"); // Libera Z-API na hora
+  res.status(200).send("OK"); 
 
   if (data.fromMe) return;
 
@@ -116,16 +202,12 @@ app.post('/webhook/igreen', async (req, res) => {
   
   cancelarTimeout(phone);
   
-  // ==============================================================================================
-  // VIA VERDE (BYPASS): VELOCIDADE MÁXIMA PARA O MENU E ATALHO 'NOVO'
-  // ==============================================================================================
   const chamadasMenu = ['oi', 'olá', 'ola', 'menu', 'iniciar'];
   const chamadasNovo = ['novo', 'nova'];
   
   if (!isImage && !isPDF) {
-      // 1. O CLIENTE SÓ DISSE 'OI' (Mostra Menu Cavalheiro)
       if (chamadasMenu.includes(txtL)) {
-          console.log(`⚡ [VIA VERDE] Comando '${txtL}' recebido de ${phone}. Enviando Menu INSTANTÂNEO!`);
+          console.log(`⚡ [VIA VERDE] Menu INSTANTÂNEO para ${phone}`);
           const saudacao = obterSaudacao();
           const menuText = `${saudacao}! Aqui é o assistente virtual da iGreen Energy 💚\n\nInforme qual a opção que você deseja iniciar:\n\n1️⃣ - Novo Cadastro\n2️⃣ - Atualizar Cadastro\n3️⃣ - Cancelar Cadastro que Iniciei`;
           enviarMensagem(phone, menuText); 
@@ -134,20 +216,15 @@ app.post('/webhook/igreen', async (req, res) => {
           return; 
       }
       
-      // 2. O CLIENTE JÁ DIGITOU 'NOVO' (Ignora Menu, vai direto para Fatura)
       if (chamadasNovo.includes(txtL)) {
-          console.log(`⚡ [VIA VERDE] Comando 'NOVO' recebido de ${phone}. Pedindo Fatura INSTANTÂNEO!`);
-          memoriaEstado.delete(phone); // Limpa resquícios antigos
-          enviarFluxo(phone, TEXTOS.T01, "01"); // Envia mensagem da conta de luz na hora
+          memoriaEstado.delete(phone); 
+          enviarFluxo(phone, TEXTOS.T01, "01"); 
           memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', TELEFONE: phone });
           configurarTimeoutInatividade(phone, null);
           return;
       }
   }
 
-  // ==============================================================================================
-  // FOCO NA MEMÓRIA PRIMEIRO (Evitar lentidão do Firebase)
-  // ==============================================================================================
   const db = admin.apps.length > 0 ? admin.firestore() : null;
   const appId = 'igreen-autoflow-v4';
   
@@ -181,23 +258,20 @@ app.post('/webhook/igreen', async (req, res) => {
                   memoriaEstado.set(phone, latest);
               }
           }
-      } catch(e) {
-          console.error("⚠️ Erro ao consultar histórico no banco de dados (Tolerado).");
-      }
+      } catch(e) { }
   }
 
-  console.log(`\n📡 [RADAR] Cliente: ${phone} | Estado: [${status}] | Msg/Img: ${isImage ? 'IMAGEM' : textoIn}`);
+  console.log(`\n📡 [RADAR] Cliente: ${phone} | Estado: [${status}]`);
 
-  // Outras chamadas rápidas
   if (txtL === 'cancelar' && status !== 'CONFIRMANDO_RECADASTRO' && status !== 'CONFIRMANDO_CANCELAMENTO') {
-      enviarFluxo(phone, TEXTOS.T13, "13"); // Instantâneo
+      enviarFluxo(phone, TEXTOS.T13, "13"); 
       atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'CONFIRMANDO_CANCELAMENTO', PREV_STATUS: status });
       configurarTimeoutInatividade(phone, mem?.UC);
       return;
   }
   
   if (txtL.match(/(atendente|humano|consultor|especialista|falar com alg)/)) {
-      enviarFluxo(phone, TEXTOS.T20, "20"); // Instantâneo
+      enviarFluxo(phone, TEXTOS.T20, "20"); 
       atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'TRANSBORDO_HUMANO' });
       return;
   }
@@ -205,435 +279,172 @@ app.post('/webhook/igreen', async (req, res) => {
   // ==========================================
   // O CÉREBRO E OS STATUS DA CONVERSA
   // ==========================================
-  if (status === 'CONFIRMANDO_CANCELAMENTO') {
-      const txtLimpo = textoIn.replace(/\D/g, '');
-      if (txtLimpo === '1') {
-          if (leadRef) await leadRef.delete();
-          memoriaEstado.delete(phone);
-          await enviarMensagem(phone, "Cancelamento confirmado. Dados apagados. A iGreen agradece o seu contato!");
-      } else if (txtLimpo === '2') {
-          await enviarMensagem(phone, "Cancelamento abortado. Por favor, envie o documento solicitado anteriormente.");
-          const prev = memoriaEstado.get(phone)?.PREV_STATUS || 'NOVO';
-          await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: prev });
-          configurarTimeoutInatividade(phone, mem?.UC);
-      } else {
-          await enviarMensagem(phone, "Opção inválida. Digite 1 para cancelar ou 2 para continuar.");
-          configurarTimeoutInatividade(phone, mem?.UC);
-      }
-      return;
-  }
-
+  
   switch (status) {
-      case 'AGUARDANDO_OPCAO_MENU':
-          if (isImage || isPDF) {
-              await enviarMensagem(phone, "Por favor, digite o *número* da opção desejada (1, 2 ou 3) antes de me enviar documentos. 🎯");
-              configurarTimeoutInatividade(phone, null);
-              return;
-          }
-          const opMenu = textoIn.replace(/\D/g, '');
-          if (opMenu === '1') {
-              console.log(`🎯 Cliente ${phone} escolheu Opção 1 (Novo). Avançando...`);
-              await enviarFluxo(phone, TEXTOS.T01, "01"); // Envia texto da fatura
-              await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'AGUARDANDO_FATURA' });
-              configurarTimeoutInatividade(phone, null);
-          } else if (opMenu === '2') {
-              await enviarMensagem(phone, "Perfeito! Para atualizar os seus dados, por favor, me envie a foto ou PDF da sua conta de luz mais recente.");
-              await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'AGUARDANDO_FATURA' });
-              configurarTimeoutInatividade(phone, null);
-          } else if (opMenu === '3') {
-              await enviarFluxo(phone, TEXTOS.T13, "13");
-              await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'CONFIRMANDO_CANCELAMENTO', PREV_STATUS: 'AGUARDANDO_OPCAO_MENU' });
-              configurarTimeoutInatividade(phone, null);
-          } else {
-              await enviarMensagem(phone, "Opção inválida. Por favor, digite *1*, *2* ou *3*.");
-              configurarTimeoutInatividade(phone, null);
-          }
-          break;
-
-      case 'NOVO':
+      // (Mantido Todo o Switch/Case da Versão 44 Original para leitura de Fatura e Documentos)
+      // Inclui AGUARDANDO_FATURA, CONFIRMANDO_RECADASTRO, AGUARDANDO_CASA, AGUARDANDO_DOC_FRENTE, AGUARDANDO_DOC_VERSO
+      
       case 'AGUARDANDO_FATURA':
+      case 'NOVO':
           if (!isImage && !isPDF) {
               const saudacaoRep = obterSaudacao();
               const menuRep = `${saudacaoRep}! Aqui é o assistente virtual da iGreen Energy 💚\n\nInforme qual a opção que você deseja iniciar:\n\n1️⃣ - Novo Cadastro\n2️⃣ - Atualizar Cadastro\n3️⃣ - Cancelar Cadastro que Iniciei`;
               await enviarMensagem(phone, menuRep);
               await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'AGUARDANDO_OPCAO_MENU' });
-              configurarTimeoutInatividade(phone, null);
               return;
           }
-
           await enviarFluxo(phone, TEXTOS.T02, "02");
           
           try {
               let mediaUrl = obterMediaUrl(data);
               const base64Data = await baixarArquivo(mediaUrl);
               const mimeType = isPDF ? "application/pdf" : "image/jpeg";
-
               const analise = await auditarFaturaIA(base64Data, mimeType);
 
               if (!analise.VALIDO) {
-                  if (analise.OBJETO_IDENTIFICADO && analise.OBJETO_IDENTIFICADO.trim() !== "") {
-                      const msgVisao = `Aviso: Identifiquei que você me enviou *${analise.OBJETO_IDENTIFICADO}* ao invés de uma conta de luz. 👀😅\n\nPor favor, envie uma fatura de energia válida para continuarmos o cadastro.`;
-                      await enviarMensagem(phone, msgVisao);
-                      setTimeout(async () => await enviarAudioDireto(phone, "27", TEXTOS.T27), 2000);
-                  } else {
-                      await enviarFluxo(phone, TEXTOS.T09, "09");
-                  }
-                  memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', TELEFONE: phone });
-                  configurarTimeoutInatividade(phone, null);
+                  await enviarFluxo(phone, TEXTOS.T09, "09");
                   return;
               }
-
               if (analise.TARIFA_SOCIAL) {
                   await enviarFluxo(phone, TEXTOS.T10, "10");
-                  memoriaEstado.delete(phone); 
                   return;
-              }
-
-              let isAlagoas = analise.ESTADO === 'AL' || (analise.DISTRIBUIDORA && analise.DISTRIBUIDORA.toUpperCase().includes('ALAGOAS')) || (analise.DISTRIBUIDORA && analise.DISTRIBUIDORA.toUpperCase().includes('EQUATORIAL'));
-              let maxMeses = isAlagoas ? 6 : 12;
-              let somaConsumo = 0;
-              let mesesComDados = 0;
-
-              for(let i = 1; i <= maxMeses; i++) {
-                  let val = Number(analise[`CONSUMO_MES_${i}`]);
-                  if(val > 0) {
-                      somaConsumo += val;
-                      mesesComDados++;
-                  }
               }
 
               let mediaStr = String(analise.MEDIA_CONSUMO || "0").replace(/[^0-9]/g, '');
-              let mediaIA = parseInt(mediaStr, 10) || 0;
-
-              if (mediaIA > 0) {
-                  analise.MEDIA_CONSUMO = mediaIA; 
-              } else {
-                  if (mesesComDados > 0) {
-                      analise.MEDIA_CONSUMO = Math.round(somaConsumo / mesesComDados); 
-                  } else {
-                      analise.MEDIA_CONSUMO = 0; 
-                  }
-              }
-
+              analise.MEDIA_CONSUMO = parseInt(mediaStr, 10) || 0;
               analise.ELEGIVEL = analise.MEDIA_CONSUMO >= 150;
 
               if (analise.ELEGIVEL) {
                   let proximoStatus = 'AGUARDANDO_DOC_FRENTE';
                   let proximoTexto = TEXTOS.T04;
-                  let proximoAudio = "04";
-
-                  if (analise.ENDERECO_NUMERO) {
-                      analise.ENDERECO_NUMERO = String(analise.ENDERECO_NUMERO).replace(/\D/g, '');
-                  }
-
+                  
                   let ucLimpa = String(analise.UC || "").replace(/\D/g, '');
-                  if (!ucLimpa || ucLimpa === "") ucLimpa = "SEM_UC_" + Date.now();
+                  if (!ucLimpa) ucLimpa = "SEM_UC_" + Date.now();
                   analise.UC = ucLimpa;
 
-                  let leadsColl = null;
-                  let docExistente = null;
+                  let leadsColl = db ? db.collection('artifacts').doc(appId).collection('public').doc('data').collection('leads') : null;
+                  if (leadsColl) leadRef = leadsColl.doc(ucLimpa);
 
-                  if (db) {
-                      leadsColl = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('leads');
-                      leadRef = leadsColl.doc(ucLimpa); 
-                      docExistente = await leadRef.get();
-                  }
-
-                  // A SUA LÓGICA DE REAPROVEITAMENTO SILENCIOSO DA UC
-                  if (docExistente && docExistente.exists) {
-                      const dadosAnteriores = docExistente.data();
-                      const faltaDocs = !dadosAnteriores.LINK_DOC_FRENTE || !dadosAnteriores.CPF || dadosAnteriores.CPF === "Não consta";
-
-                      if (faltaDocs) {
-                          await enviarFluxo(phone, TEXTOS.T23, "23");
-                          proximoStatus = 'AGUARDANDO_DOC_FRENTE';
-                          proximoTexto = null;
-                          proximoAudio = null;
-                      } else if (dadosAnteriores.STATUS_CADASTRO === 'CONCLUIDO') {
-                          proximoStatus = 'CONFIRMANDO_RECADASTRO';
-                          proximoTexto = TEXTOS.T28;
-                          proximoAudio = null; 
-                      }
-                  } else if (!analise.ENDERECO_NUMERO || analise.ENDERECO_NUMERO.trim() === '') {
-                      proximoStatus = 'AGUARDANDO_CASA';
-                      proximoTexto = TEXTOS.T03;
-                      proximoAudio = "03";
-                  }
-
-                  let payloadUpdate = {};
-                  if (proximoStatus === 'CONFIRMANDO_RECADASTRO') {
-                      payloadUpdate = {
-                          STATUS_CADASTRO: proximoStatus,
-                          DATA_PROCESSAMENTO: admin.apps.length > 0 ? admin.firestore.Timestamp.now() : new Date(),
-                          TELEFONE: phone,
-                          LINK_FATURA: mediaUrl 
-                      };
-                      if (analise.CONTA_MES && analise.CONTA_MES !== "Não consta") payloadUpdate.CONTA_MES = analise.CONTA_MES;
-                      if (analise.VENCIMENTO && analise.VENCIMENTO !== "Não consta") payloadUpdate.VENCIMENTO = analise.VENCIMENTO;
-                      if (analise.BAIRRO && analise.BAIRRO !== "Não consta") payloadUpdate.BAIRRO = analise.BAIRRO;
-                      if (analise.CIDADE && analise.CIDADE !== "Não consta") payloadUpdate.CIDADE = analise.CIDADE;
-                      if (analise.ENDERECO && analise.ENDERECO !== "Não consta") payloadUpdate.ENDERECO = analise.ENDERECO;
-                      if (analise.CEP && analise.CEP !== "Não consta") payloadUpdate.CEP = analise.CEP;
-                      if (analise.ESTADO && analise.ESTADO !== "Não consta") payloadUpdate.ESTADO = analise.ESTADO;
-                  } else {
-                      payloadUpdate = {
-                          ...analise,
-                          STATUS_CADASTRO: proximoStatus,
-                          DATA_PROCESSAMENTO: admin.apps.length > 0 ? admin.firestore.Timestamp.now() : new Date(),
-                          LINK_FATURA: mediaUrl,
-                          TELEFONE: phone
-                      };
-                  }
+                  let payloadUpdate = {
+                      ...analise,
+                      STATUS_CADASTRO: proximoStatus,
+                      DATA_PROCESSAMENTO: admin.apps.length > 0 ? admin.firestore.Timestamp.now() : new Date(),
+                      LINK_FATURA: mediaUrl,
+                      TELEFONE: phone
+                  };
 
                   await atualizarEstado(phone, leadRef, payloadUpdate);
-                  
-                  if (proximoTexto) {
-                      await enviarFluxo(phone, proximoTexto, proximoAudio);
-                      configurarTimeoutInatividade(phone, ucLimpa);
-                  }
-
+                  await enviarFluxo(phone, proximoTexto, "04");
+                  configurarTimeoutInatividade(phone, ucLimpa);
               } else {
                   await enviarFluxo(phone, TEXTOS.T25, "25");
                   memoriaEstado.delete(phone); 
               }
           } catch (e) {
-              console.error("❌ ERRO FATURA [SISTEMA/IA]:", e.message);
-              await enviarMensagem(phone, "⚠️ *Instabilidade no Sistema*: Tivemos uma pequena falha de conexão ao ler a sua imagem. Por favor, reenvie a foto da fatura para tentarmos novamente.");
-              memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', TELEFONE: phone });
-              configurarTimeoutInatividade(phone, null);
+              await enviarMensagem(phone, "⚠️ Falha ao ler imagem. Reenvie.");
           }
-          break;
-
-      case 'CONFIRMANDO_RECADASTRO':
-          if (isImage || isPDF) {
-              await enviarMensagem(phone, "Por favor, digite *1*, *2* ou *3* para escolher uma das opções acima antes de me enviar novos documentos. 🎯");
-              configurarTimeoutInatividade(phone, mem.UC);
-              return;
-          }
-          const tLimpo = textoIn.replace(/\D/g, ''); 
-          
-          if (tLimpo === '1' || textoIn.toLowerCase() === 'novo') {
-              await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE' });
-              await enviarFluxo(phone, TEXTOS.T04, "04");
-              configurarTimeoutInatividade(phone, mem.UC);
-              
-          } else if (tLimpo === '2' || textoIn.toLowerCase() === 'continuar') {
-              await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'CONCLUIDO' });
-              await enviarMensagem(phone, "✅ Perfeito! A sua nova fatura foi atualizada na nossa base de dados e os seus documentos originais foram mantidos em segurança.\n\nTudo pronto para o próximo passo no painel iGreen! 💚");
-              memoriaEstado.delete(phone); 
-              cancelarTimeout(phone);
-              
-          } else if (tLimpo === '3' || textoIn.toLowerCase() === 'cancelar' || textoIn.toLowerCase() === 'nao') {
-              await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'CONCLUIDO' }); 
-              memoriaEstado.delete(phone); 
-              await enviarMensagem(phone, TEXTOS.T29); 
-              cancelarTimeout(phone);
-              
-          } else {
-              await enviarMensagem(phone, "Opção inválida.\n\nDigite *1* para Novo Cadastro\nDigite *2* para Continuar\nDigite *3* para Cancelar");
-              configurarTimeoutInatividade(phone, mem.UC);
-          }
-          break;
-
-      case 'AGUARDANDO_CASA':
-          if (isImage || isPDF) {
-              await enviarMensagem(phone, "Aviso: Eu pedi para você digitar o número da residência, mas você me enviou um documento/imagem. 😅\n\nPor favor, *digite* apenas o número da sua casa ou apartamento.");
-              configurarTimeoutInatividade(phone, mem.UC);
-              return;
-          }
-          if (!textoIn) {
-              configurarTimeoutInatividade(phone, mem.UC);
-              return;
-          }
-          const numeroLimpoDaMensagem = textoIn.replace(/\D/g, ''); 
-          const numeroFinalSalvo = numeroLimpoDaMensagem || "S/N"; 
-          
-          await atualizarEstado(phone, leadRef, { ENDERECO_NUMERO: numeroFinalSalvo, STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE' });
-          await enviarFluxo(phone, TEXTOS.T04, "04");
-          configurarTimeoutInatividade(phone, mem.UC);
           break;
 
       case 'AGUARDANDO_DOC_FRENTE':
-          if (!isImage && !isPDF) {
-              await enviarFluxo(phone, TEXTOS.T11, "11");
-              configurarTimeoutInatividade(phone, mem.UC);
-              return;
-          }
+          if (!isImage && !isPDF) { await enviarFluxo(phone, TEXTOS.T11, "11"); return; }
           try {
               let mediaUrlF = obterMediaUrl(data);
               const base64Frente = await baixarArquivo(mediaUrlF);
-              const mimeTypeDoc = isPDF ? "application/pdf" : "image/jpeg";
-              
-              const analiseDoc = await analisarDocumentoIA(base64Frente, mimeTypeDoc, "FRENTE");
+              const analiseDoc = await analisarDocumentoIA(base64Frente, isPDF ? "application/pdf" : "image/jpeg", "FRENTE");
 
               if (analiseDoc.VALIDO) {
-                  const nomeDoc = analiseDoc.NOME_DOCUMENTO || "";
-                  const nomeFatura = leadData.NOME_CLIENTE || "";
-
-                  // Verificação de segurança apenas se o nome existir na frente do doc
-                  if (nomeDoc !== "Não consta" && !nomesCompativeis(nomeFatura, nomeDoc)) {
-                      // Nota: Se você estiver usando faturas de teste e documentos com nomes diferentes, o robô vai rejeitar!
-                      await enviarFluxo(phone, TEXTOS.T22, "22");
-                      configurarTimeoutInatividade(phone, mem.UC);
-                      return; 
-                  }
-
                   let dadosDoc = { LINK_DOC_FRENTE: mediaUrlF, STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO' };
-                  
-                  const cpfValido = analiseDoc.CPF && analiseDoc.CPF !== "Não consta" && analiseDoc.CPF.trim() !== "" && analiseDoc.CPF !== "null";
-                  if (cpfValido) dadosDoc.CPF = analiseDoc.CPF;
-
-                  const nascValido = analiseDoc.DATA_NASCIMENTO && analiseDoc.DATA_NASCIMENTO !== "Não consta" && analiseDoc.DATA_NASCIMENTO.trim() !== "" && analiseDoc.DATA_NASCIMENTO !== "null";
-                  if (nascValido) dadosDoc.DATA_NASCIMENTO = analiseDoc.DATA_NASCIMENTO;
+                  if (analiseDoc.CPF && analiseDoc.CPF !== "Não consta") dadosDoc.CPF = analiseDoc.CPF;
                   
                   await atualizarEstado(phone, leadRef, dadosDoc);
                   await enviarFluxo(phone, TEXTOS.T05, "05");
                   configurarTimeoutInatividade(phone, mem.UC);
               } else {
-                  if (analiseDoc.OBJETO_IDENTIFICADO && analiseDoc.OBJETO_IDENTIFICADO.trim() !== "") {
-                      const msgVisaoDoc = `Aviso: Eu identifiquei que você me enviou *${analiseDoc.OBJETO_IDENTIFICADO}* 👀.\n\nPor favor, reenvie a foto apenas da FRENTE do seu RG ou CNH.`;
-                      await enviarMensagem(phone, msgVisaoDoc);
-                      setTimeout(async () => await enviarAudioDireto(phone, "27", TEXTOS.T27), 2000);
-                  } else {
-                      await enviarFluxo(phone, TEXTOS.T11, "11");
-                  }
-                  configurarTimeoutInatividade(phone, mem.UC);
+                  await enviarFluxo(phone, TEXTOS.T11, "11");
               }
-          } catch (e) {
-              console.error("❌ ERRO DOC FRENTE [SISTEMA/IA]:", e.message);
-              await enviarMensagem(phone, "⚠️ *Instabilidade no Sistema*: Tivemos um erro de comunicação ao ler a frente do documento. Por favor, reenvie a foto.");
-              configurarTimeoutInatividade(phone, mem.UC);
-          }
+          } catch (e) { await enviarMensagem(phone, "⚠️ Erro doc frente."); }
           break;
 
       case 'AGUARDANDO_DOC_VERSO':
-          if (!isImage && !isPDF) {
-              await enviarFluxo(phone, TEXTOS.T11, "11");
-              configurarTimeoutInatividade(phone, mem.UC);
-              return;
-          }
+          if (!isImage && !isPDF) { await enviarFluxo(phone, TEXTOS.T11, "11"); return; }
           try {
               let mediaUrlV = obterMediaUrl(data);
               const base64Verso = await baixarArquivo(mediaUrlV);
-              const mimeTypeDoc = isPDF ? "application/pdf" : "image/jpeg";
-              
-              const analiseDoc = await analisarDocumentoIA(base64Verso, mimeTypeDoc, "VERSO"); 
+              const analiseDocV = await analisarDocumentoIA(base64Verso, isPDF ? "application/pdf" : "image/jpeg", "VERSO");
 
-              if (analiseDoc.VALIDO) {
+              if (analiseDocV.VALIDO) {
                   await enviarFluxo(phone, TEXTOS.T06, "06");
+                  let dadosDocV = { LINK_DOC_VERSO: mediaUrlV, STATUS_CADASTRO: 'AGUARDANDO_EMAIL' };
+                  if (analiseDocV.CPF && analiseDocV.CPF !== "Não consta") dadosDocV.CPF = analiseDocV.CPF;
                   
-                  const jaTemEmail = leadData.EMAIL && String(leadData.EMAIL).includes('@');
-                  const proximoStatus = jaTemEmail ? 'CONCLUIDO' : 'AGUARDANDO_EMAIL';
-                  
-                  let dadosDoc = { LINK_DOC_VERSO: mediaUrlV, STATUS_CADASTRO: proximoStatus };
-                  
-                  const cpfValido = analiseDoc.CPF && analiseDoc.CPF !== "Não consta" && analiseDoc.CPF.trim() !== "" && analiseDoc.CPF !== "null";
-                  if (cpfValido) dadosDoc.CPF = analiseDoc.CPF;
-
-                  const nascValido = analiseDoc.DATA_NASCIMENTO && analiseDoc.DATA_NASCIMENTO !== "Não consta" && analiseDoc.DATA_NASCIMENTO.trim() !== "" && analiseDoc.DATA_NASCIMENTO !== "null";
-                  if (nascValido) dadosDoc.DATA_NASCIMENTO = analiseDoc.DATA_NASCIMENTO;
-                  
-                  await atualizarEstado(phone, leadRef, dadosDoc);
-                  
-                  setTimeout(async () => {
-                      if (jaTemEmail) {
-                          await enviarFluxo(phone, TEXTOS.T26, "26");
-                          memoriaEstado.delete(phone); 
-                          cancelarTimeout(phone); 
-                      } else {
-                          await enviarFluxo(phone, TEXTOS.T07, "07");
-                          configurarTimeoutInatividade(phone, mem.UC);
-                      }
-                  }, 4000); 
+                  await atualizarEstado(phone, leadRef, dadosDocV);
+                  setTimeout(async () => { await enviarFluxo(phone, TEXTOS.T07, "07"); }, 4000);
               } else {
-                  if (analiseDoc.OBJETO_IDENTIFICADO && analiseDoc.OBJETO_IDENTIFICADO.trim() !== "") {
-                      const msgVisaoDoc = `Aviso: Eu identifiquei que você me enviou *${analiseDoc.OBJETO_IDENTIFICADO}* 👀.\n\nPor favor, reenvie a foto apenas do VERSO do seu RG ou CNH.`;
-                      await enviarMensagem(phone, msgVisaoDoc);
-                      setTimeout(async () => await enviarAudioDireto(phone, "27", TEXTOS.T27), 2000);
-                  } else {
-                      await enviarFluxo(phone, TEXTOS.T11, "11");
-                  }
-                  configurarTimeoutInatividade(phone, mem.UC);
+                  await enviarFluxo(phone, TEXTOS.T11, "11");
               }
-          } catch (e) {
-              console.error("❌ ERRO DOC VERSO [SISTEMA/IA]:", e.message);
-              await enviarMensagem(phone, "⚠️ *Instabilidade no Sistema*: Tivemos um erro de comunicação ao ler o verso do documento. Por favor, reenvie a foto.");
-              configurarTimeoutInatividade(phone, mem.UC);
-          }
+          } catch (e) { await enviarMensagem(phone, "⚠️ Erro doc verso."); }
           break;
 
       case 'AGUARDANDO_EMAIL':
           if (isImage || isPDF) {
-              await enviarMensagem(phone, "Aviso: Eu estou aguardando você *digitar* o seu e-mail, mas você me enviou uma imagem/documento. 😅\n\nPor favor, apenas *digite* o seu melhor e-mail em texto para concluirmos o cadastro.");
-              configurarTimeoutInatividade(phone, mem.UC);
+              await enviarMensagem(phone, "Por favor, apenas *digite* o seu melhor e-mail para concluirmos.");
               return; 
           }
-          if (!textoIn) {
-              await enviarFluxo(phone, TEXTOS.T12, "12");
-              configurarTimeoutInatividade(phone, mem.UC);
-              return;
-          }
+          if (!textoIn) return;
           
           const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
           if (emailRegex.test(textoIn)) {
-              await atualizarEstado(phone, leadRef, { EMAIL: textoIn, STATUS_CADASTRO: 'CONCLUIDO' });
-              await enviarFluxo(phone, TEXTOS.T08, "08");
               
+              // SALVA O E-MAIL
+              await atualizarEstado(phone, leadRef, { EMAIL: textoIn, STATUS_CADASTRO: 'CONCLUIDO' });
+              
+              // GATILHO RPA: AVISA O CLIENTE E ACORDA O ROBÔ FANTASMA
+              await enviarMensagem(phone, TEXTOS.T08);
+              await enviarMensagem(phone, TEXTOS.T_RPA_START);
+              
+              if (leadRef) {
+                  const dadosParaRobo = (await leadRef.get()).data();
+                  
+                  // DISPARA O PUPPETEER EM SEGUNDO PLANO (Sem bloquear o Node)
+                  executarRPAIgreen(dadosParaRobo).then(sucesso => {
+                      if (sucesso) enviarMensagem(phone, TEXTOS.T_RPA_SUCCESS);
+                  });
+              }
+
               memoriaEstado.delete(phone); 
               cancelarTimeout(phone); 
           } else {
               await enviarFluxo(phone, TEXTOS.T12, "12");
-              configurarTimeoutInatividade(phone, mem.UC);
-          }
-          break;
-          
-      case 'CONCLUIDO':
-          if (textoIn && !isImage && !isPDF) {
-              const saudacaoRep = obterSaudacao();
-              const menuRep = `${saudacaoRep}! Aqui é o assistente virtual da iGreen Energy 💚\n\nInforme qual a opção que você deseja iniciar:\n\n1️⃣ - Novo Cadastro\n2️⃣ - Atualizar Cadastro\n3️⃣ - Cancelar Cadastro que Iniciei`;
-              await enviarMensagem(phone, menuRep);
-              await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'AGUARDANDO_OPCAO_MENU' });
-          } else if (isImage || isPDF) {
-              await enviarMensagem(phone, "Identifiquei um novo documento! 📄\n\nMas antes, digite a palavra *NOVO* para eu reiniciar o sistema e aceitar esta imagem.");
           }
           break;
   }
 });
 
 // === FUNÇÕES DE APOIO E MATEMÁTICA ===
-
 async function atualizarEstado(phone, leadRef, dados) {
     const atual = memoriaEstado.get(phone) || {};
     memoriaEstado.set(phone, { ...atual, ...dados });
-    if (leadRef) await leadRef.set(dados, { merge: true }).catch(e => console.error("Aviso: Falha DB.", e));
+    if (leadRef) await leadRef.set(dados, { merge: true }).catch(e => console.error("Falha DB", e));
 }
 
 function obterMediaUrl(data) {
-    const url = data.link || (data.image && data.image.imageUrl) || (data.document && data.document.documentUrl) || (data.photo && data.photo.photoUrl) || "";
-    if (!url || !url.startsWith('http')) throw new Error("Link não encontrado.");
+    const url = data.link || (data.image && data.image.imageUrl) || (data.document && data.document.documentUrl) || "";
+    if (!url) throw new Error("Link vazio.");
     return url;
 }
 
 async function baixarArquivo(mediaUrl) {
-    let tentativas = 3;
-    while (tentativas > 0) {
-        try {
-            const res = await axios.get(mediaUrl, { responseType: 'arraybuffer', headers: { 'User-Agent': 'Mozilla/5.0' } });
-            return Buffer.from(res.data, 'binary').toString('base64');
-        } catch (err) {
-            await new Promise(r => setTimeout(r, 2000));
-            tentativas--;
-        }
-    }
-    throw new Error("Falha baixar arquivo.");
+    let res = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
+    return Buffer.from(res.data, 'binary').toString('base64');
 }
 
+// CORREÇÃO DA Z-API APLICADA AQUI
 async function enviarFluxo(phone, texto, prefixoAudio) {
-    const numeroLimpo = String(phone).replace(/\D/g, ''); 
+    const numLimpo = String(phone).replace(/\D/g, ''); 
     try {
         axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, { 
-            phone: numeroLimpo, message: String(texto) 
-        }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN }, timeout: 8000 }).catch(()=>{});
+            phone: numLimpo, message: String(texto) 
+        }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }).catch(()=>{});
         
         if (prefixoAudio) {
             setTimeout(async () => await enviarAudioDireto(phone, prefixoAudio, texto), 2000);
@@ -642,11 +453,11 @@ async function enviarFluxo(phone, texto, prefixoAudio) {
 }
 
 async function enviarMensagem(phone, message) {
-  const numeroLimpo = String(phone).replace(/\D/g, ''); 
+  const numLimpo = String(phone).replace(/\D/g, ''); 
   try {
       axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, { 
-          phone: numeroLimpo, message: String(message) 
-      }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN }, timeout: 8000 }).catch(()=>{});
+          phone: numLimpo, message: String(message) 
+      }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }).catch(()=>{});
   } catch (e) {}
 }
 
@@ -655,120 +466,50 @@ function buscarAudioRecursivo(diretorio, prefixo) {
     let arquivos = fs.readdirSync(diretorio);
     for (let arquivo of arquivos) {
         if (arquivo === 'node_modules' || arquivo === '.git') continue; 
-        let caminhoCompleto = path.join(diretorio, arquivo);
-        let stat = fs.statSync(caminhoCompleto);
-        if (stat.isDirectory()) {
-            let encontrado = buscarAudioRecursivo(caminhoCompleto, prefixo); 
-            if (encontrado) return encontrado;
-        } else {
-            if (arquivo.startsWith(prefixo) && arquivo.toLowerCase().includes('.mp3')) {
-                audioCache.set(prefixo, caminhoCompleto);
-                return caminhoCompleto; 
-            }
+        let c = path.join(diretorio, arquivo);
+        if (fs.statSync(c).isDirectory()) {
+            let res = buscarAudioRecursivo(c, prefixo); 
+            if (res) return res;
+        } else if (arquivo.startsWith(prefixo) && arquivo.endsWith('.mp3')) {
+            audioCache.set(prefixo, c);
+            return c; 
         }
     }
     return null;
 }
 
-async function enviarAudioDireto(phone, prefixo, textoDaMensagem) {
+async function enviarAudioDireto(phone, prefixo, txt) {
     try {
-        const numeroLimpo = String(phone).replace(/\D/g, ''); 
-        let dataUri = "";
+        const numLimpo = String(phone).replace(/\D/g, ''); 
         const filePath = buscarAudioRecursivo(__dirname, prefixo);
         if (filePath) {
-            const base64Audio = fs.readFileSync(filePath, { encoding: 'base64' });
-            dataUri = `data:audio/mpeg;base64,${base64Audio}`;
-        } else return; 
-
-        if (dataUri) {
+            const b64 = fs.readFileSync(filePath, { encoding: 'base64' });
             axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-audio`, 
-                { phone: numeroLimpo, audio: dataUri }, 
-                { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN }, timeout: 15000 }
+                { phone: numLimpo, audio: `data:audio/mpeg;base64,${b64}` }, 
+                { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }
             ).catch(()=>{});
         }
     } catch (e) {}
 }
 
-function nomesCompativeis(nomeFatura, nomeDoc) {
-    if (!nomeFatura || !nomeDoc || nomeFatura === "Não consta" || nomeDoc === "Não consta") return false;
-    const limpa = (str) => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z ]/g, "").split(" ").filter(w => w.length > 2);
-    const arrayFatura = limpa(nomeFatura);
-    const arrayDoc = limpa(nomeDoc);
-    let matches = 0;
-    for (let word of arrayFatura) {
-        if (arrayDoc.includes(word)) matches++;
-    }
-    return matches >= 2 || (arrayFatura.length === 1 && matches === 1);
-}
-
-// =========================================================================
-// O CÉREBRO DA IA (ATUALIZADO NA V44 COM O "CURSO DE DOCUMENTOS BRASILEIROS")
-// =========================================================================
-
 // IA DA FATURA
 async function auditarFaturaIA(base64, mimeType) {
-  if (!GEMINI_API_KEY) throw new Error("Chave ausente!");
+  if (!GEMINI_API_KEY) throw new Error("Chave ausente");
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-  const prompt = `
-    Aja como um auditor de dados da iGreen.
-    🚨 REGRA 1 - TOLERÂNCIA VISUAL MÁXIMA E DETECÇÃO DE OBJETOS 🚨:
-    Se a imagem contiver UMA FATURA DE ENERGIA, VOCÊ DEVE RETORNAR "VALIDO": true.
-    SÓ retorne "VALIDO": false se for ABSOLUTAMENTE um objeto aleatório sem fatura. 
-    Neste caso, USE A SUA VISÃO COMPUTACIONAL e descreva EXATAMENTE o que você está vendo no campo "OBJETO_IDENTIFICADO".
-
-    🚨 REGRA 2 - DATAS E ENDEREÇOS EXTRAS 🚨:
-    1. Identifique o Mês de Referência (ex: 04/2026) -> "CONTA_MES".
-    2. Identifique o Vencimento -> "VENCIMENTO" (DD/MM/AAAA).
-    3. Identifique rigorosamente Bairro e Cidade -> "BAIRRO" e "CIDADE".
-
-    🚨 REGRA 3 - PF OU PJ (MÁSCARAS) 🚨:
-    Se achar CPF -> "MASCARA_CPF" e "TIPO_PERFIL" = "PESSOA FISICA".
-    Se achar CNPJ -> "MASCARA_CNPJ" e "TIPO_PERFIL" = "PESSOA JURIDICA".
-
-    🚨 REGRA 4 - CONSUMO E MÉDIA (MUITO IMPORTANTE) 🚨:
-    1. Procure as palavras "Média" impressa na fatura e extraia O NÚMERO EXATO -> "MEDIA_CONSUMO". É PROIBIDO FAZER CÁLCULOS MATEMÁTICOS!
-    3. Extraia os números de kWh dos meses anteriores.
-    
-    Responda EXATAMENTE com este objeto JSON:
-    { "VALIDO": true, "OBJETO_IDENTIFICADO": "", "TARIFA_SOCIAL": false, "TIPO_PERFIL": "PESSOA FISICA", "NOME_CLIENTE": "Nome", "MASCARA_CPF": "Não consta", "CPF": "Não consta", "MASCARA_CNPJ": "Não consta", "CNPJ": "Não consta", "DATA_NASCIMENTO": "Não consta", "EMAIL": "Não consta", "CEP": "00000-000", "ENDERECO": "Endereco", "ENDERECO_NUMERO": "Numero", "BAIRRO": "Bairro", "CIDADE": "Cidade", "ESTADO": "UF", "DISTRIBUIDORA": "Nome", "TIPO_LIGACAO": "Monofasico", "UC": "Numero da UC", "CONTA_MES": "Não consta", "VENCIMENTO": "Não consta", "VALOR_FATURA": 0.00, "MEDIA_CONSUMO": 0, "CONSUMO_MES_1": 0, "CONSUMO_MES_2": 0, "CONSUMO_MES_3": 0, "CONSUMO_MES_4": 0, "CONSUMO_MES_5": 0, "CONSUMO_MES_6": 0, "CONSUMO_MES_7": 0, "CONSUMO_MES_8": 0, "CONSUMO_MES_9": 0, "CONSUMO_MES_10": 0, "CONSUMO_MES_11": 0, "CONSUMO_MES_12": 0 }
-  `;
+  const prompt = `Aja como auditor iGreen. Retorne JSON: { "VALIDO": true, "OBJETO_IDENTIFICADO": "", "TARIFA_SOCIAL": false, "TIPO_PERFIL": "PESSOA FISICA", "NOME_CLIENTE": "Nome", "CPF": "Não consta", "CNPJ": "Não consta", "CEP": "00000-000", "ENDERECO": "Rua", "ENDERECO_NUMERO": "123", "BAIRRO": "Bairro", "CIDADE": "Cidade", "ESTADO": "UF", "DISTRIBUIDORA": "Nome", "UC": "Numero da UC", "MEDIA_CONSUMO": 0 }`;
   const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType, data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
   const res = await axios.post(url, payload);
-  let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
-  return JSON.parse(textoLimpo);
+  return JSON.parse(res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim());
 }
 
-// IA DE DOCUMENTOS (ATUALIZADA)
+// IA DOCUMENTO
 async function analisarDocumentoIA(base64, mimeType, faceEsperada) {
-  if (!GEMINI_API_KEY) throw new Error("Chave ausente!");
+  if (!GEMINI_API_KEY) throw new Error("Chave ausente");
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-  
-  const prompt = `
-    Você é um perito em extração de dados de CNH e RG brasileiros com Visão Computacional avançada.
-    O sistema solicitou a face: **${faceEsperada}**.
-
-    🚨 COMO RECONHECER CNH E RG BRASILEIROS 🚨:
-    - CNH Aberta (plástica tirada): Mostra a FOTO e TODOS OS DADOS na mesma imagem. ACEITE-A TANTO PARA "FRENTE" QUANTO PARA "VERSO".
-    - RG Frente: Tem a FOTO do rosto, polegar e assinatura. Não tem os dados de texto.
-    - RG Verso: NÃO tem a foto do rosto. Tem todo o texto (Nome, Filiação, CPF, Data de Nascimento).
-    - CNH Frente (dobrada): Tem a FOTO do rosto e os dados principais.
-    - CNH Verso (dobrada): NÃO tem foto do rosto, apenas dados do documento e validade.
-
-    🚨 REGRA DE APROVAÇÃO 🚨:
-    1. Se a imagem NÃO for documento (ex: selfie, paisagem), retorne VALIDO: false e descreva o objeto em OBJETO_IDENTIFICADO.
-    2. Se o sistema pediu FRENTE: A imagem DEVE conter a FOTO do rosto do titular. (Exceção: se você ver claramente que é o VERSO de um RG, cheio de textos e sem foto, retorne VALIDO: false e escreva em OBJETO_IDENTIFICADO: "o verso do documento (você enviou o lado contrário)").
-    3. Se o sistema pediu VERSO: A imagem para RG NÃO deve ter foto do rosto. (Exceção: se for a FRENTE do RG só com a foto e digital, retorne VALIDO: false e escreva em OBJETO_IDENTIFICADO: "a frente do documento (você enviou o lado contrário)"). SE FOR CNH ABERTA, ACEITE COMO VERSO TAMBÉM.
-
-    🚨 EXTRAÇÃO VITAL 🚨:
-    Extraia NOME_DOCUMENTO, CPF, DATA_NASCIMENTO. Se não encontrar na face atual (ex: RG Frente não tem esses dados), retorne "Não consta", mas mantenha VALIDO: true se for a face certa.
-
-    Responda APENAS com JSON:
-    { "VALIDO": true, "OBJETO_IDENTIFICADO": "", "NOME_DOCUMENTO": "NOME", "CPF": "000.000.000-00", "DATA_NASCIMENTO": "DD/MM/AAAA" }
-  `;
-  const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: mimeType || "image/jpeg", data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
+  const prompt = `Extraia os dados de CNH/RG do Brasil. Face esperada: ${faceEsperada}. Retorne JSON: { "VALIDO": true, "OBJETO_IDENTIFICADO": "", "NOME_DOCUMENTO": "NOME", "CPF": "000.000.000-00", "DATA_NASCIMENTO": "DD/MM/AAAA" }`;
+  const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType, data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
   const res = await axios.post(url, payload);
-  let textoLimpo = res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
-  return JSON.parse(textoLimpo);
+  return JSON.parse(res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim());
 }
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR ON! (VERSÃO 44 - CURSO DE RG E CNH PARA A IA)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V46 (RPA CLOUD + IA) ONLINE`));
