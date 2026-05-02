@@ -54,9 +54,6 @@ const TEXTOS = {
     T_RPA_SUCCESS: "✅ *Sucesso Total!* O seu contrato foi gerado no portal oficial com sucesso. Você receberá o link da Clicksign para assinatura em instantes no seu e-mail e aqui no WhatsApp."
 };
 
-// =========================================================================
-// O MOTOR RPA (PUPPETEER) - O ROBÔ QUE NAVEGA NAS NUVENS
-// =========================================================================
 async function executarRPAIgreen(dados) {
     console.log(`🚀 [RPA] A iniciar navegação fantasma para: ${dados.NOME_CLIENTE}`);
     const browser = await puppeteer.launch({
@@ -150,9 +147,6 @@ function configurarTimeoutInatividade(phone, ucInacabada = null) {
     timersInatividade.set(phone, timeoutId);
 }
 
-// ==========================================
-// WEBHOOK PRINCIPAL Z-API
-// ==========================================
 app.post('/webhook/igreen', async (req, res) => {
   const data = req.body;
   res.status(200).send("OK"); 
@@ -305,23 +299,16 @@ app.post('/webhook/igreen', async (req, res) => {
                   return;
               }
 
-              // =========================================================================
-              // A MATEMÁTICA EXATA DA EQUATORIAL (SOMA 6 MESES DE BAIXO E DIVIDE POR 6)
-              // =========================================================================
               let somaConsumo = 0;
               let consumosExtraidos = [
                   analise.CONSUMO_M1, analise.CONSUMO_M2, analise.CONSUMO_M3, 
                   analise.CONSUMO_M4, analise.CONSUMO_M5, analise.CONSUMO_M6
               ];
-              
               for (let i = 0; i < 6; i++) {
                   let valorMensal = parseInt(String(consumosExtraidos[i] || "0").replace(/\D/g, ''), 10);
-                  if (!isNaN(valorMensal) && valorMensal > 0) {
-                      somaConsumo += valorMensal;
-                  }
+                  if (!isNaN(valorMensal) && valorMensal > 0) somaConsumo += valorMensal;
               }
               
-              // Regra Inquebrável: Soma os extraídos e divide por 6.
               analise.MEDIA_CONSUMO = Math.round(somaConsumo / 6);
               analise.ELEGIVEL = analise.MEDIA_CONSUMO >= 150;
 
@@ -443,7 +430,6 @@ app.post('/webhook/igreen', async (req, res) => {
               await atualizarEstado(phone, leadRef, { EMAIL: textoIn, STATUS_CADASTRO: 'CONCLUIDO' });
               await enviarMensagem(phone, TEXTOS.T08);
               
-              // Se tiver os dados de acesso configurados no Render, dispara o Robô
               if (IGREEN_USER !== "" && IGREEN_PASS !== "") {
                   await enviarMensagem(phone, TEXTOS.T_RPA_START);
                   if (leadRef) {
@@ -524,7 +510,7 @@ async function enviarAudioDireto(phone, prefixo, txt) {
 }
 
 // -------------------------------------------------------------
-// O CÉREBRO DA IA (PREPARADO PARA LER DE BAIXO PARA CIMA)
+// O CÉREBRO DA IA (A PRIMA DONA DO ENDEREÇO BLINDADO)
 // -------------------------------------------------------------
 
 async function auditarFaturaIA(base64, mimeType) {
@@ -532,21 +518,24 @@ async function auditarFaturaIA(base64, mimeType) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
   const prompt = `
     Aja como um auditor de dados da iGreen.
-    🚨 REGRA 1 - DETECÇÃO 🚨: Se a imagem contiver UMA FATURA DE ENERGIA, retorne "VALIDO": true. SÓ retorne false se for ABSOLUTAMENTE um objeto aleatório. Neste caso, descreva em "OBJETO_IDENTIFICADO".
-    🚨 REGRA 2 - DATAS E ENDEREÇOS EXTRAS 🚨: 
-    1. Identifique o Mês de Referência (ex: 04/2026) -> "CONTA_MES". 
-    2. Identifique o Vencimento -> "VENCIMENTO" (DD/MM/AAAA). 
-    3. Identifique rigorosamente Bairro e Cidade -> "BAIRRO" e "CIDADE". 
-    4. Identifique o Valor Total -> "VALOR_FATURA".
-    🚨 REGRA 3 - PF/PJ 🚨: Se achar CPF -> "MASCARA_CPF". Se achar CNPJ -> "MASCARA_CNPJ".
-    🚨 REGRA 4 - HISTÓRICO EQUATORIAL (MUITO IMPORTANTE) 🚨:
-    Não leia a média impressa na conta. 
-    Encontre o quadro de "Histórico de Consumo" em kWh. 
-    Extraia exatamente os ÚLTIMOS 6 MESES lendo DE BAIXO PARA CIMA na tabela.
-    Atribua apenas os valores numéricos de kWh aos campos "CONSUMO_M1" (de baixo, o mais recente) até "CONSUMO_M6" (subindo). Coloque 0 se não houver 6 meses.
+    🚨 REGRA 1 - DETECÇÃO 🚨: Se a imagem contiver UMA FATURA DE ENERGIA, retorne "VALIDO": true. SÓ retorne false se for ABSOLUTAMENTE um objeto aleatório.
+    
+    🚨 REGRA 2 - ENDEREÇO COMPLETO E COMPLEMENTO (A MAIS IMPORTANTE) 🚨:
+    Na fatura, a morada possui Rua/Logradouro, Número e muitas vezes um Complemento (ex: BL 05 AP 06, Lote 10, Quadra B).
+    Você DEVE JUNTAR OBRIGATORIAMENTE a Rua e o Complemento dentro do campo "ENDERECO". 
+    O Número da casa vai SOZINHO no campo "ENDERECO_NUMERO".
+    Exemplo prático: Se na fatura estiver "CD GOV THEOBALDO BARBOSA, 15251, BL 05 AP 06"
+    Você vai extrair exatamente assim:
+    "ENDERECO": "CD GOV THEOBALDO BARBOSA, BL 05 AP 06"
+    "ENDERECO_NUMERO": "15251"
+    NUNCA deite fora os dados de Bloco, Apartamento, Quadra ou Lote. Eles têm de fazer parte do campo "ENDERECO".
+    
+    🚨 REGRA 3 - HISTÓRICO EQUATORIAL 🚨:
+    Extraia exatamente os ÚLTIMOS 6 MESES lendo DE BAIXO PARA CIMA na tabela de "Histórico de Consumo" em kWh. 
+    "CONSUMO_M1" é o mês de baixo (mais recente), até "CONSUMO_M6" (subindo).
     
     Responda EXATAMENTE com este objeto JSON:
-    { "VALIDO": true, "OBJETO_IDENTIFICADO": "", "TARIFA_SOCIAL": false, "TIPO_PERFIL": "PESSOA FISICA", "NOME_CLIENTE": "Nome", "MASCARA_CPF": "Não consta", "CPF": "Não consta", "MASCARA_CNPJ": "Não consta", "CNPJ": "Não consta", "CEP": "00000-000", "ENDERECO": "Rua", "ENDERECO_NUMERO": "123", "BAIRRO": "Bairro", "CIDADE": "Cidade", "ESTADO": "UF", "DISTRIBUIDORA": "Nome", "UC": "Numero da UC", "CONTA_MES": "Não consta", "VENCIMENTO": "Não consta", "VALOR_FATURA": 0.00, "CONSUMO_M1": 0, "CONSUMO_M2": 0, "CONSUMO_M3": 0, "CONSUMO_M4": 0, "CONSUMO_M5": 0, "CONSUMO_M6": 0 }
+    { "VALIDO": true, "OBJETO_IDENTIFICADO": "", "TARIFA_SOCIAL": false, "TIPO_PERFIL": "PESSOA FISICA", "NOME_CLIENTE": "Nome", "MASCARA_CPF": "Não consta", "CPF": "Não consta", "MASCARA_CNPJ": "Não consta", "CNPJ": "Não consta", "CEP": "00000-000", "ENDERECO": "Rua Completa com Complemento", "ENDERECO_NUMERO": "123", "BAIRRO": "Bairro", "CIDADE": "Cidade", "ESTADO": "UF", "DISTRIBUIDORA": "Nome", "UC": "Numero da UC", "CONTA_MES": "Não consta", "VENCIMENTO": "Não consta", "VALOR_FATURA": 0.00, "CONSUMO_M1": 0, "CONSUMO_M2": 0, "CONSUMO_M3": 0, "CONSUMO_M4": 0, "CONSUMO_M5": 0, "CONSUMO_M6": 0 }
   `;
   const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType, data: base64 } }] }], generationConfig: { responseMimeType: "application/json" } };
   const res = await axios.post(url, payload);
@@ -568,4 +557,4 @@ async function analisarDocumentoIA(base64, mimeType, faceEsperada) {
   return JSON.parse(res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim());
 }
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V48 (Matemática Equatorial + Automação) ONLINE`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V50 (Cérebro Endereço Blindado) ONLINE`));
