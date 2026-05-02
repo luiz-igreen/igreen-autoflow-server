@@ -15,7 +15,7 @@ const ZAPI_INSTANCE = process.env.ZAPI_INSTANCE || "3F14E2A7F66AC2180C0BBA4D3129
 const ZAPI_TOKEN = process.env.ZAPI_TOKEN || "88F232A54C5DC27793994637";
 const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN || "F177679f2434d425e9a3e58ddec1d4cf0S"; 
 
-// CREDENCIAIS DA IGREEN PARA O ROBÔ (Colocar no Render)
+// CREDENCIAIS DA IGREEN PARA O ROBÔ
 const IGREEN_USER = process.env.IGREEN_USER || "";
 const IGREEN_PASS = process.env.IGREEN_PASS || "";
 
@@ -28,7 +28,7 @@ try {
     }
     console.log("✅ Banco de Dados conectado com sucesso!");
   } else {
-    console.log("⚠️ Banco de Dados aguardando credenciais (FIREBASE_CONFIG).");
+    console.log("⚠️ Banco de Dados aguardando credenciais.");
   }
 } catch (e) {
   console.error("Erro na base de dados:", e.message);
@@ -148,7 +148,6 @@ async function executarRPAIgreen(dados) {
         await browser.close();
     }
 }
-
 
 // FUNÇÃO PARA SAUDAÇÃO CAVALHEIRA
 function obterSaudacao() {
@@ -280,10 +279,52 @@ app.post('/webhook/igreen', async (req, res) => {
   // O CÉREBRO E OS STATUS DA CONVERSA
   // ==========================================
   
+  if (status === 'CONFIRMANDO_CANCELAMENTO') {
+      const txtLimpo = textoIn.replace(/\D/g, '');
+      if (txtLimpo === '1') {
+          if (leadRef) await leadRef.delete();
+          memoriaEstado.delete(phone);
+          await enviarMensagem(phone, "Cancelamento confirmado. Dados apagados. A iGreen agradece o seu contato!");
+      } else if (txtLimpo === '2') {
+          await enviarMensagem(phone, "Cancelamento abortado. Por favor, envie o documento solicitado anteriormente.");
+          const prev = memoriaEstado.get(phone)?.PREV_STATUS || 'NOVO';
+          await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: prev });
+          configurarTimeoutInatividade(phone, mem?.UC);
+      } else {
+          await enviarMensagem(phone, "Opção inválida. Digite 1 para cancelar ou 2 para continuar.");
+          configurarTimeoutInatividade(phone, mem?.UC);
+      }
+      return;
+  }
+
   switch (status) {
-      // (Mantido Todo o Switch/Case da Versão 44 Original para leitura de Fatura e Documentos)
-      // Inclui AGUARDANDO_FATURA, CONFIRMANDO_RECADASTRO, AGUARDANDO_CASA, AGUARDANDO_DOC_FRENTE, AGUARDANDO_DOC_VERSO
       
+      case 'AGUARDANDO_OPCAO_MENU':
+          if (isImage || isPDF) {
+              await enviarMensagem(phone, "Por favor, digite o *número* da opção desejada (1, 2 ou 3) antes de me enviar documentos. 🎯");
+              configurarTimeoutInatividade(phone, null);
+              return;
+          }
+          const opMenu = textoIn.replace(/\D/g, '');
+          if (opMenu === '1') {
+              console.log(`🎯 Cliente ${phone} escolheu Opção 1 (Novo). Avançando...`);
+              await enviarFluxo(phone, TEXTOS.T01, "01"); 
+              await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'AGUARDANDO_FATURA' });
+              configurarTimeoutInatividade(phone, null);
+          } else if (opMenu === '2') {
+              await enviarMensagem(phone, "Perfeito! Para atualizar os seus dados, por favor, me envie a foto ou PDF da sua conta de luz mais recente.");
+              await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'AGUARDANDO_FATURA' });
+              configurarTimeoutInatividade(phone, null);
+          } else if (opMenu === '3') {
+              await enviarFluxo(phone, TEXTOS.T13, "13");
+              await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'CONFIRMANDO_CANCELAMENTO', PREV_STATUS: 'AGUARDANDO_OPCAO_MENU' });
+              configurarTimeoutInatividade(phone, null);
+          } else {
+              await enviarMensagem(phone, "Opção inválida. Por favor, digite *1*, *2* ou *3*.");
+              configurarTimeoutInatividade(phone, null);
+          }
+          break;
+
       case 'AGUARDANDO_FATURA':
       case 'NOVO':
           if (!isImage && !isPDF) {
@@ -343,6 +384,55 @@ app.post('/webhook/igreen', async (req, res) => {
           } catch (e) {
               await enviarMensagem(phone, "⚠️ Falha ao ler imagem. Reenvie.");
           }
+          break;
+
+      case 'CONFIRMANDO_RECADASTRO':
+          if (isImage || isPDF) {
+              await enviarMensagem(phone, "Por favor, digite *1*, *2* ou *3* para escolher uma das opções acima antes de me enviar novos documentos. 🎯");
+              configurarTimeoutInatividade(phone, mem.UC);
+              return;
+          }
+          const tLimpo = textoIn.replace(/\D/g, ''); 
+          
+          if (tLimpo === '1' || textoIn.toLowerCase() === 'novo') {
+              await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE' });
+              await enviarFluxo(phone, TEXTOS.T04, "04");
+              configurarTimeoutInatividade(phone, mem.UC);
+              
+          } else if (tLimpo === '2' || textoIn.toLowerCase() === 'continuar') {
+              await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'CONCLUIDO' });
+              await enviarMensagem(phone, "✅ Perfeito! A sua nova fatura foi atualizada na nossa base de dados e os seus documentos originais foram mantidos em segurança.\n\nTudo pronto para o próximo passo no painel iGreen! 💚");
+              memoriaEstado.delete(phone); 
+              cancelarTimeout(phone);
+              
+          } else if (tLimpo === '3' || textoIn.toLowerCase() === 'cancelar' || textoIn.toLowerCase() === 'nao') {
+              await atualizarEstado(phone, leadRef, { STATUS_CADASTRO: 'CONCLUIDO' }); 
+              memoriaEstado.delete(phone); 
+              await enviarMensagem(phone, TEXTOS.T29); 
+              cancelarTimeout(phone);
+              
+          } else {
+              await enviarMensagem(phone, "Opção inválida.\n\nDigite *1* para Novo Cadastro\nDigite *2* para Continuar\nDigite *3* para Cancelar");
+              configurarTimeoutInatividade(phone, mem.UC);
+          }
+          break;
+
+      case 'AGUARDANDO_CASA':
+          if (isImage || isPDF) {
+              await enviarMensagem(phone, "Aviso: Eu pedi para você digitar o número da residência, mas você me enviou um documento/imagem. 😅\n\nPor favor, *digite* apenas o número da sua casa ou apartamento.");
+              configurarTimeoutInatividade(phone, mem.UC);
+              return;
+          }
+          if (!textoIn) {
+              configurarTimeoutInatividade(phone, mem.UC);
+              return;
+          }
+          const numeroLimpoDaMensagem = textoIn.replace(/\D/g, ''); 
+          const numeroFinalSalvo = numeroLimpoDaMensagem || "S/N"; 
+          
+          await atualizarEstado(phone, leadRef, { ENDERECO_NUMERO: numeroFinalSalvo, STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE' });
+          await enviarFluxo(phone, TEXTOS.T04, "04");
+          configurarTimeoutInatividade(phone, mem.UC);
           break;
 
       case 'AGUARDANDO_DOC_FRENTE':
@@ -512,4 +602,4 @@ async function analisarDocumentoIA(base64, mimeType, faceEsperada) {
   return JSON.parse(res.data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim());
 }
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V46 (RPA CLOUD + IA) ONLINE`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V46.1 (RPA CLOUD + MENU CORRIGIDO) ONLINE`));
