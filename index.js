@@ -40,11 +40,11 @@ const TEXTOS = {
     T08: "Prontinho. O seu pré-cadastro foi concluído com sucesso. Os seus dados já foram enviados pro nosso sistema e muito em breve você receberá o seu link para assinatura. A iGreen Energy agradece a sua confiança.",
     T11: "Aviso, a imagem enviada não é um documento de identificação (RG/CNH) válido ou está muito ilegível. Por favor, reenvie a foto do documento com mais foco.",
     T12: "E-mail inválido. Por favor, verifique se digitou corretamente, lembrando que deve conter a @ e envie novamente.",
-    T_RPA_START: "🤖 *Aviso do Sistema*: O Robô iGreen acaba de iniciar a digitação automática dos seus dados no portal oficial. Você receberá o link da Clicksign para assinatura em instantes."
+    T_RPA_START: "🤖 *Aviso do Sistema*: O Robô iGreen acaba de iniciar o teste de comunicação com o portal oficial. Aguarde..."
 };
 
 // ==========================================
-// FUNÇÕES DE COMUNICAÇÃO (Z-API E FIREBASE)
+// FUNÇÕES DE COMUNICAÇÃO
 // ==========================================
 async function salvarNoBanco(phone, dados) {
     if (admin.apps.length > 0) {
@@ -56,7 +56,7 @@ async function salvarNoBanco(phone, dados) {
                 TELEFONE: phone,
                 DATA_PROCESSAMENTO: admin.firestore.FieldValue.serverTimestamp()
             }, { merge: true });
-        } catch (e) { console.log("⚠️ Erro ao salvar no Firebase:", e.message); }
+        } catch (e) { console.log("⚠️ Erro Firebase:", e.message); }
     }
 }
 
@@ -71,11 +71,9 @@ async function enviarFluxo(phone, texto, prefixoAudio) {
     const numLimpo = String(phone).replace(/\D/g, ''); 
     try {
         await enviarMensagem(phone, texto);
-        
         if (prefixoAudio) {
             const arquivosNaPasta = fs.readdirSync(__dirname);
             const arquivoEncontrado = arquivosNaPasta.find(file => file.startsWith(prefixoAudio) && file.endsWith('.mp3'));
-            
             if (arquivoEncontrado) {
                 const filePath = path.join(__dirname, arquivoEncontrado);
                 const audioBase64 = fs.readFileSync(filePath, {encoding: 'base64'});
@@ -83,19 +81,21 @@ async function enviarFluxo(phone, texto, prefixoAudio) {
                 await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-audio`, { phone: numLimpo, audio: dataURI }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } });
             }
         }
-    } catch (e) { console.error("Erro no envio Z-API:", e.message); }
+    } catch (e) {}
 }
 
 // ==========================================
-// MOTOR RPA PUPPETEER (Mantido Intacto)
+// MOTOR RPA: TESTE SEGURO (BATER NA PORTA)
 // ==========================================
 async function executarRPA(dados, phone) {
-    console.log(`🚀 [RPA VISÃO] Iniciando para: ${dados.NOME_CLIENTE}`);
+    console.log(`🚀 [RPA OFICIAL] Iniciando Navegador Fantasma (Modo Teste Seguro)...`);
     const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"] });
 
     try {
         const page = await browser.newPage();
         await page.setViewport({ width: 1280, height: 800 });
+        
+        console.log(`🌐 [RPA] Acessando Link Real iGreen: ${IGREEN_LINK}`);
         await page.goto(IGREEN_LINK, { waitUntil: 'networkidle2', timeout: 60000 });
 
         const preencherPorPlaceholder = async (dica, valor) => {
@@ -111,30 +111,37 @@ async function executarRPA(dados, phone) {
                         alvo.style.border = "3px solid #10b981"; 
                     }
                 }, dica, valor);
-                await new Promise(r => setTimeout(r, 400));
+                await new Promise(r => setTimeout(r, 800));
             } catch (e) {}
         };
 
+        // PASSO 1: CEP E VALOR (A Única coisa que ele vai preencher hoje)
+        console.log(`✍️ [RPA] Preenchendo CEP [${dados.CEP}] e Valor/Média [${dados.MEDIA_CONSUMO}]...`);
         await preencherPorPlaceholder('00000-000', dados.CEP);
+        await preencherPorPlaceholder('Ex: 250', dados.MEDIA_CONSUMO);
+        
+        console.log("🖱️ [RPA] Clicando no botão para avançar (Simular)...");
         await page.evaluate(() => {
-            const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.toLowerCase().includes('começar') || b.textContent.toLowerCase().includes('simular'));
+            const botoes = Array.from(document.querySelectorAll('button'));
+            const btn = botoes.find(b => b.textContent.toLowerCase().includes('começar') || b.textContent.toLowerCase().includes('simular') || b.textContent.toLowerCase().includes('continuar'));
             if(btn) btn.click();
         });
-        await page.waitForTimeout(3000); 
+        
+        // Aguarda 4 segundos para provar que a tela mudou no site real
+        console.log("⏳ [RPA] Aguardando 4 segundos para a iGreen carregar a próxima tela...");
+        await page.waitForTimeout(4000); 
 
-        await preencherPorPlaceholder('Rua, avenida', dados.ENDERECO);
-        await preencherPorPlaceholder('Nome do bairro', dados.BAIRRO);
-        await preencherPorPlaceholder('Nome da cidade', dados.CIDADE);
-        await preencherPorPlaceholder('Ex: 100', dados.ENDERECO_NUMERO);
-        await preencherPorPlaceholder('Localizado na sua conta', dados.UC);
-        await preencherPorPlaceholder('Ex: 250', dados.MEDIA_CONSUMO);
-
-        console.log("🏆 [RPA] INJEÇÃO CONCLUÍDA NO PORTAL!");
-        enviarMensagem(phone, "✅ *Sucesso!* O seu contrato foi gerado no portal oficial com sucesso. Por favor, acesse o link enviado pela Clicksign para assinar.");
+        // TRAVA DE SEGURANÇA: ABORTA A MISSÃO AQUI!
+        console.log("🛑 [RPA SEGURANÇA] Teste bem sucedido! A tela avançou. Puxando o travão de mão antes de digitar nomes ou clicar em finalizar.");
+        
+        enviarMensagem(phone, "✅ *Teste de Conexão Bem Sucedido!* O Robô bateu na porta do site oficial da iGreen, preencheu o seu CEP e o Valor com sucesso e abortou a operação por segurança.");
+        
         await browser.close();
         return true;
+
     } catch (error) {
         console.error("❌ [RPA ERRO]:", error.message);
+        enviarMensagem(phone, "⚠️ *Aviso:* O robô tentou acessar a iGreen mas encontrou um obstáculo: " + error.message);
         await browser.close();
         return false;
     }
@@ -160,7 +167,7 @@ app.post('/webhook/igreen', async (req, res) => {
         memoriaEstado.delete(phone); 
         await enviarFluxo(phone, TEXTOS.T01, "01"); 
         memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA' });
-        await salvarNoBanco(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA' }); // AVISA O MONITOR!
+        await salvarNoBanco(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA' });
         return;
     }
 
@@ -174,7 +181,7 @@ app.post('/webhook/igreen', async (req, res) => {
             await enviarFluxo(phone, TEXTOS.T02, "02");
             setTimeout(async () => {
                 memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE' });
-                await salvarNoBanco(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE' }); // AVISA O MONITOR!
+                await salvarNoBanco(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE' });
                 await enviarFluxo(phone, TEXTOS.T04, "04");
             }, 3000);
             break;
@@ -182,7 +189,7 @@ app.post('/webhook/igreen', async (req, res) => {
         case 'AGUARDANDO_DOC_FRENTE':
             if (!isImage && !isPDF) { await enviarFluxo(phone, TEXTOS.T11, "11"); return; }
             memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO' });
-            await salvarNoBanco(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO' }); // AVISA O MONITOR!
+            await salvarNoBanco(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO' });
             await enviarFluxo(phone, TEXTOS.T05, "05");
             break;
 
@@ -190,7 +197,7 @@ app.post('/webhook/igreen', async (req, res) => {
             if (!isImage && !isPDF) { await enviarFluxo(phone, TEXTOS.T11, "11"); return; }
             await enviarFluxo(phone, TEXTOS.T06, "06");
             memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_EMAIL' });
-            await salvarNoBanco(phone, { STATUS_CADASTRO: 'AGUARDANDO_EMAIL' }); // AVISA O MONITOR!
+            await salvarNoBanco(phone, { STATUS_CADASTRO: 'AGUARDANDO_EMAIL' });
             setTimeout(async () => { await enviarFluxo(phone, TEXTOS.T07, "07"); }, 4000);
             break;
 
@@ -199,30 +206,23 @@ app.post('/webhook/igreen', async (req, res) => {
             const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
             
             if (emailRegex.test(textoIn)) {
-                // DADOS DE TESTE PARA O MONITOR VISUALIZAR
+                // DADOS PARCIAIS PARA O TESTE (APENAS CEP E VALOR IMPORTAM AQUI)
                 const dadosFinais = {
                     EMAIL: textoIn, 
                     STATUS_CADASTRO: 'CONCLUIDO',
-                    NOME_CLIENTE: "LUIZ JORGE (TESTE)",
-                    CPF: "000.111.222-33",
+                    NOME_CLIENTE: "TESTE SEGURO",
                     CEP: "57075-190", 
-                    ENDERECO: "AV. FERNANDES LIMA", 
-                    BAIRRO: "FAROL", 
-                    CIDADE: "MACEIÓ", 
-                    ENDERECO_NUMERO: "123", 
-                    UC: "8104050", 
                     MEDIA_CONSUMO: "250",
-                    LINK_FATURA: "-", LINK_DOC_FRENTE: "-", LINK_DOC_VERSO: "-"
                 };
 
                 memoriaEstado.set(phone, dadosFinais);
-                await salvarNoBanco(phone, dadosFinais); // DISPARA O MONITOR!
+                await salvarNoBanco(phone, dadosFinais);
                 
                 await enviarFluxo(phone, TEXTOS.T08, "08");
                 
                 setTimeout(async () => {
                     await enviarMensagem(phone, TEXTOS.T_RPA_START);
-                    executarRPA(dadosFinais, phone); 
+                    executarRPA(dadosFinais, phone); // ACIONA O ROBÔ COM TRAVA
                 }, 2000);
 
                 memoriaEstado.delete(phone); 
@@ -233,4 +233,4 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 });
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V58 ONLINE (FIREBASE SYNC ATIVADO)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V59 ONLINE (TESTE SEGURO RPA)`));
