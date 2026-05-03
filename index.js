@@ -62,14 +62,15 @@ async function enviarFluxo(phone, texto, prefixoAudio) {
         // 1. Envia o texto escrito
         await enviarMensagem(phone, texto);
         
-        // 2. RECUPERAÇÃO DA VOZ: Envia o arquivo MP3 local se existir
+        // 2. RECUPERAÇÃO DA VOZ (Busca Inteligente)
         if (prefixoAudio) {
-            const fileName = `${prefixoAudio}.mp3`;
-            const filePath = path.join(__dirname, fileName);
+            // O robô procura qualquer arquivo que comece com o número (ex: "06_Analise_Biometrica.mp3")
+            const arquivosNaPasta = fs.readdirSync(__dirname);
+            const arquivoEncontrado = arquivosNaPasta.find(file => file.startsWith(prefixoAudio) && file.endsWith('.mp3'));
             
-            // Verifica se o arquivo mp3 existe no GitHub/Render
-            if (fs.existsSync(filePath)) {
-                console.log(`🔊 [Z-API] Preparando envio de Áudio: ${fileName}`);
+            if (arquivoEncontrado) {
+                const filePath = path.join(__dirname, arquivoEncontrado);
+                console.log(`🔊 [Z-API] Preparando envio de Áudio: ${arquivoEncontrado}`);
                 const audioBase64 = fs.readFileSync(filePath, {encoding: 'base64'});
                 const dataURI = `data:audio/mp3;base64,${audioBase64}`;
                 
@@ -78,7 +79,7 @@ async function enviarFluxo(phone, texto, prefixoAudio) {
                     audio: dataURI 
                 }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } });
             } else {
-                console.log(`⚠️ [Z-API] Áudio não encontrado no servidor: ${fileName}`);
+                console.log(`⚠️ [Z-API] Áudio começando com '${prefixoAudio}' não encontrado no servidor.`);
             }
         }
     } catch (e) {
