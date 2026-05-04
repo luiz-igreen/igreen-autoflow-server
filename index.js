@@ -68,7 +68,6 @@ const TEXTOS = {
 // FUNÇÕES AUXILIARES
 // ==========================================
 
-// V76: 18 COMANDOS DE SOBREVIVÊNCIA DE MEMÓRIA RAM PARA O RENDER FREE
 const CHROME_ARGS = [
     "--no-sandbox", 
     "--disable-setuid-sandbox", 
@@ -149,7 +148,7 @@ async function executarRPADevolutiva(termoBusca, fileUrl, phone) {
 }
 
 // ==========================================
-// MOTOR RPA 3: A JORNADA AUTÔNOMA (V76)
+// MOTOR RPA 3: A JORNADA AUTÔNOMA (V77 - FIX TIMEOUT)
 // ==========================================
 async function fluxoResgateAutonomo(termoBusca, phone) {
     let browser;
@@ -164,7 +163,6 @@ async function fluxoResgateAutonomo(termoBusca, phone) {
         });
     } catch (launchError) {
         console.error("❌ ERRO FATAL AO ABRIR CHROME:", launchError);
-        // O ROBÔ AGORA MANDA O CÓDIGO DO ERRO PARA O WHATSAPP!
         await enviarMensagem(phone, `❌ Erro Crítico do Render. Passe este código ao desenvolvedor:\n\nMSG: ${launchError.message}\n\nPILHA: ${launchError.stack ? launchError.stack.substring(0, 150) : 'N/A'}`);
         return;
     }
@@ -186,20 +184,21 @@ async function fluxoResgateAutonomo(termoBusca, phone) {
             if(btnLogin) btnLogin.click();
         }, IGREEN_USER, IGREEN_PASS);
         
-        await page.waitForTimeout(5000);
+        // V77 FIX: Forma moderna de fazer o robô esperar
+        await new Promise(r => setTimeout(r, 5000));
 
         console.log(`[RESGATE] 2. Navegando para Mapa de Clientes...`);
         await page.evaluate(() => {
             const btnRelatorios = Array.from(document.querySelectorAll('div, span, button')).find(e => e.textContent.trim() === 'Relatórios');
             if(btnRelatorios) btnRelatorios.click();
         });
-        await page.waitForTimeout(1000);
+        await new Promise(r => setTimeout(r, 1000));
         
         await page.evaluate(() => {
             const btnMapa = Array.from(document.querySelectorAll('div, span, a')).find(e => e.textContent.trim() === 'Mapa de Clientes');
             if(btnMapa) btnMapa.click();
         });
-        await page.waitForTimeout(4000);
+        await new Promise(r => setTimeout(r, 4000));
 
         console.log(`[RESGATE] 3. Pesquisando: ${termoBusca}`);
         await page.evaluate((busca) => {
@@ -209,7 +208,7 @@ async function fluxoResgateAutonomo(termoBusca, phone) {
                 searchInput.dispatchEvent(new Event('input', { bubbles: true }));
             }
         }, termoBusca);
-        await page.waitForTimeout(3000);
+        await new Promise(r => setTimeout(r, 3000));
 
         console.log(`[RESGATE] 4. Extraindo CPF e Nascimento...`);
         const dadosExtraidos = await page.evaluate(() => {
@@ -258,7 +257,7 @@ async function fluxoResgateAutonomo(termoBusca, phone) {
             if(btnBuscar) btnBuscar.click();
         }, cpfEncontrado, nascEncontrado);
 
-        await page.waitForTimeout(5000); 
+        await new Promise(r => setTimeout(r, 5000)); 
 
         const faturaEncontrada = await page.evaluate(() => {
             const botoesDownload = Array.from(document.querySelectorAll('a, button')).filter(b => b.textContent.toLowerCase().includes('download') || b.textContent.toLowerCase().includes('pdf') || b.href?.includes('.pdf'));
@@ -444,4 +443,4 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 });
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V76 ONLINE (Sobrevivência Máxima de RAM)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V77 ONLINE (Atualização Motor Puppeteer)`));
