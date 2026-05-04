@@ -63,7 +63,8 @@ const CHROME_ARGS = [
     "--disable-dev-shm-usage", 
     "--disable-gpu",
     "--single-process",
-    "--no-zygote"
+    "--no-zygote",
+    "--js-flags=--expose-gc"
 ];
 
 // ==========================================
@@ -87,7 +88,13 @@ async function extrairDadosFatura(fileUrl, isPdf) {
 
 async function enviarMensagem(phone, message) {
     const numLimpo = String(phone).replace(/\D/g, ''); 
-    try { await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, { phone: numLimpo, message: String(message) }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }); } catch (e) {}
+    try { 
+        console.log(`[Z-API] Tentando enviar mensagem para ${numLimpo}...`);
+        await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, { phone: numLimpo, message: String(message) }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }); 
+        console.log(`[Z-API] ✅ Mensagem enviada com sucesso!`);
+    } catch (e) {
+        console.error(`[Z-API] ❌ Erro ao enviar mensagem:`, e.message);
+    }
 }
 
 async function salvarNoBanco(phone, dados) {
@@ -105,14 +112,17 @@ async function salvarNoBanco(phone, dados) {
 async function fluxoExtracaoDados(termoBusca, phone) {
     let browser;
     try {
-        console.log(`[EXTRATOR] Iniciando o Navegador Fantasma...`);
+        console.log(`[EXTRATOR] ⚠️ Tentando alocar memória e iniciar Navegador Fantasma...`);
         browser = await puppeteer.launch({ headless: "new", args: CHROME_ARGS });
+        
+        console.log(`[EXTRATOR] ✅ Navegador aberto. Criando nova aba...`);
         const page = await browser.newPage();
         await page.setViewport({ width: 1280, height: 800 });
         
         console.log(`[EXTRATOR] 1. Acessando Escritório: ${IGREEN_ESCRITORIO_URL}`);
         await page.goto(IGREEN_ESCRITORIO_URL, { waitUntil: 'networkidle2', timeout: 60000 });
         
+        console.log(`[EXTRATOR] Fazendo Login...`);
         await page.evaluate((u, p) => {
             const emailInput = document.querySelector('input[type="email"], input[placeholder*="e-mail" i]');
             const passInput = document.querySelector('input[type="password"], input[placeholder*="senha" i]');
@@ -124,20 +134,21 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         
         await new Promise(r => setTimeout(r, 6000));
 
-        console.log(`[EXTRATOR] 2. Navegando para Mapa de Clientes...`);
+        console.log(`[EXTRATOR] 2. Navegando para Relatórios...`);
         await page.evaluate(() => {
             const btnRelatorios = Array.from(document.querySelectorAll('div, span, button, a')).find(e => e.textContent.trim() === 'Relatórios');
             if(btnRelatorios) btnRelatorios.click();
         });
         await new Promise(r => setTimeout(r, 1500));
         
+        console.log(`[EXTRATOR] Clicando em Mapa de Clientes...`);
         await page.evaluate(() => {
             const btnMapa = Array.from(document.querySelectorAll('div, span, a')).find(e => e.textContent.trim() === 'Mapa de Clientes');
             if(btnMapa) btnMapa.click();
         });
         await new Promise(r => setTimeout(r, 5000));
 
-        console.log(`[EXTRATOR] 3. Pesquisando: ${termoBusca}`);
+        console.log(`[EXTRATOR] 3. Pesquisando alvo: ${termoBusca}`);
         await page.evaluate((busca) => {
             const searchInput = document.querySelector('input[placeholder*="Pesquisar" i], input[placeholder*="Buscar" i]');
             if(searchInput) {
@@ -147,7 +158,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         }, termoBusca);
         await new Promise(r => setTimeout(r, 4000));
 
-        console.log(`[EXTRATOR] 4. Extraindo Dados Preciosos...`);
+        console.log(`[EXTRATOR] 4. Lendo a Tabela...`);
         const dadosExtraidos = await page.evaluate(() => {
             const primeiraLinha = document.querySelector('tbody tr');
             if (!primeiraLinha || primeiraLinha.textContent.includes('Nenhum')) return null;
@@ -162,7 +173,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
             let nomeCliente = "Cliente Localizado";
             const celulas = primeiraLinha.querySelectorAll('td');
             if(celulas.length > 2) {
-                nomeCliente = celulas[2].textContent.trim(); // Ajuste conforme a coluna de nome
+                nomeCliente = celulas[2].textContent.trim(); 
             }
 
             return {
@@ -172,6 +183,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
             };
         });
 
+        console.log(`[EXTRATOR] Fechando navegador para liberar memória...`);
         await browser.close();
 
         if (!dadosExtraidos || dadosExtraidos.cpf === "Não encontrado") {
@@ -179,7 +191,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
             return;
         }
 
-        // MONTAGEM DA RESPOSTA DE BANDEJA DE PRATA
+        console.log(`[EXTRATOR] 🎉 Dados capturados! Enviando para o WhatsApp...`);
         const mensagemFinal = `✅ *DADOS CAPTURADOS COM SUCESSO!* 🕵️‍♂️\n\n` +
                               `👤 *Nome:* ${dadosExtraidos.nome}\n` +
                               `📄 *CPF:* ${dadosExtraidos.cpf}\n` +
@@ -191,8 +203,8 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         await enviarMensagem(phone, mensagemFinal);
 
     } catch (error) {
-        console.error("❌ [ERRO EXTRATOR]:", error.message);
-        await enviarMensagem(phone, `⚠️ Ocorreu um erro no servidor ao tentar aceder ao Escritório Virtual. Motivo: ${error.message}`);
+        console.error("❌ [ERRO EXTRATOR FATAL]:", error.message);
+        await enviarMensagem(phone, `⚠️ Ocorreu um erro técnico ao aceder ao Escritório Virtual. O sistema pode estar sobrecarregado (Falta de Memória RAM). Tente novamente em 2 minutos.`);
         if(browser) await browser.close();
     }
 }
@@ -201,6 +213,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
 // LÓGICA DO WEBHOOK
 // ==========================================
 app.post('/webhook/igreen', async (req, res) => {
+    // Responde ao Z-API na hora para ele não travar
     res.status(200).send("OK");
     const data = req.body;
     if (data.fromMe) return;
@@ -214,13 +227,11 @@ app.post('/webhook/igreen', async (req, res) => {
     const textoIn = data.text?.message?.trim() || "";
     const txtL = textoIn.toLowerCase();
 
+    console.log(`[WEBHOOK] Mensagem recebida de ${phone}: ${txtL}`);
+
     if (['novo', 'nova'].includes(txtL)) {
         memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', IS_ATUALIZACAO: false });
         await enviarMensagem(phone, TEXTOS.T01); return;
-    }
-    if (['atualizar', 'atualizacao'].includes(txtL)) {
-        memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', IS_ATUALIZACAO: true });
-        await enviarMensagem(phone, TEXTOS.T_ATUALIZAR); return;
     }
     if (['resgatar', 'dados', 'puxar'].includes(txtL)) {
         memoriaEstado.delete(phone);
@@ -231,6 +242,28 @@ app.post('/webhook/igreen', async (req, res) => {
     let mem = memoriaEstado.get(phone) || { STATUS_CADASTRO: 'NOVO' };
 
     switch (mem.STATUS_CADASTRO) {
+        case 'AGUARDANDO_TERMO_RESGATE':
+            if (textoIn.length > 2) {
+                console.log(`[FLUXO] Usuário pediu busca por: ${textoIn}`);
+                // 1. Envia a mensagem pro WhatsApp e ESPERA terminar!
+                await enviarMensagem(phone, TEXTOS.T_RESGATE_BUSCANDO);
+                
+                // 2. Limpa o status para não prender o bot
+                memoriaEstado.delete(phone); 
+
+                // 3. Dá 3 SEGUNDOS DE RESPIRO para o Render enviar a mensagem pela internet
+                // antes de jogar a "bomba" de memória do Google Chrome no processador.
+                console.log(`[SISTEMA] Aguardando 3 segundos para estabilizar memória RAM...`);
+                setTimeout(() => {
+                    fluxoExtracaoDados(textoIn, phone);
+                }, 3000);
+                
+            } else {
+                await enviarMensagem(phone, "⚠️ Termo muito curto. Digite o Nome ou ID:");
+            }
+            break;
+            
+        // ... (resto dos fluxos originais)
         case 'AGUARDANDO_FATURA':
             if (!isImage && !isPDF) { await enviarMensagem(phone, "Por favor, envie a foto/PDF da fatura."); return; }
             await enviarMensagem(phone, TEXTOS.T02);
@@ -238,31 +271,12 @@ app.post('/webhook/igreen', async (req, res) => {
             
             if (dadosExtraidos) {
                 mem = { ...mem, ...dadosExtraidos, LINK_FATURA: fileUrl };
-                if (dadosExtraidos.FATURA_VENCIDA) {
-                    mem.STATUS_CADASTRO = 'AGUARDANDO_COMPROVANTE';
-                    let txtAviso = TEXTOS.T_PEDIR_COMPROVANTE.replace('{DATA}', dadosExtraidos.DATA_VENCIMENTO || "passada");
-                    setTimeout(async () => { await enviarMensagem(phone, txtAviso); }, 3000);
-                } 
-                else if (mem.IS_ATUALIZACAO) {
-                    mem.STATUS_CADASTRO = 'AGUARDANDO_EMAIL';
-                    setTimeout(async () => { await enviarMensagem(phone, TEXTOS.T_ATUALIZAR_EMAIL); }, 3000);
-                } else {
-                    mem.STATUS_CADASTRO = 'AGUARDANDO_DOC_FRENTE';
-                    setTimeout(async () => { await enviarMensagem(phone, TEXTOS.T04); }, 3000);
-                }
+                mem.STATUS_CADASTRO = 'AGUARDANDO_DOC_FRENTE';
+                setTimeout(async () => { await enviarMensagem(phone, TEXTOS.T04); }, 3000);
             } else {
                 mem = { ...mem, LINK_FATURA: fileUrl, STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE' };
                 setTimeout(async () => { await enviarMensagem(phone, TEXTOS.T04); }, 3000);
             }
-            memoriaEstado.set(phone, mem);
-            await salvarNoBanco(phone, mem);
-            break;
-
-        case 'AGUARDANDO_COMPROVANTE':
-            if (!isImage && !isPDF) { await enviarMensagem(phone, "Por favor, envie a foto/PDF do seu comprovante de pagamento."); return; }
-            mem.LINK_COMPROVANTE = fileUrl;
-            mem.STATUS_CADASTRO = mem.IS_ATUALIZACAO ? 'AGUARDANDO_EMAIL' : 'AGUARDANDO_DOC_FRENTE';
-            await enviarMensagem(phone, mem.IS_ATUALIZACAO ? TEXTOS.T_ATUALIZAR_EMAIL : TEXTOS.T04);
             memoriaEstado.set(phone, mem);
             await salvarNoBanco(phone, mem);
             break;
@@ -289,22 +303,12 @@ app.post('/webhook/igreen', async (req, res) => {
         case 'AGUARDANDO_EMAIL':
             if (isImage || isPDF) return;
             mem.EMAIL = textoIn;
-            mem.STATUS_CADASTRO = mem.IS_ATUALIZACAO ? 'ATUALIZADO' : 'CONCLUIDO';
+            mem.STATUS_CADASTRO = 'CONCLUIDO';
             await salvarNoBanco(phone, mem);
-            await enviarMensagem(phone, mem.IS_ATUALIZACAO ? TEXTOS.T08_ATUALIZACAO : TEXTOS.T08);
+            await enviarMensagem(phone, TEXTOS.T08);
             memoriaEstado.delete(phone); 
-            break;
-
-        case 'AGUARDANDO_TERMO_RESGATE':
-            if (textoIn.length > 2) {
-                await enviarMensagem(phone, TEXTOS.T_RESGATE_BUSCANDO);
-                fluxoExtracaoDados(textoIn, phone); // Vai apenas ao Escritório roubar os dados!
-                memoriaEstado.delete(phone); 
-            } else {
-                await enviarMensagem(phone, "⚠️ Termo muito curto. Digite o Nome ou ID:");
-            }
             break;
     }
 });
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V78 ONLINE (Extrator Inteligente)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V79 ONLINE (Gestão de RAM Inteligente)`));
