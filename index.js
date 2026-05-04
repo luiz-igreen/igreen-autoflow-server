@@ -14,7 +14,7 @@ app.use(express.json());
 const ZAPI_INSTANCE = process.env.ZAPI_INSTANCE || "3F14E2A7F66AC2180C0BBA4D31290A14";
 const ZAPI_TOKEN = process.env.ZAPI_TOKEN || "88F232A54C5DC27793994637";
 const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN || "F177679f2434d425e9a3e58ddec1d4cf0S"; 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || ""; // A CHAVE DO CÉREBRO NO RENDER!
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "AIzaSyCz1JE0Ie6HsAocCfx16gy2x29rkV3OMPw"; // A CHAVE DO CÉREBRO INSERIDA AQUI!
 const IGREEN_LINK = process.env.IGREEN_LINK || "https://green.igreenenergy.com.br/?id=76049&sendcontract=true";
 const APP_ID = 'igreen-autoflow-v4';
 
