@@ -36,7 +36,6 @@ try {
 
 const memoriaEstado = new Map();
 
-// Textos Oficiais
 const TEXTOS = {
     T01: "Seja muito bem-vindo(a) ao Atendimento VIP da iGreen Energy! 🌿 Para prepararmos o seu desconto, por favor, me envie uma foto bem nítida (ou PDF) da sua conta de luz mais recente.",
     T02: "Recebemos a sua fatura! Extraindo os seus dados de consumo. Um momento...",
@@ -68,11 +67,27 @@ const TEXTOS = {
 // ==========================================
 // FUNÇÕES AUXILIARES
 // ==========================================
+
+// V76: 18 COMANDOS DE SOBREVIVÊNCIA DE MEMÓRIA RAM PARA O RENDER FREE
 const CHROME_ARGS = [
     "--no-sandbox", 
     "--disable-setuid-sandbox", 
-    "--disable-dev-shm-usage", // FUNDAMENTAL PARA O RENDER (ECONOMIZA RAM)
-    "--disable-gpu"
+    "--disable-dev-shm-usage", 
+    "--disable-gpu",
+    "--single-process",
+    "--no-zygote",
+    "--disable-accelerated-2d-canvas",
+    "--disable-background-networking",
+    "--disable-default-apps",
+    "--disable-extensions",
+    "--disable-sync",
+    "--disable-translate",
+    "--hide-scrollbars",
+    "--metrics-recording-only",
+    "--mute-audio",
+    "--no-first-run",
+    "--safebrowsing-disable-auto-update",
+    "--ignore-certificate-errors"
 ];
 
 async function extrairDadosFatura(fileUrl, isPdf) {
@@ -127,16 +142,14 @@ async function salvarNoBanco(phone, dados) {
 // ==========================================
 async function executarRPANovoCadastro(dados, phone) {
     console.log(`[RPA] Novo Cadastro para: ${dados.NOME_CLIENTE}`);
-    // Estrutura mantida... (Ocultada nos logs de console)
 }
 
 async function executarRPADevolutiva(termoBusca, fileUrl, phone) {
     console.log(`[RPA] Devolutiva para: ${termoBusca}`);
-    // Estrutura mantida...
 }
 
 // ==========================================
-// MOTOR RPA 3: A JORNADA AUTÔNOMA (V75 - BAIXA MEMÓRIA)
+// MOTOR RPA 3: A JORNADA AUTÔNOMA (V76)
 // ==========================================
 async function fluxoResgateAutonomo(termoBusca, phone) {
     let browser;
@@ -144,15 +157,15 @@ async function fluxoResgateAutonomo(termoBusca, phone) {
     let nascEncontrado = null;
 
     try {
-        console.log(`[RESGATE] Iniciando Puppeteer em modo leve...`);
-        // O Bloco Try/Catch garante que se o Chrome não abrir, o usuário é avisado!
+        console.log(`[RESGATE] Iniciando Puppeteer em modo de sobrevivência extrema...`);
         browser = await puppeteer.launch({ 
             headless: "new", 
-            args: CHROME_ARGS // Args mágicos de economia de RAM
+            args: CHROME_ARGS 
         });
     } catch (launchError) {
-        console.error("❌ ERRO FATAL AO ABRIR CHROME:", launchError.message);
-        await enviarMensagem(phone, "❌ Erro Crítico: O servidor ficou sem memória RAM para abrir o Navegador Fantasma ou falta o Buildpack no Render. Tente reiniciar o servidor no painel.");
+        console.error("❌ ERRO FATAL AO ABRIR CHROME:", launchError);
+        // O ROBÔ AGORA MANDA O CÓDIGO DO ERRO PARA O WHATSAPP!
+        await enviarMensagem(phone, `❌ Erro Crítico do Render. Passe este código ao desenvolvedor:\n\nMSG: ${launchError.message}\n\nPILHA: ${launchError.stack ? launchError.stack.substring(0, 150) : 'N/A'}`);
         return;
     }
 
@@ -392,7 +405,6 @@ app.post('/webhook/igreen', async (req, res) => {
             } else { await enviarMensagem(phone, TEXTOS.T12); }
             break;
 
-        // --- FLUXO DEVOLUTIVAS ---
         case 'AGUARDANDO_CPF_DEVOLUTIVA':
             if (textoIn.length > 2) {
                 mem.TERMO_BUSCA = textoIn;
@@ -411,7 +423,6 @@ app.post('/webhook/igreen', async (req, res) => {
             memoriaEstado.delete(phone); 
             break;
 
-        // --- RESGATE AUTÔNOMO ---
         case 'AGUARDANDO_TERMO_RESGATE':
             if (textoIn.length > 2) {
                 await enviarMensagem(phone, TEXTOS.T_RESGATE_BUSCANDO);
@@ -433,4 +444,4 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 });
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V75 ONLINE (Otimização de RAM no Render)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V76 ONLINE (Sobrevivência Máxima de RAM)`));
