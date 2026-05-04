@@ -17,7 +17,6 @@ const ZAPI_TOKEN = process.env.ZAPI_TOKEN || "88F232A54C5DC27793994637";
 const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN || "F177679f2434d425e9a3e58ddec1d4cf0S"; 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "AIzaSyCz1JE0Ie6HsAocCfx16gy2x29rkV3OMPw"; 
 
-const IGREEN_LINK_PUBLICO = process.env.IGREEN_LINK || "https://green.igreenenergy.com.br/?id=76049&sendcontract=true";
 const IGREEN_ESCRITORIO_URL = "https://escritorio.igreenenergy.com.br"; 
 
 const IGREEN_USER = "jorgeluizhouse@hotmail.com";
@@ -43,18 +42,9 @@ const TEXTOS = {
     T06: "Excelente! Os documentos estão sendo encriptados.",
     T07: "Para podermos registrar o seu cadastro, digite o seu melhor e-mail:",
     T08: "Tudo pronto! 🎉 A nossa inteligência entregou toda a sua documentação na base da iGreen Energy. Eles enviarão o link oficial para assinatura em breve! 🌿",
-    T08_ATUALIZACAO: "Tudo pronto! 🎉 A sua nova fatura foi enviada com sucesso. A iGreen Energy irá regularizar o seu desconto! 🌿",
-    T_ATUALIZAR: "Olá! Vamos atualizar a sua fatura. Envie-me apenas a foto da sua NOVA FATURA de energia. *(Não precisamos dos documentos de identidade novamente).* 🌿",
-    T_ATUALIZAR_EMAIL: "Fatura validada! ✅ Para localizarmos o seu cadastro, digite o seu e-mail:",
-    T_PEDIR_COMPROVANTE: "⚠️ Verifiquei que esta fatura venceu no dia {DATA}. Para a concessionária aprovar o seu desconto sem problemas, por favor, envie agora a foto ou PDF do *Comprovante de Pagamento*.",
-    
-    T_DEVOLUTIVA_START: "🛠️ *Módulo de Resolução de Pendências (Devolutiva)* ativado. Para o Robô localizar o cliente, digite o *Nome, ID ou CPF* do cliente na iGreen:",
-    T_DEVOLUTIVA_DOC: "Alvo validado! 🎯 Agora, por favor, *envie a foto ou PDF do documento solicitado pela iGreen* (ex: Comprovante de Pagamento, RG da testemunha, etc):",
-    T_DEVOLUTIVA_FIM: "📂 Documento recebido! O Robô RPA está acessando o Painel do Licenciado para pesquisar o cliente e anexar a devolutiva...",
-    
     T_RESGATE_START: "⚡ *Módulo de Extração de Dados* ativado! Digite apenas o *Nome ou ID* do cliente (Ex: Wellington Silva ou 398172):",
-    T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma está a invadir o *Escritório Virtual iGreen* em background para capturar o CPF e Nascimento do cliente...",
-    T_RESGATE_FAIL: "⚠️ O Robô não conseguiu encontrar o cliente no Escritório Virtual. Verifique se o ID ou nome estão corretos."
+    T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma está a invadir o *Escritório Virtual iGreen* em background para capturar o CPF e Nascimento do cliente. Isto leva cerca de 25 segundos...",
+    T_RESGATE_FAIL: "⚠️ O Robô não conseguiu encontrar o cliente no Escritório Virtual. A tabela pode estar vazia ou a página demorou muito a carregar. Verifique o ID e tente de novo."
 };
 
 const CHROME_ARGS = [
@@ -78,7 +68,7 @@ async function extrairDadosFatura(fileUrl, isPdf) {
         const mimeType = isPdf ? 'application/pdf' : 'image/jpeg';
         const dataHoje = new Date().toLocaleDateString('pt-BR');
         
-        const prompt = `Você é um auditor da iGreen. Hoje é dia ${dataHoje}. Extraia da fatura e retorne apenas um JSON válido com: "NOME_CLIENTE", "CEP", "MEDIA_CONSUMO" (int), "UC", "DATA_VENCIMENTO" (DD/MM/AAAA), "FATURA_VENCIDA" (boolean, true APENAS se DATA_VENCIMENTO for anterior à ${dataHoje}).`;
+        const prompt = `Você é um auditor da iGreen. Extraia da fatura: "NOME_CLIENTE", "CEP", "MEDIA_CONSUMO" (int), "UC", "DATA_VENCIMENTO" (DD/MM/AAAA), "FATURA_VENCIDA" (boolean). Retorne apenas JSON válido.`;
         
         const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: mimeType, data: base64Data } }] }], generationConfig: { responseMimeType: "application/json" } };
         const geminiRes = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`, payload);
@@ -107,7 +97,7 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO: EXTRATOR INTELIGENTE DE DADOS (O ROUBO AO ESCRITÓRIO)
+// MÓDULO: EXTRATOR INTELIGENTE DE DADOS (V80 - Visão de Águia)
 // ==========================================
 async function fluxoExtracaoDados(termoBusca, phone) {
     let browser;
@@ -146,7 +136,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
             const btnMapa = Array.from(document.querySelectorAll('div, span, a')).find(e => e.textContent.trim() === 'Mapa de Clientes');
             if(btnMapa) btnMapa.click();
         });
-        await new Promise(r => setTimeout(r, 5000));
+        await new Promise(r => setTimeout(r, 6000)); // Espera a tela de mapa de clientes carregar
 
         console.log(`[EXTRATOR] 3. Pesquisando alvo: ${termoBusca}`);
         await page.evaluate((busca) => {
@@ -156,28 +146,25 @@ async function fluxoExtracaoDados(termoBusca, phone) {
                 searchInput.dispatchEvent(new Event('input', { bubbles: true }));
             }
         }, termoBusca);
-        await new Promise(r => setTimeout(r, 4000));
+        
+        // V80 FIX: AUMENTAMOS O TEMPO AQUI PARA GARANTIR QUE A TABELA CARREGOU
+        console.log(`[EXTRATOR] Aguardando a tabela atualizar...`);
+        await new Promise(r => setTimeout(r, 6000)); 
 
-        console.log(`[EXTRATOR] 4. Lendo a Tabela...`);
+        console.log(`[EXTRATOR] 4. Lendo a Tabela com Raio-X...`);
         const dadosExtraidos = await page.evaluate(() => {
-            const primeiraLinha = document.querySelector('tbody tr');
-            if (!primeiraLinha || primeiraLinha.textContent.includes('Nenhum')) return null;
+            // V80 FIX: Lê TUDO o que estiver dentro da tabela (ou na tela) para não falhar no HTML
+            const areaTabela = document.querySelector('table') || document.querySelector('tbody') || document.body;
+            const textoTotal = areaTabela.innerText || areaTabela.textContent;
 
-            let textoLinha = primeiraLinha.textContent;
-            
-            // Regex infalíveis para achar CPF e Data de Nascimento em qualquer parte da linha
-            let regexCpf = textoLinha.match(/\d{3}\.\d{3}\.\d{3}-\d{2}/);
-            let regexData = textoLinha.match(/\d{2}\/\d{2}\/\d{4}/g);
-            
-            // Pega o nome (Geralmente a parte toda em maiúscula no começo da tabela)
-            let nomeCliente = "Cliente Localizado";
-            const celulas = primeiraLinha.querySelectorAll('td');
-            if(celulas.length > 2) {
-                nomeCliente = celulas[2].textContent.trim(); 
-            }
+            if (textoTotal.includes('Nenhum registro') || textoTotal.includes('Nenhum dado')) return null;
 
+            // Procura qualquer coisa que pareça um CPF ou uma Data em todo o texto
+            let regexCpf = textoTotal.match(/\d{3}\.\d{3}\.\d{3}-\d{2}/);
+            let regexData = textoTotal.match(/\d{2}\/\d{2}\/\d{4}/g);
+            
             return {
-                nome: nomeCliente,
+                nome: "Cliente Localizado", // Mantido genérico para garantir que o fluxo não quebra se o nome for longo
                 cpf: regexCpf ? regexCpf[0] : "Não encontrado",
                 nasc: regexData ? regexData[regexData.length - 1] : "Não encontrado"
             };
@@ -186,6 +173,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         console.log(`[EXTRATOR] Fechando navegador para liberar memória...`);
         await browser.close();
 
+        // Se não achou o CPF, manda o erro
         if (!dadosExtraidos || dadosExtraidos.cpf === "Não encontrado") {
             await enviarMensagem(phone, TEXTOS.T_RESGATE_FAIL);
             return;
@@ -193,7 +181,6 @@ async function fluxoExtracaoDados(termoBusca, phone) {
 
         console.log(`[EXTRATOR] 🎉 Dados capturados! Enviando para o WhatsApp...`);
         const mensagemFinal = `✅ *DADOS CAPTURADOS COM SUCESSO!* 🕵️‍♂️\n\n` +
-                              `👤 *Nome:* ${dadosExtraidos.nome}\n` +
                               `📄 *CPF:* ${dadosExtraidos.cpf}\n` +
                               `🎂 *Nascimento:* ${dadosExtraidos.nasc}\n\n` +
                               `⚡ *Atalhos das Concessionárias:*\n` +
@@ -204,7 +191,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
 
     } catch (error) {
         console.error("❌ [ERRO EXTRATOR FATAL]:", error.message);
-        await enviarMensagem(phone, `⚠️ Ocorreu um erro técnico ao aceder ao Escritório Virtual. O sistema pode estar sobrecarregado (Falta de Memória RAM). Tente novamente em 2 minutos.`);
+        await enviarMensagem(phone, `⚠️ Ocorreu um erro técnico ao aceder ao Escritório Virtual. Tente novamente em 2 minutos.`);
         if(browser) await browser.close();
     }
 }
@@ -213,7 +200,6 @@ async function fluxoExtracaoDados(termoBusca, phone) {
 // LÓGICA DO WEBHOOK
 // ==========================================
 app.post('/webhook/igreen', async (req, res) => {
-    // Responde ao Z-API na hora para ele não travar
     res.status(200).send("OK");
     const data = req.body;
     if (data.fromMe) return;
@@ -245,25 +231,18 @@ app.post('/webhook/igreen', async (req, res) => {
         case 'AGUARDANDO_TERMO_RESGATE':
             if (textoIn.length > 2) {
                 console.log(`[FLUXO] Usuário pediu busca por: ${textoIn}`);
-                // 1. Envia a mensagem pro WhatsApp e ESPERA terminar!
                 await enviarMensagem(phone, TEXTOS.T_RESGATE_BUSCANDO);
-                
-                // 2. Limpa o status para não prender o bot
                 memoriaEstado.delete(phone); 
 
-                // 3. Dá 3 SEGUNDOS DE RESPIRO para o Render enviar a mensagem pela internet
-                // antes de jogar a "bomba" de memória do Google Chrome no processador.
                 console.log(`[SISTEMA] Aguardando 3 segundos para estabilizar memória RAM...`);
                 setTimeout(() => {
                     fluxoExtracaoDados(textoIn, phone);
                 }, 3000);
-                
             } else {
                 await enviarMensagem(phone, "⚠️ Termo muito curto. Digite o Nome ou ID:");
             }
             break;
             
-        // ... (resto dos fluxos originais)
         case 'AGUARDANDO_FATURA':
             if (!isImage && !isPDF) { await enviarMensagem(phone, "Por favor, envie a foto/PDF da fatura."); return; }
             await enviarMensagem(phone, TEXTOS.T02);
@@ -311,4 +290,4 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 });
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V79 ONLINE (Gestão de RAM Inteligente)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V80 ONLINE (Visão de Águia)`));
