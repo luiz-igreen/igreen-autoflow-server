@@ -20,8 +20,8 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "AIzaSyCz1JE0Ie6HsAocCfx16g
 const IGREEN_LINK_PUBLICO = process.env.IGREEN_LINK || "https://green.igreenenergy.com.br/?id=76049&sendcontract=true";
 const IGREEN_DASHBOARD_URL = process.env.IGREEN_DASHBOARD_URL || "https://painel.igreenenergy.com.br";
 const IGREEN_ESCRITORIO_URL = "https://escritorio.igreenenergy.com.br"; // Novo link de Relatórios
-const IGREEN_USER = process.env.IGREEN_USER || "";
-const IGREEN_PASS = process.env.IGREEN_PASS || "";
+const IGREEN_USER = process.env.IGREEN_USER || "jorgeluizhouse@hotmail.com";
+const IGREEN_PASS = process.env.IGREEN_PASS || "@@Lkjdsa12345";
 
 const APP_ID = 'igreen-autoflow-v4';
 
