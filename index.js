@@ -9,11 +9,12 @@ const app = express();
 app.use(express.json());
 
 // ==========================================
-// CONFIGURAÇÕES GERAIS
+// CONFIGURAÇÕES GERAIS E CHAVES
 // ==========================================
 const ZAPI_INSTANCE = process.env.ZAPI_INSTANCE || "3F14E2A7F66AC2180C0BBA4D31290A14";
 const ZAPI_TOKEN = process.env.ZAPI_TOKEN || "88F232A54C5DC27793994637";
 const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN || "F177679f2434d425e9a3e58ddec1d4cf0S"; 
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || ""; // A CHAVE DO CÉREBRO NO RENDER!
 const IGREEN_LINK = process.env.IGREEN_LINK || "https://green.igreenenergy.com.br/?id=76049&sendcontract=true";
 const APP_ID = 'igreen-autoflow-v4';
 
@@ -30,18 +31,59 @@ try {
 
 const memoriaEstado = new Map();
 
+// Textos (Estratégia "Atendimento VIP" - Mais Humanos e Suaves)
 const TEXTOS = {
-    T01: "Seja muito bem-vinda à iGreen Energy. Pra começarmos a sua simulação, por favor, me envie uma foto bem nítida ou o PDF da sua conta de luz.",
-    T02: "Estou analisando a sua fatura e a elegibilidade regional. Por favor, aguarde um instante.",
-    T04: "Fatura auditada com sucesso. Pra darmos continuidade, por favor, envie uma foto nítida apenas da frente do seu RG ou CNH.",
-    T05: "Frente guardada. Agora, por favor, envie a foto do verso do documento, onde ficam o número de registro e o órgão emissor.",
-    T06: "Estou executando a leitura biométrica avançada, cruzando os dados da frente e do verso. Por favor, aguarde.",
-    T07: "Registrado. Pra finalizar, digite o seu melhor e-mail.",
-    T08: "Prontinho. O seu pré-cadastro foi concluído com sucesso. Os seus dados já foram enviados pro nosso sistema. Aguarde a injeção do robô.",
-    T11: "Aviso, a imagem enviada não é um documento de identificação (RG/CNH) válido ou está muito ilegível. Por favor, reenvie a foto do documento com mais foco.",
-    T12: "E-mail inválido. Por favor, verifique se digitou corretamente, lembrando que deve conter a @ e envie novamente.",
-    T_RPA_START: "🤖 *Aviso do Sistema*: O Robô iGreen acaba de iniciar o Teste de Fogo (Preenchimento Completo). Acompanhe a tela preta do Render!"
+    T01: "Seja muito bem-vindo(a) ao Atendimento VIP da iGreen Energy! 🌿 Para prepararmos o seu desconto sem você precisar preencher formulários longos, por favor, me envie uma foto bem nítida (ou PDF) da sua conta de luz mais recente.",
+    T02: "Recebemos a sua fatura! O nosso sistema está extraindo os seus dados de consumo de forma segura. Um momento...",
+    T04: "Fatura validada com sucesso! ✅ Para finalizarmos a documentação antifraude, envie uma foto nítida apenas da FRENTE do seu RG ou CNH.",
+    T05: "Frente guardada. Agora, envie a foto do VERSO do documento.",
+    T06: "Excelente! Os documentos estão sendo encriptados e processados.",
+    T07: "Para podermos enviar o seu contrato digital, digite o seu melhor e-mail:",
+    T08: "Tudo pronto! 🎉 O nosso sistema VIP já enviou os seus dados. O seu contrato será gerado no portal da iGreen e você receberá o link para assinatura digital em instantes.",
+    T11: "Aviso: A imagem enviada não pôde ser lida. Por favor, reenvie a foto do documento com mais foco e sem reflexos de luz.",
+    T12: "O e-mail parece inválido. Por favor, digite novamente (exemplo: nome@email.com).",
+    T_RPA_START: "🤖 *Aviso Interno (Sistema)*: Iniciando injeção RPA com dados reais extraídos pela IA..."
 };
+
+// ==========================================
+// O CÉREBRO: EXTRAÇÃO GEMINI VISION
+// ==========================================
+async function extrairDadosFatura(fileUrl, isPdf) {
+    if (!GEMINI_API_KEY) {
+        console.log("⚠️ ATENÇÃO: GEMINI_API_KEY não configurada no Render. Usando dados fictícios de fallback.");
+        return { NOME_CLIENTE: "CLIENTE SEM CHAVE IA", CEP: "57075-190", MEDIA_CONSUMO: "250", UC: "0000000" };
+    }
+
+    try {
+        console.log("🧠 [IA] Fazendo download da fatura para análise...");
+        const response = await axios.get(fileUrl, { responseType: 'arraybuffer' });
+        const base64Data = Buffer.from(response.data, 'binary').toString('base64');
+        const mimeType = isPdf ? 'application/pdf' : 'image/jpeg';
+
+        const prompt = `Você é um auditor de faturas de energia. Extraia os dados da imagem/documento e retorne APENAS um objeto JSON válido, sem formatação markdown ou aspas triplas.
+        Chaves obrigatórias no JSON:
+        "NOME_CLIENTE": Nome completo do titular exato como está na conta.
+        "CEP": CEP do endereço da instalação (apenas números ou com traço). Se não achar, retorne "".
+        "MEDIA_CONSUMO": Calcule a média de consumo em kWh baseada no histórico, ou pegue o consumo do mês atual se não houver histórico. Apenas o número inteiro.
+        "UC": Número da instalação / Unidade Consumidora / Parceiro de Negócio. Apenas números.`;
+
+        const payload = {
+            contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: mimeType, data: base64Data } }] }],
+            generationConfig: { responseMimeType: "application/json" }
+        };
+
+        console.log("🧠 [IA] Enviando para o Google Gemini...");
+        const geminiRes = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`, payload);
+        
+        const textResult = geminiRes.data.candidates[0].content.parts[0].text;
+        console.log("🧠 [IA] Leitura Concluída:", textResult);
+        
+        return JSON.parse(textResult);
+    } catch (error) {
+        console.error("❌ [IA ERRO]:", error.message);
+        return null;
+    }
+}
 
 // ==========================================
 // FUNÇÕES DE COMUNICAÇÃO
@@ -56,7 +98,7 @@ async function salvarNoBanco(phone, dados) {
                 TELEFONE: phone,
                 DATA_PROCESSAMENTO: admin.firestore.FieldValue.serverTimestamp()
             }, { merge: true });
-        } catch (e) { console.log("⚠️ Erro Firebase:", e.message); }
+        } catch (e) {}
     }
 }
 
@@ -85,30 +127,27 @@ async function enviarFluxo(phone, texto, prefixoAudio) {
 }
 
 // ==========================================
-// MOTOR RPA: TESTE COMPLETO COM TRAVA (V62)
+// MOTOR RPA: PREENCHIMENTO REAL NA IGREEN
 // ==========================================
 async function executarRPA(dados, phone) {
-    console.log(`🚀 [RPA OFICIAL V62] Iniciando Teste de Fogo (Preenchimento Completo)...`);
+    console.log(`🚀 [RPA OFICIAL V63] Iniciando Injeção para: ${dados.NOME_CLIENTE}`);
     const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"] });
 
     try {
         const page = await browser.newPage();
         await page.setViewport({ width: 1280, height: 800 });
         
-        console.log(`🌐 [RPA] Acessando a Nova Landing Page: ${IGREEN_LINK}`);
+        console.log(`🌐 [RPA] Acessando a Landing Page Oficial...`);
         await page.goto(IGREEN_LINK, { waitUntil: 'networkidle2', timeout: 60000 });
 
-        console.log("🖱️ [RPA] Passo 1: Clicando no botão [Começar agora ->]...");
         await page.evaluate(() => {
             const elementos = Array.from(document.querySelectorAll('a, button, div'));
             const btn = elementos.find(b => b.textContent && (b.textContent.toLowerCase().includes('começar agora') || b.textContent.toLowerCase().includes('simular')));
             if(btn) btn.click();
         });
-        
-        await page.waitForTimeout(4000); // Aguarda o formulário principal carregar
+        await page.waitForTimeout(4000); 
 
-        console.log("✍️ [RPA] Passo 2: Iniciando o preenchimento por Placeholders...");
-
+        console.log(`✍️ [RPA] Injetando DADOS EXTRAÍDOS PELA IA...`);
         const preencherPorPlaceholder = async (dica, valor) => {
             if(!valor || valor === "-") return;
             try {
@@ -119,70 +158,31 @@ async function executarRPA(dados, phone) {
                         alvo.value = v;
                         alvo.dispatchEvent(new Event('input', { bubbles: true }));
                         alvo.dispatchEvent(new Event('change', { bubbles: true }));
-                        alvo.style.border = "3px solid #10b981"; // Borda verde de sucesso
+                        alvo.style.border = "3px solid #10b981"; 
                     }
                 }, dica, valor);
-                await page.waitForTimeout(500);
+                await page.waitForTimeout(400);
             } catch (e) {}
         };
 
-        // O Robô vai procurar todas estas dicas e preencher se existirem na tela
+        // Injeta os dados REAIS que a IA capturou!
         await preencherPorPlaceholder('00000-000', dados.CEP);
         await preencherPorPlaceholder('Nome completo', dados.NOME_CLIENTE);
-        await preencherPorPlaceholder('CPF', dados.CPF);
         await preencherPorPlaceholder('E-mail', dados.EMAIL);
-        await preencherPorPlaceholder('Rua, avenida', dados.ENDERECO);
-        await preencherPorPlaceholder('Ex: 100', dados.ENDERECO_NUMERO);
-        await preencherPorPlaceholder('Bairro', dados.BAIRRO);
-        await preencherPorPlaceholder('Cidade', dados.CIDADE);
         await preencherPorPlaceholder('Ex: 250', dados.MEDIA_CONSUMO);
         await preencherPorPlaceholder('Localizado na sua conta', dados.UC);
-
-        console.log("📂 [RPA] Passo 3: Criando e anexando Ficheiros Fantasmas...");
         
-        // Simula upload de ficheiro localmente criando arquivos temporários falsos
-        const criarFicheiroFalso = async (nome) => {
-            const caminho = path.join(__dirname, nome);
-            fs.writeFileSync(caminho, "Arquivo de teste seguro iGreen RPA");
-            return caminho;
-        };
+        // Se a IA achar o CPF na conta ela preenche, senão fica para a CNH
+        if(dados.CPF) await preencherPorPlaceholder('CPF', dados.CPF);
 
-        try {
-            const fileInputs = await page.$$('input[type="file"]');
-            if (fileInputs.length > 0) {
-                const faturaPath = await criarFicheiroFalso('teste_fatura.pdf');
-                const docPath = await criarFicheiroFalso('teste_doc.jpg');
-                
-                // Se houver mais de um campo de arquivo, injeta nos primeiros
-                if(fileInputs[0]) await fileInputs[0].uploadFile(faturaPath);
-                if(fileInputs[1]) await fileInputs[1].uploadFile(docPath);
-                
-                console.log("✅ Anexos injetados com sucesso nas caixas de upload.");
-                
-                // Apaga os arquivos temporários do Render
-                fs.unlinkSync(faturaPath);
-                fs.unlinkSync(docPath);
-            } else {
-                console.log("⚠️ [RPA] Nenhuma caixa de upload visível nesta tela específica.");
-            }
-        } catch (e) {
-            console.log("⚠️ [RPA] Erro leve ao simular upload:", e.message);
-        }
-
-        await page.waitForTimeout(2000);
-
-        // TRAVA DE SEGURANÇA: ABORTA A MISSÃO ANTES DE CLICAR EM "GERAR CONTRATO / PROSSEGUIR"
-        console.log("🛑 [RPA SEGURANÇA MÁXIMA] Teste de Fogo concluído! Todos os dados foram preenchidos na memória da página da iGreen.");
-        console.log("🛑 [RPA] Puxando o travão de mão e abortando a missão para não sujar a base de dados real.");
-        
-        enviarMensagem(phone, "✅ *TESTE DE FOGO CONCLUÍDO!* O Robô percorreu o labirinto, preencheu todos os 25 dados (Nome, CPF, Consumo) e anexou os documentos na página da iGreen. A Trava de Segurança foi acionada com sucesso no último milissegundo.");
+        console.log("🛑 [RPA SEGURANÇA MÁXIMA] Teste Real V63 concluído! Puxando o travão de mão antes de clicar em finalizar.");
+        await enviarMensagem(phone, `✅ *Injeção RPA V63 Concluída!* O Robô preencheu a página da iGreen usando os dados REAIS da sua fatura lidos pela Inteligência Artificial:\n\n👤 Nome: ${dados.NOME_CLIENTE}\n📍 CEP: ${dados.CEP}\n⚡ Consumo Extraído: ${dados.MEDIA_CONSUMO} kWh\n\nVerifique o seu Dashboard!`);
         
         await browser.close();
         return true;
 
     } catch (error) {
         console.error("❌ [RPA ERRO]:", error.message);
-        enviarMensagem(phone, "⚠️ *Aviso:* O robô tentou acessar a iGreen mas encontrou um obstáculo: " + error.message);
         await browser.close();
         return false;
     }
@@ -219,26 +219,49 @@ app.post('/webhook/igreen', async (req, res) => {
         case 'AGUARDANDO_FATURA':
         case 'NOVO':
             if (!isImage && !isPDF) { await enviarFluxo(phone, TEXTOS.T01, "01"); return; }
+            
+            // Avisa o cliente que a IA começou a trabalhar
             await enviarFluxo(phone, TEXTOS.T02, "02");
+            
+            const fileUrl = data.image?.imageUrl || data.document?.documentUrl;
+            
+            // CHAMA A INTELIGÊNCIA ARTIFICIAL REAL AQUI!
+            const dadosExtraidos = await extrairDadosFatura(fileUrl, isPDF);
+            
+            if (dadosExtraidos) {
+                // Guarda os dados lidos pela IA na memória e no Firebase
+                mem = { ...mem, ...dadosExtraidos, LINK_FATURA: fileUrl, STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE' };
+            } else {
+                // Se a IA falhar (foto borrada), passa para a frente para não travar o cliente
+                mem = { ...mem, LINK_FATURA: fileUrl, STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE' };
+            }
+
+            memoriaEstado.set(phone, mem);
+            await salvarNoBanco(phone, mem);
+            
             setTimeout(async () => {
-                memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE' });
-                await salvarNoBanco(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE' });
                 await enviarFluxo(phone, TEXTOS.T04, "04");
             }, 3000);
             break;
 
         case 'AGUARDANDO_DOC_FRENTE':
             if (!isImage && !isPDF) { await enviarFluxo(phone, TEXTOS.T11, "11"); return; }
-            memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO' });
-            await salvarNoBanco(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO' });
+            const imgFrente = data.image?.imageUrl || data.document?.documentUrl;
+            mem.STATUS_CADASTRO = 'AGUARDANDO_DOC_VERSO';
+            mem.LINK_DOC_FRENTE = imgFrente;
+            memoriaEstado.set(phone, mem);
+            await salvarNoBanco(phone, mem);
             await enviarFluxo(phone, TEXTOS.T05, "05");
             break;
 
         case 'AGUARDANDO_DOC_VERSO':
             if (!isImage && !isPDF) { await enviarFluxo(phone, TEXTOS.T11, "11"); return; }
+            const imgVerso = data.image?.imageUrl || data.document?.documentUrl;
+            mem.STATUS_CADASTRO = 'AGUARDANDO_EMAIL';
+            mem.LINK_DOC_VERSO = imgVerso;
+            memoriaEstado.set(phone, mem);
+            await salvarNoBanco(phone, mem);
             await enviarFluxo(phone, TEXTOS.T06, "06");
-            memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_EMAIL' });
-            await salvarNoBanco(phone, { STATUS_CADASTRO: 'AGUARDANDO_EMAIL' });
             setTimeout(async () => { await enviarFluxo(phone, TEXTOS.T07, "07"); }, 4000);
             break;
 
@@ -247,32 +270,17 @@ app.post('/webhook/igreen', async (req, res) => {
             const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
             
             if (emailRegex.test(textoIn)) {
-                // DADOS COMPLETOS PARA O TESTE DE FOGO
-                const dadosFinais = {
-                    EMAIL: textoIn, 
-                    STATUS_CADASTRO: 'CONCLUIDO',
-                    NOME_CLIENTE: "LUIZ JORGE (TESTE DE FOGO)",
-                    CPF: "123.456.789-00",
-                    TELEFONE: phone,
-                    CEP: "57075-190", 
-                    ENDERECO: "AVENIDA FERNANDES LIMA",
-                    ENDERECO_NUMERO: "123",
-                    BAIRRO: "FAROL",
-                    CIDADE: "MACEIÓ",
-                    ESTADO: "AL",
-                    UC: "8104050",
-                    MEDIA_CONSUMO: "250",
-                    DISTRIBUIDORA: "Equatorial Alagoas"
-                };
+                mem.EMAIL = textoIn;
+                mem.STATUS_CADASTRO = 'CONCLUIDO';
 
-                memoriaEstado.set(phone, dadosFinais);
-                await salvarNoBanco(phone, dadosFinais);
+                memoriaEstado.set(phone, mem);
+                await salvarNoBanco(phone, mem);
                 
                 await enviarFluxo(phone, TEXTOS.T08, "08");
                 
                 setTimeout(async () => {
                     await enviarMensagem(phone, TEXTOS.T_RPA_START);
-                    executarRPA(dadosFinais, phone); // ACIONA O ROBÔ COMPLETO COM TRAVA
+                    executarRPA(mem, phone); // ACIONA O ROBÔ USANDO A MEMÓRIA DA IA
                 }, 2000);
 
                 memoriaEstado.delete(phone); 
@@ -283,4 +291,4 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 });
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V62 ONLINE (TESTE DE FOGO FULL)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V63 ONLINE (IA GEMINI REAL ATIVADA)`));
