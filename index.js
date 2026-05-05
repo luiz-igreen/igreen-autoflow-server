@@ -42,10 +42,9 @@ const TEXTOS = {
     T06: "Excelente! Os documentos estão sendo encriptados.",
     T07: "Para podermos registrar o seu cadastro, digite o seu melhor e-mail:",
     T08: "Tudo pronto! 🎉 A nossa inteligência entregou toda a sua documentação na base da iGreen Energy. Eles enviarão o link oficial para assinatura em breve! 🌿",
-    // V85: Ajustado exemplos para nomes reais da sua planilha (Rildo e Robson)
-    T_RESGATE_START: "⚡ *Módulo de Extração de Dados* ativado! Digite apenas o *Nome ou ID* do cliente (Ex: Rildo Firmino ou 1119032):",
-    T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma está a invadir o *Escritório Virtual iGreen* em background para capturar o CPF e Nascimento do cliente. Isto leva cerca de 25 a 30 segundos...",
-    T_RESGATE_FAIL: "⚠️ O Robô não conseguiu extrair o CPF. Verifique se o cadastro do cliente na iGreen está com o documento preenchido corretamente."
+    T_RESGATE_START: "⚡ *Módulo de Extração de Dados* ativado! Digite apenas o *Nome ou ID* do cliente (Ex: Rildo Firmino ou 1066935):",
+    T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma está a invadir o *Escritório Virtual iGreen* em background para capturar o CPF e Nascimento do cliente. Isto leva cerca de 30 segundos...",
+    T_RESGATE_FAIL: "⚠️ O Robô não conseguiu extrair os dados. Verifique se o cadastro do cliente na iGreen está com o documento preenchido corretamente."
 };
 
 const CHROME_ARGS = [
@@ -93,12 +92,12 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO: EXTRATOR INTELIGENTE V85
+// MÓDULO: EXTRATOR INTELIGENTE V86 (Mapeamento Cirúrgico)
 // ==========================================
 async function fluxoExtracaoDados(termoBusca, phone) {
     let browser;
     try {
-        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V85...`);
+        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V86...`);
         browser = await puppeteer.launch({ headless: "new", args: CHROME_ARGS });
         const page = await browser.newPage();
         await page.setViewport({ width: 1920, height: 1080 });
@@ -116,32 +115,32 @@ async function fluxoExtracaoDados(termoBusca, phone) {
             if(btnLogin) btnLogin.click();
         }, IGREEN_USER, IGREEN_PASS);
         
-        await new Promise(r => setTimeout(r, 6000));
+        await new Promise(r => setTimeout(r, 8000));
 
         console.log(`[EXTRATOR] 2. Navegando para Mapa de Clientes...`);
         await page.evaluate(() => {
             const btnRelatorios = Array.from(document.querySelectorAll('div, span, button, a')).find(e => e.textContent.trim() === 'Relatórios');
             if(btnRelatorios) btnRelatorios.click();
         });
-        await new Promise(r => setTimeout(r, 1500));
+        await new Promise(r => setTimeout(r, 2000));
         
         await page.evaluate(() => {
             const btnMapa = Array.from(document.querySelectorAll('div, span, a')).find(e => e.textContent.trim() === 'Mapa de Clientes');
             if(btnMapa) btnMapa.click();
         });
-        await new Promise(r => setTimeout(r, 6000)); 
+        await new Promise(r => setTimeout(r, 8000)); 
 
-        console.log(`[EXTRATOR] 3. Pesquisando alvo: ${termoBusca}`);
+        console.log(`[EXTRATOR] 3. Pesquisando alvo com digitação humana: ${termoBusca}`);
         const searchSelector = 'input[placeholder*="Pesquisar" i], input[placeholder*="Buscar" i]';
         await page.waitForSelector(searchSelector, { timeout: 15000 });
         await page.click(searchSelector);
         await page.type(searchSelector, termoBusca, { delay: 150 });
         await page.keyboard.press('Enter');
         
-        console.log(`[EXTRATOR] Aguardando filtro de tabela (10s)...`);
-        await new Promise(r => setTimeout(r, 10000)); 
+        console.log(`[EXTRATOR] Aguardando atualização da tabela (12s)...`);
+        await new Promise(r => setTimeout(r, 12000)); 
 
-        console.log(`[EXTRATOR] 4. Aplicando Visão Sniper V85...`);
+        console.log(`[EXTRATOR] 4. Extraindo Colunas 9 e 19 (Lógica Luiz Jorge)...`);
         const dadosExtraidos = await page.evaluate(() => {
             const tbody = document.querySelector('tbody');
             if(!tbody || tbody.innerText.includes('Nenhum registro')) return null;
@@ -149,21 +148,38 @@ async function fluxoExtracaoDados(termoBusca, phone) {
             const linha = tbody.querySelector('tr');
             if (!linha) return null;
 
-            const textoLinha = linha.innerText || "";
-            const regexCpf = textoLinha.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
-            const regexDatas = textoLinha.match(/\d{2}\/\d{2}\/\d{4}/g);
-            
             const colunas = Array.from(linha.querySelectorAll('td'));
-            const nomeCapturado = colunas[1] ? colunas[1].innerText.trim() : "Cliente iGreen";
+            
+            // Auditoria de Colunas (Escreve nos Logs do Render)
+            let auditoria = "CONTROLE DE COLUNAS: ";
+            colunas.forEach((td, i) => { auditoria += `[Col ${i+1}: ${td.innerText.trim()}] | `; });
+            console.log(auditoria);
 
-            return {
-                nome: nomeCapturado,
-                cpf: regexCpf ? regexCpf[0] : "Não encontrado",
-                nasc: regexDatas ? regexDatas[regexDatas.length - 1] : "Não encontrado"
-            };
+            // MAPEAMENTO LUIZ JORGE (Index começa em 0)
+            // Coluna 2 (Index 1) = Nome
+            // Coluna 9 (Index 8) = Documento (CPF/CNPJ)
+            // Coluna 19 (Index 18) = Data Nascimento
+            
+            let nome = colunas[1] ? colunas[1].innerText.trim() : "Cliente iGreen";
+            let cpf = colunas[8] ? colunas[8].innerText.trim() : "Não encontrado";
+            let nasc = colunas[18] ? colunas[18].innerText.trim() : "Não encontrado";
+
+            // Plano B: Se o mapeamento direto falhar, usa Regex no conteúdo da linha
+            if (cpf === "Não encontrado" || cpf.length < 10) {
+                const totalText = linha.innerText;
+                const matchCpf = totalText.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
+                cpf = matchCpf ? matchCpf[0] : "Não encontrado";
+            }
+
+            if (nasc === "Não encontrado" || !nasc.includes('/')) {
+                const totalText = linha.innerText;
+                const matchDates = totalText.match(/\d{2}\/\d{2}\/\d{4}/g);
+                nasc = matchDates ? matchDates[matchDates.length - 1] : "Não encontrado";
+            }
+
+            return { nome, cpf, nasc };
         });
 
-        console.log(`[EXTRATOR] Fechando navegador fantasma.`);
         await browser.close();
 
         if (!dadosExtraidos || dadosExtraidos.cpf === "Não encontrado") {
@@ -182,7 +198,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         await enviarMensagem(phone, mensagemFinal);
 
     } catch (error) {
-        console.error("❌ [ERRO EXTRATOR V85]:", error.message);
+        console.error("❌ [ERRO EXTRATOR V86]:", error.message);
         await enviarMensagem(phone, `⚠️ O servidor teve um soluço técnico. Tente novamente o RESGATAR em 1 minuto.`);
         if(browser) await browser.close();
     }
@@ -197,8 +213,6 @@ app.post('/webhook/igreen', async (req, res) => {
     if (data.fromMe) return;
 
     const phone = data.phone;
-    if (data.isGroup || String(phone).toLowerCase().includes('group')) return;
-
     const textoIn = data.text?.message?.trim() || "";
     const txtL = textoIn.toLowerCase();
 
@@ -220,4 +234,4 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 });
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V85 ONLINE (Exemplos Reais)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V86 ONLINE (Lógica Luiz Jorge Ativa)`));
