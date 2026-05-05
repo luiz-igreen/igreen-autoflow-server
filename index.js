@@ -42,7 +42,8 @@ const TEXTOS = {
     T06: "Excelente! Os documentos estão sendo encriptados.",
     T07: "Para podermos registrar o seu cadastro, digite o seu melhor e-mail:",
     T08: "Tudo pronto! 🎉 A nossa inteligência entregou toda a sua documentação na base da iGreen Energy. Eles enviarão o link oficial para assinatura em breve! 🌿",
-    T_RESGATE_START: "⚡ *Módulo de Extração de Dados* ativado! Digite apenas o *Nome ou ID* do cliente (Ex: Wellington Silva ou 398172):",
+    // V85: Ajustado exemplos para nomes reais da sua planilha (Rildo e Robson)
+    T_RESGATE_START: "⚡ *Módulo de Extração de Dados* ativado! Digite apenas o *Nome ou ID* do cliente (Ex: Rildo Firmino ou 1119032):",
     T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma está a invadir o *Escritório Virtual iGreen* em background para capturar o CPF e Nascimento do cliente. Isto leva cerca de 25 a 30 segundos...",
     T_RESGATE_FAIL: "⚠️ O Robô não conseguiu extrair o CPF. Verifique se o cadastro do cliente na iGreen está com o documento preenchido corretamente."
 };
@@ -92,12 +93,12 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO: EXTRATOR INTELIGENTE V84 (O SNIPER)
+// MÓDULO: EXTRATOR INTELIGENTE V85
 // ==========================================
 async function fluxoExtracaoDados(termoBusca, phone) {
     let browser;
     try {
-        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V84...`);
+        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V85...`);
         browser = await puppeteer.launch({ headless: "new", args: CHROME_ARGS });
         const page = await browser.newPage();
         await page.setViewport({ width: 1920, height: 1080 });
@@ -130,7 +131,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         });
         await new Promise(r => setTimeout(r, 6000)); 
 
-        console.log(`[EXTRATOR] 3. Pesquisando alvo com digitação humana: ${termoBusca}`);
+        console.log(`[EXTRATOR] 3. Pesquisando alvo: ${termoBusca}`);
         const searchSelector = 'input[placeholder*="Pesquisar" i], input[placeholder*="Buscar" i]';
         await page.waitForSelector(searchSelector, { timeout: 15000 });
         await page.click(searchSelector);
@@ -140,7 +141,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         console.log(`[EXTRATOR] Aguardando filtro de tabela (10s)...`);
         await new Promise(r => setTimeout(r, 10000)); 
 
-        console.log(`[EXTRATOR] 4. Aplicando Visão Sniper V84...`);
+        console.log(`[EXTRATOR] 4. Aplicando Visão Sniper V85...`);
         const dadosExtraidos = await page.evaluate(() => {
             const tbody = document.querySelector('tbody');
             if(!tbody || tbody.innerText.includes('Nenhum registro')) return null;
@@ -149,22 +150,15 @@ async function fluxoExtracaoDados(termoBusca, phone) {
             if (!linha) return null;
 
             const textoLinha = linha.innerText || "";
-            
-            // SNIPER REGEX: Procura um CPF formatado (000.000.000-00) ou CNPJ
-            // Ignora números curtos (IDs)
             const regexCpf = textoLinha.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
-            
-            // Procura datas (DD/MM/AAAA)
             const regexDatas = textoLinha.match(/\d{2}\/\d{2}\/\d{4}/g);
             
-            // Tenta pegar o nome da segunda coluna por segurança
             const colunas = Array.from(linha.querySelectorAll('td'));
             const nomeCapturado = colunas[1] ? colunas[1].innerText.trim() : "Cliente iGreen";
 
             return {
                 nome: nomeCapturado,
                 cpf: regexCpf ? regexCpf[0] : "Não encontrado",
-                // Pega a última data da linha (que no seu log é a de nascimento)
                 nasc: regexDatas ? regexDatas[regexDatas.length - 1] : "Não encontrado"
             };
         });
@@ -188,7 +182,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         await enviarMensagem(phone, mensagemFinal);
 
     } catch (error) {
-        console.error("❌ [ERRO EXTRATOR V84]:", error.message);
+        console.error("❌ [ERRO EXTRATOR V85]:", error.message);
         await enviarMensagem(phone, `⚠️ O servidor teve um soluço técnico. Tente novamente o RESGATAR em 1 minuto.`);
         if(browser) await browser.close();
     }
@@ -223,18 +217,7 @@ app.post('/webhook/igreen', async (req, res) => {
                 setTimeout(() => { fluxoExtracaoDados(textoIn, phone); }, 3000);
             }
             break;
-        // Fluxos de Fatura mantidos simplificados
-        case 'AGUARDANDO_FATURA':
-            const fileUrl = data.image?.imageUrl || data.document?.documentUrl;
-            await enviarMensagem(phone, TEXTOS.T02);
-            const extraidos = await extrairDadosFatura(fileUrl, false);
-            if (extraidos) {
-                await salvarNoBanco(phone, { ...extraidos, STATUS_CADASTRO: 'CONCLUIDO' });
-                await enviarMensagem(phone, TEXTOS.T08);
-            }
-            memoriaEstado.delete(phone);
-            break;
     }
 });
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V84 ONLINE (Filtro Sniper)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V85 ONLINE (Exemplos Reais)`));
