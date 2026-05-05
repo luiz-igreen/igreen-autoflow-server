@@ -43,7 +43,7 @@ const TEXTOS = {
     T07: "Para podermos registrar o seu cadastro, digite o seu melhor e-mail:",
     T08: "Tudo pronto! 🎉 A nossa inteligência entregou toda a sua documentação na base da iGreen Energy. Eles enviarão o link oficial para assinatura em breve! 🌿",
     T_RESGATE_START: "⚡ *Módulo de Extração de Dados* ativado! Digite apenas o *Nome ou ID* do cliente (Ex: Robson Carlos ou 1119032):",
-    T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma está a extrair os dados no *Escritório Virtual iGreen*. Isto leva cerca de 25 segundos...",
+    T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma está a extrair os dados no *Escritório Virtual iGreen*. Isto leva cerca de 25 a 35 segundos...",
     T_RESGATE_FAIL: "⚠️ O Robô varreu toda a tela da iGreen, mas o cliente não possui CPF registado na plataforma ou a busca falhou."
 };
 
@@ -75,6 +75,19 @@ async function enviarMensagem(phone, message) {
     }
 }
 
+async function extrairDadosFatura(fileUrl, isPdf) {
+    if (!GEMINI_API_KEY) return null;
+    try {
+        const response = await axios.get(fileUrl, { responseType: 'arraybuffer' });
+        const base64Data = Buffer.from(response.data, 'binary').toString('base64');
+        const mimeType = isPdf ? 'application/pdf' : 'image/jpeg';
+        const prompt = `Você é um auditor da iGreen. Extraia da fatura: "NOME_CLIENTE", "CEP", "MEDIA_CONSUMO" (int), "UC", "DATA_VENCIMENTO" (DD/MM/AAAA), "FATURA_VENCIDA" (boolean). Retorne apenas JSON válido.`;
+        const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: mimeType, data: base64Data } }] }], generationConfig: { responseMimeType: "application/json" } };
+        const geminiRes = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`, payload);
+        return JSON.parse(geminiRes.data.candidates[0].content.parts[0].text);
+    } catch (error) { return null; }
+}
+
 async function salvarNoBanco(phone, dados) {
     if (admin.apps.length > 0) {
         try {
@@ -85,12 +98,12 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO: EXTRATOR V92 (AUTO-DETECT + ANTI-POPUPS)
+// MÓDULO: EXTRATOR V93 (LOGIN FÍSICO + AUTO-DETECT)
 // ==========================================
 async function fluxoExtracaoDados(termoBusca, phone) {
     let browser;
     try {
-        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V92...`);
+        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V93...`);
         browser = await puppeteer.launch({ headless: "new", args: CHROME_ARGS });
         const page = await browser.newPage();
         await page.setViewport({ width: 1920, height: 1080 });
@@ -98,19 +111,29 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         console.log(`[EXTRATOR] 1. Acessando Escritório iGreen...`);
         await page.goto(IGREEN_ESCRITORIO_URL, { waitUntil: 'networkidle2', timeout: 60000 });
         
-        console.log(`[EXTRATOR] Fazendo Login...`);
-        await page.evaluate((u, p) => {
-            const emailInput = document.querySelector('input[type="email"], input[placeholder*="e-mail" i]');
-            const passInput = document.querySelector('input[type="password"], input[placeholder*="senha" i]');
-            if(emailInput) { emailInput.value = u; emailInput.dispatchEvent(new Event('input')); }
-            if(passInput) { passInput.value = p; passInput.dispatchEvent(new Event('input')); }
-            const btnLogin = Array.from(document.querySelectorAll('button')).find(b => b.textContent.toLowerCase().includes('entrar'));
-            if(btnLogin) btnLogin.click();
-        }, IGREEN_USER, IGREEN_PASS);
+        // V93 FIX: Login Físico. O Robô agora DIGITA como um humano para não ser bloqueado.
+        console.log(`[EXTRATOR] Fazendo Login com digitação humana...`);
+        const emailSel = 'input[type="email"], input[placeholder*="e-mail" i], input[name*="email" i]';
+        const passSel = 'input[type="password"], input[placeholder*="senha" i], input[name*="pass" i]';
         
-        await new Promise(r => setTimeout(r, 6000));
+        await page.waitForSelector(emailSel, { timeout: 15000 });
+        await page.type(emailSel, IGREEN_USER, { delay: 50 });
+        await page.type(passSel, IGREEN_PASS, { delay: 50 });
+        
+        console.log(`[EXTRATOR] Pressionando a tecla ENTER para fazer login...`);
+        await page.keyboard.press('Enter');
+        
+        console.log(`[EXTRATOR] Aguardando a tela do Painel abrir (8s)...`);
+        await new Promise(r => setTimeout(r, 8000));
 
-        // V92 FIX: O MATA-POPUPS (Garante que a tela está livre para clicar)
+        // VERIFICAÇÃO DE SUCESSO NO LOGIN
+        const tituloAtual = await page.title();
+        if (tituloAtual.toLowerCase().includes("login")) {
+            throw new Error(`Falha no Login! O site da iGreen bloqueou a entrada ou a senha/email estão errados. Título: [${tituloAtual}]`);
+        }
+        console.log(`[EXTRATOR] Login bem sucedido! Bem-vindo ao painel.`);
+
+        // V92 FIX: O MATA-POPUPS
         console.log(`[EXTRATOR] Verificando e fechando Popups/Avisos...`);
         await page.keyboard.press('Escape');
         await page.evaluate(() => {
@@ -122,17 +145,19 @@ async function fluxoExtracaoDados(termoBusca, phone) {
 
         console.log(`[EXTRATOR] 2. Navegando para Relatórios...`);
         await page.evaluate(() => {
-            const btnRelatorios = Array.from(document.querySelectorAll('div, span, button, a')).find(e => e.textContent.trim() === 'Relatórios');
+            const links = Array.from(document.querySelectorAll('div, span, button, a'));
+            const btnRelatorios = links.find(e => e.textContent.trim() === 'Relatórios');
             if(btnRelatorios) {
                 btnRelatorios.click();
                 if(btnRelatorios.parentElement) btnRelatorios.parentElement.click();
             }
         });
-        await new Promise(r => setTimeout(r, 2000)); // Espera o menu abrir
+        await new Promise(r => setTimeout(r, 2000));
         
         console.log(`[EXTRATOR] Indo para Mapa de Clientes...`);
         await page.evaluate(() => {
-            const btnMapa = Array.from(document.querySelectorAll('div, span, a')).find(e => e.textContent.trim() === 'Mapa de Clientes');
+            const links = Array.from(document.querySelectorAll('div, span, a'));
+            const btnMapa = links.find(e => e.textContent.trim() === 'Mapa de Clientes');
             if(btnMapa) {
                 btnMapa.click();
                 if(btnMapa.parentElement) btnMapa.parentElement.click();
@@ -142,7 +167,6 @@ async function fluxoExtracaoDados(termoBusca, phone) {
 
         console.log(`[EXTRATOR] 3. Localizando a caixa de pesquisa (Auto-Detect)...`);
         
-        // V92 FIX: Procura a primeira caixa de texto visível na tela que sirva para pesquisar!
         const inputEncontrado = await page.evaluate(() => {
             const inputs = Array.from(document.querySelectorAll('input'));
             const validInputs = inputs.filter(i => 
@@ -152,19 +176,17 @@ async function fluxoExtracaoDados(termoBusca, phone) {
             );
             
             if (validInputs.length > 0) {
-                // Tenta achar a que tem "Pesquisar", senão agarra a primeira que aparecer!
                 const searchInput = validInputs.find(i => i.placeholder.toLowerCase().includes('esquis') || i.placeholder.toLowerCase().includes('busc')) || validInputs[0];
-                searchInput.id = "alvo_pesquisa_igreen"; // Marca o alvo com um X vermelho para o robô atirar!
+                searchInput.id = "alvo_pesquisa_igreen";
                 return true;
             }
             return false;
         });
 
-        // A CAIXA NEGRA: Se falhar, diz-nos exatamente o que está na tela!
         if (!inputEncontrado) {
-            const tituloPagina = await page.title();
+            const tituloDaPagina = await page.title();
             const textoTela = await page.evaluate(() => document.body.innerText.substring(0, 300).replace(/\n/g, ' | '));
-            throw new Error(`Cegueira! A caixa sumiu. Página Atual: [${tituloPagina}]. Texto na tela: ${textoTela}`);
+            throw new Error(`Cegueira! A caixa de pesquisa sumiu. Página Atual: [${tituloDaPagina}]. Texto na tela: ${textoTela}`);
         }
 
         const searchSelector = '#alvo_pesquisa_igreen';
@@ -175,7 +197,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         await page.keyboard.press('Backspace'); 
         await new Promise(r => setTimeout(r, 500));
         
-        // Digita o ID lentamente e carrega no Enter
+        // Digita o ID e carrega no Enter
         await page.type(searchSelector, termoBusca, { delay: 100 });
         await new Promise(r => setTimeout(r, 500));
         await page.keyboard.press('Enter');
@@ -235,9 +257,8 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         await enviarMensagem(phone, mensagemFinal);
 
     } catch (error) {
-        console.error("❌ [ERRO EXTRATOR V92]:", error.message);
-        // Agora o erro detalhado será impresso no Render para nós vermos exatamente onde ele tropeçou!
-        await enviarMensagem(phone, `⚠️ O servidor teve um soluço técnico. Tente enviar o comando novamente.`);
+        console.error("❌ [ERRO EXTRATOR V93]:", error.message);
+        await enviarMensagem(phone, `⚠️ O servidor teve um soluço técnico: ${error.message}`);
         if(browser) await browser.close();
     }
 }
@@ -278,4 +299,4 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 });
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V92 ONLINE (Radar Auto-Detect e Anti-Popups)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V93 ONLINE (Login à Prova de Balas)`));
