@@ -71,21 +71,8 @@ async function enviarMensagem(phone, message) {
         ); 
         console.log(`[Z-API] ✅ Mensagem enviada com sucesso!`);
     } catch (e) {
-        console.error(`[Z-API] ❌ Erro ao enviar mensagem (Possível bloqueio na Z-API):`, e.response?.data || e.message);
+        console.error(`[Z-API] ❌ Erro ao enviar mensagem:`, e.response?.data || e.message);
     }
-}
-
-async function extrairDadosFatura(fileUrl, isPdf) {
-    if (!GEMINI_API_KEY) return null;
-    try {
-        const response = await axios.get(fileUrl, { responseType: 'arraybuffer' });
-        const base64Data = Buffer.from(response.data, 'binary').toString('base64');
-        const mimeType = isPdf ? 'application/pdf' : 'image/jpeg';
-        const prompt = `Você é um auditor da iGreen. Extraia da fatura: "NOME_CLIENTE", "CEP", "MEDIA_CONSUMO" (int), "UC", "DATA_VENCIMENTO" (DD/MM/AAAA), "FATURA_VENCIDA" (boolean). Retorne apenas JSON válido.`;
-        const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: mimeType, data: base64Data } }] }], generationConfig: { responseMimeType: "application/json" } };
-        const geminiRes = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`, payload);
-        return JSON.parse(geminiRes.data.candidates[0].content.parts[0].text);
-    } catch (error) { return null; }
 }
 
 async function salvarNoBanco(phone, dados) {
@@ -98,12 +85,12 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO: EXTRATOR V91 (FORÇA BRUTA + DIGITAÇÃO REAL)
+// MÓDULO: EXTRATOR V92 (AUTO-DETECT + ANTI-POPUPS)
 // ==========================================
 async function fluxoExtracaoDados(termoBusca, phone) {
     let browser;
     try {
-        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V91...`);
+        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V92...`);
         browser = await puppeteer.launch({ headless: "new", args: CHROME_ARGS });
         const page = await browser.newPage();
         await page.setViewport({ width: 1920, height: 1080 });
@@ -123,25 +110,67 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         
         await new Promise(r => setTimeout(r, 6000));
 
+        // V92 FIX: O MATA-POPUPS (Garante que a tela está livre para clicar)
+        console.log(`[EXTRATOR] Verificando e fechando Popups/Avisos...`);
+        await page.keyboard.press('Escape');
+        await page.evaluate(() => {
+            const btns = Array.from(document.querySelectorAll('button, a, div.close, span.close'));
+            const closeBtn = btns.find(b => b.innerText.match(/fechar|agora não|entendi|ok|x/i));
+            if (closeBtn) closeBtn.click();
+        });
+        await new Promise(r => setTimeout(r, 1000));
+
         console.log(`[EXTRATOR] 2. Navegando para Relatórios...`);
         await page.evaluate(() => {
             const btnRelatorios = Array.from(document.querySelectorAll('div, span, button, a')).find(e => e.textContent.trim() === 'Relatórios');
-            if(btnRelatorios) btnRelatorios.click();
+            if(btnRelatorios) {
+                btnRelatorios.click();
+                if(btnRelatorios.parentElement) btnRelatorios.parentElement.click();
+            }
         });
-        await new Promise(r => setTimeout(r, 1500));
+        await new Promise(r => setTimeout(r, 2000)); // Espera o menu abrir
         
         console.log(`[EXTRATOR] Indo para Mapa de Clientes...`);
         await page.evaluate(() => {
             const btnMapa = Array.from(document.querySelectorAll('div, span, a')).find(e => e.textContent.trim() === 'Mapa de Clientes');
-            if(btnMapa) btnMapa.click();
+            if(btnMapa) {
+                btnMapa.click();
+                if(btnMapa.parentElement) btnMapa.parentElement.click();
+            }
         });
         await new Promise(r => setTimeout(r, 8000)); 
 
-        console.log(`[EXTRATOR] 3. Pesquisando alvo com Borracha Humana: ${termoBusca}`);
-        const searchSelector = 'input[placeholder*="Pesquisar" i], input[placeholder*="Buscar" i]';
-        const searchInput = await page.waitForSelector(searchSelector, { timeout: 15000 });
+        console.log(`[EXTRATOR] 3. Localizando a caixa de pesquisa (Auto-Detect)...`);
         
-        // Simula clique triplo e backspace para limpar a barra (Burla a segurança React)
+        // V92 FIX: Procura a primeira caixa de texto visível na tela que sirva para pesquisar!
+        const inputEncontrado = await page.evaluate(() => {
+            const inputs = Array.from(document.querySelectorAll('input'));
+            const validInputs = inputs.filter(i => 
+                (i.type === 'text' || i.type === 'search' || i.type === '') && 
+                i.offsetHeight > 0 && i.offsetWidth > 0 && 
+                !i.disabled && !i.readOnly
+            );
+            
+            if (validInputs.length > 0) {
+                // Tenta achar a que tem "Pesquisar", senão agarra a primeira que aparecer!
+                const searchInput = validInputs.find(i => i.placeholder.toLowerCase().includes('esquis') || i.placeholder.toLowerCase().includes('busc')) || validInputs[0];
+                searchInput.id = "alvo_pesquisa_igreen"; // Marca o alvo com um X vermelho para o robô atirar!
+                return true;
+            }
+            return false;
+        });
+
+        // A CAIXA NEGRA: Se falhar, diz-nos exatamente o que está na tela!
+        if (!inputEncontrado) {
+            const tituloPagina = await page.title();
+            const textoTela = await page.evaluate(() => document.body.innerText.substring(0, 300).replace(/\n/g, ' | '));
+            throw new Error(`Cegueira! A caixa sumiu. Página Atual: [${tituloPagina}]. Texto na tela: ${textoTela}`);
+        }
+
+        const searchSelector = '#alvo_pesquisa_igreen';
+        const searchInput = await page.waitForSelector(searchSelector, { timeout: 5000 });
+        
+        // A Borracha Humana
         await searchInput.click({ clickCount: 3 }); 
         await page.keyboard.press('Backspace'); 
         await new Promise(r => setTimeout(r, 500));
@@ -156,18 +185,14 @@ async function fluxoExtracaoDados(termoBusca, phone) {
 
         console.log(`[EXTRATOR] 4. Filtrando Tabela com Força Bruta (Regex)...`);
         const dadosExtraidos = await page.evaluate((busca) => {
-            // Pega todo o texto da tabela filtrada
-            const tbody = document.querySelector('tbody');
-            if (!tbody) return null;
+            const areaBusca = document.querySelector('tbody') || document.querySelector('table') || document.body;
+            const textoGigante = areaBusca.innerText || "";
             
-            const textoGigante = tbody.innerText || "";
             if (textoGigante.includes('Nenhum registro') || textoGigante.trim() === '') return null;
 
-            // Busca o CPF em qualquer lugar do texto
             const padraoCpf = textoGigante.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
             const cpfFinal = padraoCpf ? padraoCpf[0] : "Não encontrado";
 
-            // Busca a Data de Nascimento (datas anteriores a 2010 para não confundir com data de cadastro)
             const padraoDatas = textoGigante.match(/\d{2}\/\d{2}\/\d{4}/g);
             let nascFinal = "Não consta no sistema";
             if (padraoDatas) {
@@ -175,17 +200,15 @@ async function fluxoExtracaoDados(termoBusca, phone) {
                 if (datasAntigas.length > 0) nascFinal = datasAntigas[0];
             }
 
-            // Tenta pegar o nome lendo a linha
             let nomeFinal = "Cliente Localizado";
-            const tr = tbody.querySelector('tr');
+            const tr = areaBusca.querySelector('tr');
             if (tr) {
-                const tds = Array.from(tr.querySelectorAll('td'));
+                const tds = Array.from(tr.querySelectorAll('td, th'));
                 for (let td of tds) {
                     let txt = td.innerText.trim();
-                    // Nomes não têm números, são maiores que 6 letras e costumam estar em maiúsculas
                     if (txt.length > 6 && !/\d/.test(txt) && txt.toUpperCase() === txt && txt !== "ATIVO" && txt !== "VALIDADO") {
                         nomeFinal = txt;
-                        break; // Pegou o nome, para a procura
+                        break; 
                     }
                 }
             }
@@ -212,8 +235,9 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         await enviarMensagem(phone, mensagemFinal);
 
     } catch (error) {
-        console.error("❌ [ERRO EXTRATOR V91]:", error.message);
-        await enviarMensagem(phone, `⚠️ O servidor teve um pequeno soluço técnico. Tente enviar o comando novamente.`);
+        console.error("❌ [ERRO EXTRATOR V92]:", error.message);
+        // Agora o erro detalhado será impresso no Render para nós vermos exatamente onde ele tropeçou!
+        await enviarMensagem(phone, `⚠️ O servidor teve um soluço técnico. Tente enviar o comando novamente.`);
         if(browser) await browser.close();
     }
 }
@@ -254,4 +278,4 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 });
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V91 ONLINE (Z-API Estável + Extração Bruta)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V92 ONLINE (Radar Auto-Detect e Anti-Popups)`));
