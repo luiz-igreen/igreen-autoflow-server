@@ -42,9 +42,9 @@ const TEXTOS = {
     T06: "Excelente! Os documentos estão sendo encriptados.",
     T07: "Para podermos registrar o seu cadastro, digite o seu melhor e-mail:",
     T08: "Tudo pronto! 🎉 A nossa inteligência entregou toda a sua documentação na base da iGreen Energy. Eles enviarão o link oficial para assinatura em breve! 🌿",
-    T_RESGATE_START: "⚡ *Módulo de Extração de Dados* ativado! Digite apenas o *Nome ou ID* do cliente (Ex: Rildo Firmino ou 1066935):",
-    T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma está a invadir o *Escritório Virtual iGreen* em background para capturar o CPF e Nascimento do cliente. Isto leva cerca de 30 segundos...",
-    T_RESGATE_FAIL: "⚠️ O Robô não conseguiu extrair os dados. Verifique se o cadastro do cliente na iGreen está com o documento preenchido corretamente."
+    T_RESGATE_START: "⚡ *Módulo de Extração de Dados* ativado! Digite apenas o *Nome ou ID* do cliente (Ex: Robson Carlos ou 1119032):",
+    T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma está a invadir o *Escritório Virtual iGreen* em background com o Radar Absoluto. Isto leva cerca de 30 segundos...",
+    T_RESGATE_FAIL: "⚠️ O Robô varreu toda a tabela mas não encontrou nenhum CPF válido. O sistema da iGreen pode estar a ocultar os dados ou o cliente não foi encontrado."
 };
 
 const CHROME_ARGS = [
@@ -92,12 +92,12 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO: EXTRATOR INTELIGENTE V86 (Mapeamento Cirúrgico)
+// MÓDULO: EXTRATOR INTELIGENTE V87 (Radar Absoluto)
 // ==========================================
 async function fluxoExtracaoDados(termoBusca, phone) {
     let browser;
     try {
-        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V86...`);
+        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V87...`);
         browser = await puppeteer.launch({ headless: "new", args: CHROME_ARGS });
         const page = await browser.newPage();
         await page.setViewport({ width: 1920, height: 1080 });
@@ -140,7 +140,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         console.log(`[EXTRATOR] Aguardando atualização da tabela (12s)...`);
         await new Promise(r => setTimeout(r, 12000)); 
 
-        console.log(`[EXTRATOR] 4. Extraindo Colunas 9 e 19 (Lógica Luiz Jorge)...`);
+        console.log(`[EXTRATOR] 4. Ligando o Radar Absoluto (V87)...`);
         const dadosExtraidos = await page.evaluate(() => {
             const tbody = document.querySelector('tbody');
             if(!tbody || tbody.innerText.includes('Nenhum registro')) return null;
@@ -150,31 +150,28 @@ async function fluxoExtracaoDados(termoBusca, phone) {
 
             const colunas = Array.from(linha.querySelectorAll('td'));
             
-            // Auditoria de Colunas (Escreve nos Logs do Render)
-            let auditoria = "CONTROLE DE COLUNAS: ";
-            colunas.forEach((td, i) => { auditoria += `[Col ${i+1}: ${td.innerText.trim()}] | `; });
-            console.log(auditoria);
+            let nome = colunas[0] ? colunas[0].innerText.trim() : "Cliente Localizado";
+            let cpf = "Não encontrado";
+            let nasc = "Não consta no sistema";
 
-            // MAPEAMENTO LUIZ JORGE (Index começa em 0)
-            // Coluna 2 (Index 1) = Nome
-            // Coluna 9 (Index 8) = Documento (CPF/CNPJ)
-            // Coluna 19 (Index 18) = Data Nascimento
-            
-            let nome = colunas[1] ? colunas[1].innerText.trim() : "Cliente iGreen";
-            let cpf = colunas[8] ? colunas[8].innerText.trim() : "Não encontrado";
-            let nasc = colunas[18] ? colunas[18].innerText.trim() : "Não encontrado";
+            // O RADAR ABSOLUTO: Olha para o conteúdo exato de cada célula individualmente!
+            colunas.forEach(td => {
+                const texto = td.innerText.trim();
+                
+                // Se a célula tiver o formato perfeito de um CPF ou CNPJ
+                const matchCpf = texto.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
+                if (matchCpf) {
+                    cpf = matchCpf[0];
+                }
+            });
 
-            // Plano B: Se o mapeamento direto falhar, usa Regex no conteúdo da linha
-            if (cpf === "Não encontrado" || cpf.length < 10) {
-                const totalText = linha.innerText;
-                const matchCpf = totalText.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
-                cpf = matchCpf ? matchCpf[0] : "Não encontrado";
-            }
-
-            if (nasc === "Não encontrado" || !nasc.includes('/')) {
-                const totalText = linha.innerText;
-                const matchDates = totalText.match(/\d{2}\/\d{2}\/\d{4}/g);
-                nasc = matchDates ? matchDates[matchDates.length - 1] : "Não encontrado";
+            // Captura a Data de Nascimento (Procura anos antigos para não confundir com a data de cadastro)
+            const totalText = linha.innerText;
+            const matchDates = totalText.match(/\d{2}\/\d{2}\/\d{4}/g);
+            if (matchDates) {
+                const datasAntigas = matchDates.filter(d => parseInt(d.split('/')[2]) < 2010);
+                if (datasAntigas.length > 0) nasc = datasAntigas[0];
+                else nasc = matchDates[matchDates.length - 1]; 
             }
 
             return { nome, cpf, nasc };
@@ -189,7 +186,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
 
         const mensagemFinal = `✅ *DADOS CAPTURADOS COM SUCESSO!* 🕵️‍♂️\n\n` +
                               `👤 *Nome:* ${dadosExtraidos.nome}\n` +
-                              `📄 *Documento (CPF):* ${dadosExtraidos.cpf}\n` +
+                              `📄 *Documento (CPF/CNPJ):* ${dadosExtraidos.cpf}\n` +
                               `🎂 *Nascimento:* ${dadosExtraidos.nasc}\n\n` +
                               `⚡ *Atalhos das Concessionárias:*\n` +
                               `➡️ *Equatorial AL:* https://al.equatorialenergia.com.br/sua-conta/segunda-via/\n` +
@@ -198,7 +195,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         await enviarMensagem(phone, mensagemFinal);
 
     } catch (error) {
-        console.error("❌ [ERRO EXTRATOR V86]:", error.message);
+        console.error("❌ [ERRO EXTRATOR V87]:", error.message);
         await enviarMensagem(phone, `⚠️ O servidor teve um soluço técnico. Tente novamente o RESGATAR em 1 minuto.`);
         if(browser) await browser.close();
     }
@@ -234,4 +231,4 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 });
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V86 ONLINE (Lógica Luiz Jorge Ativa)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V87 ONLINE (Radar Absoluto Ativo)`));
