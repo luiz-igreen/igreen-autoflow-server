@@ -19,8 +19,9 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "AIzaSyCz1JE0Ie6HsAocCfx16g
 
 const IGREEN_ESCRITORIO_URL = "https://escritorio.igreenenergy.com.br"; 
 
-const IGREEN_USER = "jorgeluizhouse@hotmail.com";
-const IGREEN_PASS = "@@Lkjdsa12345";
+// V94: Puxa do Render primeiro. Se não tiver, usa este como backup.
+const IGREEN_USER = process.env.IGREEN_USER || "jorgeluizhouse@hotmail.com";
+const IGREEN_PASS = process.env.IGREEN_PASS || "@@Lkjdsa12345";
 
 const APP_ID = 'igreen-autoflow-v4';
 
@@ -75,19 +76,6 @@ async function enviarMensagem(phone, message) {
     }
 }
 
-async function extrairDadosFatura(fileUrl, isPdf) {
-    if (!GEMINI_API_KEY) return null;
-    try {
-        const response = await axios.get(fileUrl, { responseType: 'arraybuffer' });
-        const base64Data = Buffer.from(response.data, 'binary').toString('base64');
-        const mimeType = isPdf ? 'application/pdf' : 'image/jpeg';
-        const prompt = `Você é um auditor da iGreen. Extraia da fatura: "NOME_CLIENTE", "CEP", "MEDIA_CONSUMO" (int), "UC", "DATA_VENCIMENTO" (DD/MM/AAAA), "FATURA_VENCIDA" (boolean). Retorne apenas JSON válido.`;
-        const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: mimeType, data: base64Data } }] }], generationConfig: { responseMimeType: "application/json" } };
-        const geminiRes = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`, payload);
-        return JSON.parse(geminiRes.data.candidates[0].content.parts[0].text);
-    } catch (error) { return null; }
-}
-
 async function salvarNoBanco(phone, dados) {
     if (admin.apps.length > 0) {
         try {
@@ -98,12 +86,12 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO: EXTRATOR V93 (LOGIN FÍSICO + AUTO-DETECT)
+// MÓDULO: EXTRATOR V94 (LOGIN FÍSICO COM MARRETA)
 // ==========================================
 async function fluxoExtracaoDados(termoBusca, phone) {
     let browser;
     try {
-        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V93...`);
+        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V94...`);
         browser = await puppeteer.launch({ headless: "new", args: CHROME_ARGS });
         const page = await browser.newPage();
         await page.setViewport({ width: 1920, height: 1080 });
@@ -111,27 +99,54 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         console.log(`[EXTRATOR] 1. Acessando Escritório iGreen...`);
         await page.goto(IGREEN_ESCRITORIO_URL, { waitUntil: 'networkidle2', timeout: 60000 });
         
-        // V93 FIX: Login Físico. O Robô agora DIGITA como um humano para não ser bloqueado.
-        console.log(`[EXTRATOR] Fazendo Login com digitação humana...`);
+        // V94 FIX: A Marreta do Login
+        console.log(`[EXTRATOR] Limpando e digitando credenciais...`);
         const emailSel = 'input[type="email"], input[placeholder*="e-mail" i], input[name*="email" i]';
         const passSel = 'input[type="password"], input[placeholder*="senha" i], input[name*="pass" i]';
         
         await page.waitForSelector(emailSel, { timeout: 15000 });
+        
+        // Clica 3 vezes para selecionar tudo e apagar resquícios
+        await page.click(emailSel, { clickCount: 3 });
+        await page.keyboard.press('Backspace');
         await page.type(emailSel, IGREEN_USER, { delay: 50 });
+        
+        await page.click(passSel, { clickCount: 3 });
+        await page.keyboard.press('Backspace');
         await page.type(passSel, IGREEN_PASS, { delay: 50 });
         
-        console.log(`[EXTRATOR] Pressionando a tecla ENTER para fazer login...`);
-        await page.keyboard.press('Enter');
-        
-        console.log(`[EXTRATOR] Aguardando a tela do Painel abrir (8s)...`);
-        await new Promise(r => setTimeout(r, 8000));
+        console.log(`[EXTRATOR] Clicando no botão Entrar fisicamente...`);
+        const btnLoginEncontrado = await page.evaluate(() => {
+            const btns = Array.from(document.querySelectorAll('button'));
+            const btn = btns.find(b => b.innerText.toLowerCase().includes('entrar') || b.innerText.toLowerCase().includes('acessar'));
+            if (btn) {
+                btn.id = "btn_login_igreen_injetor";
+                return true;
+            }
+            return false;
+        });
 
-        // VERIFICAÇÃO DE SUCESSO NO LOGIN
-        const tituloAtual = await page.title();
-        if (tituloAtual.toLowerCase().includes("login")) {
-            throw new Error(`Falha no Login! O site da iGreen bloqueou a entrada ou a senha/email estão errados. Título: [${tituloAtual}]`);
+        if (btnLoginEncontrado) {
+            await page.click('#btn_login_igreen_injetor');
+        } else {
+            await page.keyboard.press('Enter');
         }
-        console.log(`[EXTRATOR] Login bem sucedido! Bem-vindo ao painel.`);
+        
+        console.log(`[EXTRATOR] Aguardando a tela do Painel abrir (10s)...`);
+        await new Promise(r => setTimeout(r, 10000));
+
+        // VERIFICAÇÃO DE SUCESSO NO LOGIN (À PROVA DE BALAS)
+        const loginFalhou = await page.evaluate(() => {
+            // Se o campo de senha ainda está visível na tela, o login não passou!
+            const passInput = document.querySelector('input[type="password"]');
+            return passInput !== null;
+        });
+
+        if (loginFalhou) {
+            const textoErro = await page.evaluate(() => document.body.innerText.substring(0, 200).replace(/\n/g, ' | '));
+            throw new Error(`Falha no Login! A senha/e-mail estão errados ou a iGreen bloqueou. Tela presa em: [${textoErro}]`);
+        }
+        console.log(`[EXTRATOR] Login bem sucedido! A tela mudou.`);
 
         // V92 FIX: O MATA-POPUPS
         console.log(`[EXTRATOR] Verificando e fechando Popups/Avisos...`);
@@ -257,7 +272,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         await enviarMensagem(phone, mensagemFinal);
 
     } catch (error) {
-        console.error("❌ [ERRO EXTRATOR V93]:", error.message);
+        console.error("❌ [ERRO EXTRATOR V94]:", error.message);
         await enviarMensagem(phone, `⚠️ O servidor teve um soluço técnico: ${error.message}`);
         if(browser) await browser.close();
     }
@@ -299,4 +314,4 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 });
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V93 ONLINE (Login à Prova de Balas)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V94 ONLINE (A Marreta do Login)`));
