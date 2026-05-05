@@ -44,7 +44,7 @@ const TEXTOS = {
     T08: "Tudo pronto! 🎉 A nossa inteligência entregou toda a sua documentação na base da iGreen Energy. Eles enviarão o link oficial para assinatura em breve! 🌿",
     T_RESGATE_START: "⚡ *Módulo de Extração de Dados* ativado! Digite apenas o *Nome ou ID* do cliente (Ex: Wellington Silva ou 398172):",
     T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma está a invadir o *Escritório Virtual iGreen* em background para capturar o CPF e Nascimento do cliente. Isto leva cerca de 25 segundos...",
-    T_RESGATE_FAIL: "⚠️ O Robô não conseguiu extrair os dados. Verifique se o ID está correto ou tente pelo Nome do Cliente."
+    T_RESGATE_FAIL: "⚠️ O Robô não conseguiu extrair os dados. Verifique se o ID está correto ou tente pelo Nome do Cliente. (Veja os logs na tela preta)"
 };
 
 const CHROME_ARGS = [
@@ -100,7 +100,7 @@ async function salvarNoBanco(phone, dados) {
 async function fluxoExtracaoDados(termoBusca, phone) {
     let browser;
     try {
-        console.log(`[EXTRATOR] Iniciando Navegador Fantasma V81...`);
+        console.log(`[EXTRATOR] Iniciando Navegador Fantasma V82 (Raio-X)...`);
         browser = await puppeteer.launch({ headless: "new", args: CHROME_ARGS });
         const page = await browser.newPage();
         
@@ -125,9 +125,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         await page.evaluate(() => {
             const btnRelatorios = Array.from(document.querySelectorAll('div, span, button, a')).find(e => e.textContent.trim() === 'Relatórios');
             if(btnRelatorios) btnRelatorios.click();
-        });
-        await new Promise(r => setTimeout(r, 1500));
-        
+        console.log(`[EXTRATOR] Clicando em Mapa de Clientes...`);
         await page.evaluate(() => {
             const btnMapa = Array.from(document.querySelectorAll('div, span, a')).find(e => e.textContent.trim() === 'Mapa de Clientes');
             if(btnMapa) btnMapa.click();
@@ -140,34 +138,36 @@ async function fluxoExtracaoDados(termoBusca, phone) {
             if(searchInput) {
                 searchInput.value = busca;
                 searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+                searchInput.dispatchEvent(new Event('change', { bubbles: true }));
+                // V82 FIX: Simula a tecla Enter para forçar a busca na tabela!
+                searchInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, keyCode: 13, key: 'Enter' }));
             }
         }, termoBusca);
         
-        console.log(`[EXTRATOR] Aguardando a tabela atualizar...`);
-        await new Promise(r => setTimeout(r, 6000)); 
+        console.log(`[EXTRATOR] Aguardando a tabela atualizar (8s)...`);
+        await new Promise(r => setTimeout(r, 8000)); 
 
-        console.log(`[EXTRATOR] 4. Aplicando Lógica 'Luiz Jorge' de Colunas...`);
-        const dadosExtraidos = await page.evaluate((busca) => {
+        // V82 FIX: OS ÓCULOS DO ROBÔ (Loga o que ele está vendo na tela preta)
+        const visaoRobo = await page.evaluate(() => {
+            const tbody = document.querySelector('tbody');
+            if(!tbody) return "NENHUMA TABELA ENCONTRADA NA TELA";
+            return tbody.innerText.replace(/\n/g, ' | ').substring(0, 400); // Pega os primeiros 400 caracteres
+        });
+        console.log(`[OLHOS DO ROBO]: ${visaoRobo}`);
+
+        console.log(`[EXTRATOR] 4. Lendo a Primeira Linha da Tabela...`);
+        const dadosExtraidos = await page.evaluate(() => {
             // Captura todas as linhas da tabela
-            const linhas = Array.from(document.querySelectorAll('tr'));
-            
-            // Encontra a linha específica que contém o Nome ou ID pesquisado
-            const linhaCorreta = linhas.find(l => l.textContent.includes(busca) && !l.textContent.includes('Nenhum registro'));
+            const linhas = Array.from(document.querySelectorAll('tbody tr'));
+            if (linhas.length === 0 || linhas[0].textContent.includes('Nenhum')) return null;
 
-            if (!linhaCorreta) return null;
-
-            // Extrai todas as células (colunas) daquela linha
+            // V82 FIX: Como a busca já filtrou, pegamos logo a PRIMEIRA linha que sobrou!
+            const linhaCorreta = linhas[0];
             const colunas = linhaCorreta.querySelectorAll('td');
             
             let nome = "Cliente Localizado";
             let cpf = "Não encontrado";
             let nasc = "Não encontrado";
-
-            // A MÁGICA DESCOBERTA PELO LUIZ JORGE:
-            // No HTML, o índice começa do zero. 
-            // Coluna 2 (Índice 1) = Nome
-            // Coluna 9 (Índice 8) = Documento (CPF/CNPJ)
-            // Coluna 19 (Índice 18) = Data Nascimento
             
             if (colunas.length >= 10) {
                 nome = colunas[1] ? colunas[1].textContent.trim() : nome;
@@ -192,7 +192,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
             }
 
             return { nome, cpf, nasc };
-        }, termoBusca);
+        });
 
         await browser.close();
 
