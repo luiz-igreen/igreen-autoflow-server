@@ -43,8 +43,8 @@ const TEXTOS = {
     T07: "Para podermos registrar o seu cadastro, digite o seu melhor e-mail:",
     T08: "Tudo pronto! 🎉 A nossa inteligência entregou toda a sua documentação na base da iGreen Energy. Eles enviarão o link oficial para assinatura em breve! 🌿",
     T_RESGATE_START: "⚡ *Módulo de Extração de Dados* ativado! Digite apenas o *Nome ou ID* do cliente (Ex: Robson Carlos ou 1119032):",
-    T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma está a invadir o *Escritório Virtual iGreen* em background com o Radar Absoluto. Isto leva cerca de 30 segundos...",
-    T_RESGATE_FAIL: "⚠️ O Robô varreu toda a tabela mas não encontrou nenhum CPF válido. O sistema da iGreen pode estar a ocultar os dados ou o cliente não foi encontrado."
+    T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma está a invadir o *Escritório Virtual iGreen* em background com Força Bruta. Isto leva cerca de 25 segundos...",
+    T_RESGATE_FAIL: "⚠️ O Robô varreu toda a tela do sistema da iGreen, mas o cliente não possui CPF registado na plataforma ou a busca falhou."
 };
 
 const CHROME_ARGS = [
@@ -92,12 +92,12 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO: EXTRATOR INTELIGENTE V87 (Radar Absoluto)
+// MÓDULO: EXTRATOR V88 (FORÇA BRUTA)
 // ==========================================
 async function fluxoExtracaoDados(termoBusca, phone) {
     let browser;
     try {
-        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V87...`);
+        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V88 (Força Bruta Absoluta)...`);
         browser = await puppeteer.launch({ headless: "new", args: CHROME_ARGS });
         const page = await browser.newPage();
         await page.setViewport({ width: 1920, height: 1080 });
@@ -115,14 +115,14 @@ async function fluxoExtracaoDados(termoBusca, phone) {
             if(btnLogin) btnLogin.click();
         }, IGREEN_USER, IGREEN_PASS);
         
-        await new Promise(r => setTimeout(r, 8000));
+        await new Promise(r => setTimeout(r, 6000));
 
         console.log(`[EXTRATOR] 2. Navegando para Mapa de Clientes...`);
         await page.evaluate(() => {
             const btnRelatorios = Array.from(document.querySelectorAll('div, span, button, a')).find(e => e.textContent.trim() === 'Relatórios');
             if(btnRelatorios) btnRelatorios.click();
         });
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 1500));
         
         await page.evaluate(() => {
             const btnMapa = Array.from(document.querySelectorAll('div, span, a')).find(e => e.textContent.trim() === 'Mapa de Clientes');
@@ -130,52 +130,63 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         });
         await new Promise(r => setTimeout(r, 8000)); 
 
-        console.log(`[EXTRATOR] 3. Pesquisando alvo com digitação humana: ${termoBusca}`);
+        console.log(`[EXTRATOR] 3. Pesquisando alvo: ${termoBusca}`);
         const searchSelector = 'input[placeholder*="Pesquisar" i], input[placeholder*="Buscar" i]';
         await page.waitForSelector(searchSelector, { timeout: 15000 });
         await page.click(searchSelector);
+        
+        // Limpa a caixa de pesquisa antes
+        await page.evaluate((sel) => { document.querySelector(sel).value = ''; }, searchSelector);
+        
         await page.type(searchSelector, termoBusca, { delay: 150 });
         await page.keyboard.press('Enter');
         
-        console.log(`[EXTRATOR] Aguardando atualização da tabela (12s)...`);
-        await new Promise(r => setTimeout(r, 12000)); 
+        console.log(`[EXTRATOR] Aguardando a tabela atualizar (10s)...`);
+        await new Promise(r => setTimeout(r, 10000)); 
 
-        console.log(`[EXTRATOR] 4. Ligando o Radar Absoluto (V87)...`);
-        const dadosExtraidos = await page.evaluate(() => {
-            const tbody = document.querySelector('tbody');
-            if(!tbody || tbody.innerText.includes('Nenhum registro')) return null;
+        console.log(`[EXTRATOR] 4. Disparando Regex de Força Bruta na Tela (V88)...`);
+        const dadosExtraidos = await page.evaluate((busca) => {
+            // A TÁTICA FINAL: LER O CORPO INTEIRO DA TABELA COMO TEXTO PURO
+            const areaDeLeitura = document.querySelector('tbody') || document.body;
+            const textoGigante = areaDeLeitura.innerText || "";
 
-            const linha = tbody.querySelector('tr');
-            if (!linha) return null;
+            if (textoGigante.includes('Nenhum registro') || textoGigante.trim() === '') return null;
 
-            const colunas = Array.from(linha.querySelectorAll('td'));
-            
-            let nome = colunas[0] ? colunas[0].innerText.trim() : "Cliente Localizado";
-            let cpf = "Não encontrado";
-            let nasc = "Não consta no sistema";
+            // 1. SUGAR O CPF: Procura o formato exato 000.000.000-00 em QUALQUER lugar do texto
+            const padraoCpf = textoGigante.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
+            const cpfFinal = padraoCpf ? padraoCpf[0] : "Não encontrado";
 
-            // O RADAR ABSOLUTO: Olha para o conteúdo exato de cada célula individualmente!
-            colunas.forEach(td => {
-                const texto = td.innerText.trim();
-                
-                // Se a célula tiver o formato perfeito de um CPF ou CNPJ
-                const matchCpf = texto.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
-                if (matchCpf) {
-                    cpf = matchCpf[0];
-                }
-            });
-
-            // Captura a Data de Nascimento (Procura anos antigos para não confundir com a data de cadastro)
-            const totalText = linha.innerText;
-            const matchDates = totalText.match(/\d{2}\/\d{2}\/\d{4}/g);
-            if (matchDates) {
-                const datasAntigas = matchDates.filter(d => parseInt(d.split('/')[2]) < 2010);
-                if (datasAntigas.length > 0) nasc = datasAntigas[0];
-                else nasc = matchDates[matchDates.length - 1]; 
+            // 2. SUGAR A DATA DE NASCIMENTO: Procura datas antigas (ano menor que 2010)
+            const padraoDatas = textoGigante.match(/\d{2}\/\d{2}\/\d{4}/g);
+            let nascFinal = "Não consta no sistema";
+            if (padraoDatas) {
+                // Filtra para pegar apenas datas antigas (Nascimento), ignorando a Data de Cadastro (2024, 2026)
+                const datasNasc = padraoDatas.filter(d => parseInt(d.split('/')[2]) < 2010);
+                if (datasNasc.length > 0) nascFinal = datasNasc[0];
             }
 
-            return { nome, cpf, nasc };
-        });
+            // 3. IDENTIFICAR O NOME
+            let nomeFinal = "Cliente Localizado";
+            if (isNaN(busca) && busca.length > 3) {
+                nomeFinal = busca.toUpperCase(); // Se pesquisou por nome, usa o nome
+            } else {
+                // Se pesquisou por ID, tenta achar o nome na primeira linha que sobrou
+                const tr = areaDeLeitura.querySelector('tr');
+                if (tr) {
+                    const celulas = Array.from(tr.querySelectorAll('td'));
+                    for (let td of celulas) {
+                        let textoTd = td.innerText.trim();
+                        // Nome geralmente é todo em maiúsculas, sem números e tem mais de 5 letras
+                        if (textoTd.length > 5 && !/\d/.test(textoTd) && textoTd.toUpperCase() === textoTd) {
+                            nomeFinal = textoTd;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            return { nome: nomeFinal, cpf: cpfFinal, nasc: nascFinal };
+        }, termoBusca);
 
         await browser.close();
 
@@ -186,7 +197,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
 
         const mensagemFinal = `✅ *DADOS CAPTURADOS COM SUCESSO!* 🕵️‍♂️\n\n` +
                               `👤 *Nome:* ${dadosExtraidos.nome}\n` +
-                              `📄 *Documento (CPF/CNPJ):* ${dadosExtraidos.cpf}\n` +
+                              `📄 *Documento:* ${dadosExtraidos.cpf}\n` +
                               `🎂 *Nascimento:* ${dadosExtraidos.nasc}\n\n` +
                               `⚡ *Atalhos das Concessionárias:*\n` +
                               `➡️ *Equatorial AL:* https://al.equatorialenergia.com.br/sua-conta/segunda-via/\n` +
@@ -195,8 +206,8 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         await enviarMensagem(phone, mensagemFinal);
 
     } catch (error) {
-        console.error("❌ [ERRO EXTRATOR V87]:", error.message);
-        await enviarMensagem(phone, `⚠️ O servidor teve um soluço técnico. Tente novamente o RESGATAR em 1 minuto.`);
+        console.error("❌ [ERRO EXTRATOR V88]:", error.message);
+        await enviarMensagem(phone, `⚠️ O servidor teve um soluço técnico (falta de memória RAM). Tente novamente o RESGATAR.`);
         if(browser) await browser.close();
     }
 }
@@ -231,4 +242,4 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 });
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V87 ONLINE (Radar Absoluto Ativo)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V88 ONLINE (Força Bruta Absoluta)`));
