@@ -43,7 +43,7 @@ const TEXTOS = {
     T07: "Para podermos registrar o seu cadastro, digite o seu melhor e-mail:",
     T08: "Tudo pronto! 🎉 A nossa inteligência entregou toda a sua documentação na base da iGreen Energy. Eles enviarão o link oficial para assinatura em breve! 🌿",
     T_RESGATE_START: "⚡ *Módulo de Extração de Dados* ativado! Digite apenas o *Nome ou ID* do cliente (Ex: Wellington Silva ou 398172):",
-    T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma está a invadir o *Escritório Virtual iGreen* em background para capturar o CPF e Nascimento do cliente. Isto leva cerca de 25 segundos...",
+    T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma está a invadir o *Escritório Virtual iGreen* em background para capturar o CPF e Nascimento do cliente. Isto leva cerca de 25 a 30 segundos...",
     T_RESGATE_FAIL: "⚠️ O Robô não conseguiu extrair os dados. Verifique se o ID está correto ou tente pelo Nome do Cliente. (Veja os logs na tela preta)"
 };
 
@@ -58,7 +58,7 @@ const CHROME_ARGS = [
 ];
 
 // ==========================================
-// FUNÇÕES AUXILIARES
+// FUNÇÕES AUXILIARES E IA
 // ==========================================
 async function extrairDadosFatura(fileUrl, isPdf) {
     if (!GEMINI_API_KEY) return null;
@@ -79,7 +79,9 @@ async function extrairDadosFatura(fileUrl, isPdf) {
 async function enviarMensagem(phone, message) {
     const numLimpo = String(phone).replace(/\D/g, ''); 
     try { 
+        console.log(`[Z-API] Tentando enviar mensagem para ${numLimpo}...`);
         await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, { phone: numLimpo, message: String(message) }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }); 
+        console.log(`[Z-API] ✅ Mensagem enviada com sucesso!`);
     } catch (e) {
         console.error(`[Z-API] ❌ Erro ao enviar mensagem:`, e.message);
     }
@@ -95,21 +97,24 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO: EXTRATOR INTELIGENTE DE DADOS (V81)
+// MÓDULO: EXTRATOR INTELIGENTE DE DADOS (V83 - Digitação Humana + Enter)
 // ==========================================
 async function fluxoExtracaoDados(termoBusca, phone) {
     let browser;
     try {
-        console.log(`[EXTRATOR] Iniciando Navegador Fantasma V82 (Raio-X)...`);
+        console.log(`[EXTRATOR] ⚠️ Tentando alocar memória e iniciar Navegador Fantasma V83...`);
         browser = await puppeteer.launch({ headless: "new", args: CHROME_ARGS });
+        
+        console.log(`[EXTRATOR] ✅ Navegador aberto. Criando nova aba com resolução Full HD...`);
         const page = await browser.newPage();
         
-        // V81 FIX: Resolução GIGANTE para garantir que a iGreen não oculta nenhuma coluna (como a de Nascimento)
+        // V81 FIX: Resolução GIGANTE para garantir que a iGreen não oculta nenhuma coluna
         await page.setViewport({ width: 1920, height: 1080 });
         
-        console.log(`[EXTRATOR] 1. Acessando Escritório...`);
+        console.log(`[EXTRATOR] 1. Acessando Escritório: ${IGREEN_ESCRITORIO_URL}`);
         await page.goto(IGREEN_ESCRITORIO_URL, { waitUntil: 'networkidle2', timeout: 60000 });
         
+        console.log(`[EXTRATOR] Fazendo Login...`);
         await page.evaluate((u, p) => {
             const emailInput = document.querySelector('input[type="email"], input[placeholder*="e-mail" i]');
             const passInput = document.querySelector('input[type="password"], input[placeholder*="senha" i]');
@@ -121,33 +126,44 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         
         await new Promise(r => setTimeout(r, 6000));
 
-        console.log(`[EXTRATOR] 2. Navegando para Mapa de Clientes...`);
+        console.log(`[EXTRATOR] 2. Navegando para Relatórios...`);
         await page.evaluate(() => {
             const btnRelatorios = Array.from(document.querySelectorAll('div, span, button, a')).find(e => e.textContent.trim() === 'Relatórios');
             if(btnRelatorios) btnRelatorios.click();
+        });
+        await new Promise(r => setTimeout(r, 1500));
+        
         console.log(`[EXTRATOR] Clicando em Mapa de Clientes...`);
         await page.evaluate(() => {
             const btnMapa = Array.from(document.querySelectorAll('div, span, a')).find(e => e.textContent.trim() === 'Mapa de Clientes');
             if(btnMapa) btnMapa.click();
         });
-        await new Promise(r => setTimeout(r, 6000)); 
+        await new Promise(r => setTimeout(r, 6000)); // Espera a tela de mapa de clientes carregar
 
         console.log(`[EXTRATOR] 3. Pesquisando alvo: ${termoBusca}`);
-        await page.evaluate((busca) => {
-            const searchInput = document.querySelector('input[placeholder*="Pesquisar" i], input[placeholder*="Buscar" i]');
-            if(searchInput) {
-                searchInput.value = busca;
-                searchInput.dispatchEvent(new Event('input', { bubbles: true }));
-                searchInput.dispatchEvent(new Event('change', { bubbles: true }));
-                // V82 FIX: Simula a tecla Enter para forçar a busca na tabela!
-                searchInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, keyCode: 13, key: 'Enter' }));
-            }
-        }, termoBusca);
         
-        console.log(`[EXTRATOR] Aguardando a tabela atualizar (8s)...`);
-        await new Promise(r => setTimeout(r, 8000)); 
+        // V83 FIX: Digitação Humana Real + Tecla Enter Física do Teclado
+        const searchSelector = 'input[placeholder*="Pesquisar" i], input[placeholder*="Buscar" i]';
+        
+        // Espera a caixa de pesquisa existir na tela e clica nela fisicamente
+        await page.waitForSelector(searchSelector, { timeout: 15000 });
+        await page.click(searchSelector);
+        
+        // Limpa a caixa por precaução via código
+        await page.evaluate((sel) => { document.querySelector(sel).value = ''; }, searchSelector);
+        
+        // Digita o ID/Nome como se fosse um humano (com pausa de 150ms entre as teclas para não assustar o site)
+        await page.type(searchSelector, termoBusca, { delay: 150 });
+        
+        // Aperta fisicamente a tecla ENTER do teclado do servidor Render!
+        console.log(`[EXTRATOR] Apertando ENTER para forçar o filtro...`);
+        await page.keyboard.press('Enter');
+        
+        console.log(`[EXTRATOR] Aguardando a tabela atualizar após o Enter (10s)...`);
+        await new Promise(r => setTimeout(r, 10000)); 
 
         // V82 FIX: OS ÓCULOS DO ROBÔ (Loga o que ele está vendo na tela preta)
+        console.log(`[EXTRATOR] Usando visão de Raio-X na tabela...`);
         const visaoRobo = await page.evaluate(() => {
             const tbody = document.querySelector('tbody');
             if(!tbody) return "NENHUMA TABELA ENCONTRADA NA TELA";
@@ -155,13 +171,13 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         });
         console.log(`[OLHOS DO ROBO]: ${visaoRobo}`);
 
-        console.log(`[EXTRATOR] 4. Lendo a Primeira Linha da Tabela...`);
+        console.log(`[EXTRATOR] 4. Lendo a Primeira Linha Filtrada...`);
         const dadosExtraidos = await page.evaluate(() => {
             // Captura todas as linhas da tabela
             const linhas = Array.from(document.querySelectorAll('tbody tr'));
             if (linhas.length === 0 || linhas[0].textContent.includes('Nenhum')) return null;
 
-            // V82 FIX: Como a busca já filtrou, pegamos logo a PRIMEIRA linha que sobrou!
+            // Como a busca do Enter filtrou, pegamos logo a PRIMEIRA linha que sobrou!
             const linhaCorreta = linhas[0];
             const colunas = linhaCorreta.querySelectorAll('td');
             
@@ -169,6 +185,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
             let cpf = "Não encontrado";
             let nasc = "Não encontrado";
             
+            // A Lógica de Mapeamento LUIZ JORGE (Col 9 e Col 19)
             if (colunas.length >= 10) {
                 nome = colunas[1] ? colunas[1].textContent.trim() : nome;
                 cpf = colunas[8] ? colunas[8].textContent.trim() : cpf;
@@ -194,14 +211,16 @@ async function fluxoExtracaoDados(termoBusca, phone) {
             return { nome, cpf, nasc };
         });
 
+        console.log(`[EXTRATOR] Fechando navegador para liberar memória...`);
         await browser.close();
 
+        // Se não achou o CPF
         if (!dadosExtraidos || dadosExtraidos.cpf === "Não encontrado") {
             await enviarMensagem(phone, TEXTOS.T_RESGATE_FAIL);
             return;
         }
 
-        console.log(`[EXTRATOR] 🎉 Dados capturados!`);
+        console.log(`[EXTRATOR] 🎉 Dados capturados! Enviando para o WhatsApp...`);
         const mensagemFinal = `✅ *DADOS CAPTURADOS COM SUCESSO!* 🕵️‍♂️\n\n` +
                               `👤 *Nome:* ${dadosExtraidos.nome}\n` +
                               `📄 *Documento:* ${dadosExtraidos.cpf}\n` +
@@ -213,7 +232,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         await enviarMensagem(phone, mensagemFinal);
 
     } catch (error) {
-        console.error("❌ [ERRO EXTRATOR]:", error.message);
+        console.error("❌ [ERRO EXTRATOR FATAL]:", error.message);
         await enviarMensagem(phone, `⚠️ Ocorreu um erro técnico ao aceder ao Escritório Virtual. Tente novamente em 2 minutos.`);
         if(browser) await browser.close();
     }
@@ -223,7 +242,9 @@ async function fluxoExtracaoDados(termoBusca, phone) {
 // LÓGICA DO WEBHOOK
 // ==========================================
 app.post('/webhook/igreen', async (req, res) => {
+    // Responde ao Z-API na hora para não dar timeout
     res.status(200).send("OK");
+    
     const data = req.body;
     if (data.fromMe) return;
 
@@ -235,6 +256,8 @@ app.post('/webhook/igreen', async (req, res) => {
     const fileUrl = data.image?.imageUrl || data.document?.documentUrl;
     const textoIn = data.text?.message?.trim() || "";
     const txtL = textoIn.toLowerCase();
+
+    console.log(`[WEBHOOK] Mensagem recebida de ${phone}: ${txtL}`);
 
     if (['novo', 'nova'].includes(txtL)) {
         memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', IS_ATUALIZACAO: false });
@@ -251,9 +274,14 @@ app.post('/webhook/igreen', async (req, res) => {
     switch (mem.STATUS_CADASTRO) {
         case 'AGUARDANDO_TERMO_RESGATE':
             if (textoIn.length > 2) {
+                console.log(`[FLUXO] Usuário pediu busca por: ${textoIn}`);
                 await enviarMensagem(phone, TEXTOS.T_RESGATE_BUSCANDO);
                 memoriaEstado.delete(phone); 
-                setTimeout(() => { fluxoExtracaoDados(textoIn, phone); }, 3000);
+
+                console.log(`[SISTEMA] Aguardando 3 segundos para estabilizar memória RAM...`);
+                setTimeout(() => {
+                    fluxoExtracaoDados(textoIn, phone);
+                }, 3000);
             } else {
                 await enviarMensagem(phone, "⚠️ Termo muito curto. Digite o Nome ou ID:");
             }
@@ -306,4 +334,4 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 });
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V81 ONLINE (Mapeamento de Colunas Exatas)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V83 ONLINE (Enter Física + Visão de Águia)`));  
