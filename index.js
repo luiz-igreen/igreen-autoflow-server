@@ -92,12 +92,12 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO: EXTRATOR V88 (FORÇA BRUTA)
+// MÓDULO: EXTRATOR V89 (ESPELHO DE DEPURAÇÃO)
 // ==========================================
 async function fluxoExtracaoDados(termoBusca, phone) {
     let browser;
     try {
-        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V88 (Força Bruta Absoluta)...`);
+        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V89...`);
         browser = await puppeteer.launch({ headless: "new", args: CHROME_ARGS });
         const page = await browser.newPage();
         await page.setViewport({ width: 1920, height: 1080 });
@@ -105,7 +105,6 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         console.log(`[EXTRATOR] 1. Acessando Escritório iGreen...`);
         await page.goto(IGREEN_ESCRITORIO_URL, { waitUntil: 'networkidle2', timeout: 60000 });
         
-        console.log(`[EXTRATOR] Fazendo Login...`);
         await page.evaluate((u, p) => {
             const emailInput = document.querySelector('input[type="email"], input[placeholder*="e-mail" i]');
             const passInput = document.querySelector('input[type="password"], input[placeholder*="senha" i]');
@@ -117,7 +116,6 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         
         await new Promise(r => setTimeout(r, 6000));
 
-        console.log(`[EXTRATOR] 2. Navegando para Mapa de Clientes...`);
         await page.evaluate(() => {
             const btnRelatorios = Array.from(document.querySelectorAll('div, span, button, a')).find(e => e.textContent.trim() === 'Relatórios');
             if(btnRelatorios) btnRelatorios.click();
@@ -132,68 +130,74 @@ async function fluxoExtracaoDados(termoBusca, phone) {
 
         console.log(`[EXTRATOR] 3. Pesquisando alvo: ${termoBusca}`);
         const searchSelector = 'input[placeholder*="Pesquisar" i], input[placeholder*="Buscar" i]';
-        await page.waitForSelector(searchSelector, { timeout: 15000 });
-        await page.click(searchSelector);
+        const searchInput = await page.waitForSelector(searchSelector, { timeout: 15000 });
         
-        // Limpa a caixa de pesquisa antes
-        await page.evaluate((sel) => { document.querySelector(sel).value = ''; }, searchSelector);
+        // V89 FIX: A BORRACHA HUMANA (Evita o Bug do React da iGreen)
+        await searchInput.click({ clickCount: 3 }); // Seleciona todo o texto que estiver na caixa
+        await page.keyboard.press('Backspace'); // Apaga o texto como um humano faria
+        await new Promise(r => setTimeout(r, 500));
         
-        await page.type(searchSelector, termoBusca, { delay: 150 });
+        await page.type(searchSelector, termoBusca, { delay: 100 });
+        await new Promise(r => setTimeout(r, 500));
         await page.keyboard.press('Enter');
         
         console.log(`[EXTRATOR] Aguardando a tabela atualizar (10s)...`);
         await new Promise(r => setTimeout(r, 10000)); 
 
-        console.log(`[EXTRATOR] 4. Disparando Regex de Força Bruta na Tela (V88)...`);
+        console.log(`[EXTRATOR] 4. Filtrando Tabela...`);
         const dadosExtraidos = await page.evaluate((busca) => {
-            // A TÁTICA FINAL: LER O CORPO INTEIRO DA TABELA COMO TEXTO PURO
-            const areaDeLeitura = document.querySelector('tbody') || document.body;
-            const textoGigante = areaDeLeitura.innerText || "";
+            const trs = Array.from(document.querySelectorAll('tbody tr'));
+            
+            // Pega a linha que contém o ID pesquisado, ou pega a primeira linha se não achar
+            const tr = trs.find(linha => linha.innerText.includes(busca)) || trs[0];
+            
+            if (!tr || tr.innerText.includes('Nenhum registro')) return null;
 
-            if (textoGigante.includes('Nenhum registro') || textoGigante.trim() === '') return null;
-
-            // 1. SUGAR O CPF: Procura o formato exato 000.000.000-00 em QUALQUER lugar do texto
-            const padraoCpf = textoGigante.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
-            const cpfFinal = padraoCpf ? padraoCpf[0] : "Não encontrado";
-
-            // 2. SUGAR A DATA DE NASCIMENTO: Procura datas antigas (ano menor que 2010)
-            const padraoDatas = textoGigante.match(/\d{2}\/\d{2}\/\d{4}/g);
+            let cpfFinal = "Não encontrado";
             let nascFinal = "Não consta no sistema";
-            if (padraoDatas) {
-                // Filtra para pegar apenas datas antigas (Nascimento), ignorando a Data de Cadastro (2024, 2026)
-                const datasNasc = padraoDatas.filter(d => parseInt(d.split('/')[2]) < 2010);
-                if (datasNasc.length > 0) nascFinal = datasNasc[0];
-            }
-
-            // 3. IDENTIFICAR O NOME
             let nomeFinal = "Cliente Localizado";
-            if (isNaN(busca) && busca.length > 3) {
-                nomeFinal = busca.toUpperCase(); // Se pesquisou por nome, usa o nome
-            } else {
-                // Se pesquisou por ID, tenta achar o nome na primeira linha que sobrou
-                const tr = areaDeLeitura.querySelector('tr');
-                if (tr) {
-                    const celulas = Array.from(tr.querySelectorAll('td'));
-                    for (let td of celulas) {
-                        let textoTd = td.innerText.trim();
-                        // Nome geralmente é todo em maiúsculas, sem números e tem mais de 5 letras
-                        if (textoTd.length > 5 && !/\d/.test(textoTd) && textoTd.toUpperCase() === textoTd) {
-                            nomeFinal = textoTd;
-                            break;
-                        }
-                    }
+
+            const tds = Array.from(tr.querySelectorAll('td'));
+
+            tds.forEach(td => {
+                const txt = td.innerText.trim();
+                // Regex Cirúrgica para CPF/CNPJ com pontuação
+                if (/^\d{3}\.\d{3}\.\d{3}-\d{2}$/.test(txt) || /^\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}$/.test(txt)) {
+                    cpfFinal = txt;
+                }
+                // Regex para Data de Nascimento (Ano antigo)
+                if (/^\d{2}\/\d{2}\/\d{4}$/.test(txt)) {
+                    const ano = parseInt(txt.split('/')[2]);
+                    if (ano < 2010) nascFinal = txt;
+                }
+            });
+
+            // Tenta achar o nome (Coluna em Maiúscula, sem números, mais longa)
+            for (let td of tds) {
+                let txt = td.innerText.trim();
+                if (txt.length > 8 && !/\d/.test(txt) && txt.toUpperCase() === txt && txt !== "ATIVO" && txt !== "VALIDADO") {
+                    nomeFinal = txt;
+                    break;
                 }
             }
 
             return { nome: nomeFinal, cpf: cpfFinal, nasc: nascFinal };
         }, termoBusca);
 
-        await browser.close();
-
+        // V89 FIX: O ESPELHO NO WHATSAPP (A MÁGICA DE DEPURAÇÃO)
         if (!dadosExtraidos || dadosExtraidos.cpf === "Não encontrado") {
-            await enviarMensagem(phone, TEXTOS.T_RESGATE_FAIL);
+            const textoDaTela = await page.evaluate(() => {
+                const tbody = document.querySelector('tbody');
+                return tbody ? tbody.innerText.substring(0, 300) : "Tabela não carregou";
+            });
+            
+            // Envia o que o robô está vendo direto pro celular do Luiz!
+            await enviarMensagem(phone, `⚠️ O Robô não conseguiu extrair o CPF de ${termoBusca}.\n\n🔍 *OLHA O QUE O ROBÔ ENXERGOU NA TELA:*\n"${textoDaTela}"\n\n*(Se apareceu 'Nenhum registro', a busca falhou. Se apareceu o nome mas não o CPF, a coluna está oculta)*.`);
+            await browser.close();
             return;
         }
+
+        await browser.close();
 
         const mensagemFinal = `✅ *DADOS CAPTURADOS COM SUCESSO!* 🕵️‍♂️\n\n` +
                               `👤 *Nome:* ${dadosExtraidos.nome}\n` +
@@ -206,8 +210,8 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         await enviarMensagem(phone, mensagemFinal);
 
     } catch (error) {
-        console.error("❌ [ERRO EXTRATOR V88]:", error.message);
-        await enviarMensagem(phone, `⚠️ O servidor teve um soluço técnico (falta de memória RAM). Tente novamente o RESGATAR.`);
+        console.error("❌ [ERRO EXTRATOR V89]:", error.message);
+        await enviarMensagem(phone, `⚠️ O servidor teve um soluço técnico. Erro: ${error.message}`);
         if(browser) await browser.close();
     }
 }
@@ -242,4 +246,4 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 });
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V88 ONLINE (Força Bruta Absoluta)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V89 ONLINE (Espelho no WhatsApp)`));
