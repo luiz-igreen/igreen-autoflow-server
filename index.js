@@ -14,7 +14,6 @@ app.use(express.json());
 // ==========================================
 const ZAPI_INSTANCE = process.env.ZAPI_INSTANCE || "3F14E2A7F66AC2180C0BBA4D31290A14";
 const ZAPI_TOKEN = process.env.ZAPI_TOKEN || "88F232A54C5DC27793994637";
-const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN || "F177679f2434d425e9a3e58ddec1d4cf0S"; 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "AIzaSyCz1JE0Ie6HsAocCfx16gy2x29rkV3OMPw"; 
 
 const IGREEN_ESCRITORIO_URL = "https://escritorio.igreenenergy.com.br"; 
@@ -58,14 +57,27 @@ const CHROME_ARGS = [
 ];
 
 // ==========================================
-// FUNÇÕES AUXILIARES
+// FUNÇÕES AUXILIARES DE ENVIO E BANCO DE DADOS
 // ==========================================
+
+// V90 FIX: Função de envio blindada contra Erro 400
 async function enviarMensagem(phone, message) {
     const numLimpo = String(phone).replace(/\D/g, ''); 
+    const url = `https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`;
+    
     try { 
-        await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, { phone: numLimpo, message: String(message) }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }); 
+        console.log(`[Z-API] Tentando enviar mensagem para ${numLimpo}...`);
+        await axios.post(url, { 
+            phone: numLimpo, 
+            message: String(message) 
+        }, {
+            headers: { 'Content-Type': 'application/json' }
+        }); 
+        console.log(`[Z-API] ✅ Mensagem enviada com sucesso!`);
     } catch (e) {
-        console.error(`[Z-API] ❌ Erro ao enviar mensagem:`, e.message);
+        // Agora o erro exato da Z-API será impresso para não ficarmos cegos
+        const erroDetalhado = e.response && e.response.data ? JSON.stringify(e.response.data) : e.message;
+        console.error(`[Z-API] ❌ Erro 400 (Rejeição da Z-API):`, erroDetalhado);
     }
 }
 
@@ -92,12 +104,12 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO: EXTRATOR V89 (ESPELHO DE DEPURAÇÃO)
+// MÓDULO: EXTRATOR V90 (ESPELHO DE DEPURAÇÃO E BACKSPACE)
 // ==========================================
 async function fluxoExtracaoDados(termoBusca, phone) {
     let browser;
     try {
-        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V89...`);
+        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V90...`);
         browser = await puppeteer.launch({ headless: "new", args: CHROME_ARGS });
         const page = await browser.newPage();
         await page.setViewport({ width: 1920, height: 1080 });
@@ -132,9 +144,9 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         const searchSelector = 'input[placeholder*="Pesquisar" i], input[placeholder*="Buscar" i]';
         const searchInput = await page.waitForSelector(searchSelector, { timeout: 15000 });
         
-        // V89 FIX: A BORRACHA HUMANA (Evita o Bug do React da iGreen)
-        await searchInput.click({ clickCount: 3 }); // Seleciona todo o texto que estiver na caixa
-        await page.keyboard.press('Backspace'); // Apaga o texto como um humano faria
+        // A BORRACHA HUMANA (Evita o Bug do React da iGreen)
+        await searchInput.click({ clickCount: 3 }); 
+        await page.keyboard.press('Backspace'); 
         await new Promise(r => setTimeout(r, 500));
         
         await page.type(searchSelector, termoBusca, { delay: 100 });
@@ -147,8 +159,6 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         console.log(`[EXTRATOR] 4. Filtrando Tabela...`);
         const dadosExtraidos = await page.evaluate((busca) => {
             const trs = Array.from(document.querySelectorAll('tbody tr'));
-            
-            // Pega a linha que contém o ID pesquisado, ou pega a primeira linha se não achar
             const tr = trs.find(linha => linha.innerText.includes(busca)) || trs[0];
             
             if (!tr || tr.innerText.includes('Nenhum registro')) return null;
@@ -161,18 +171,15 @@ async function fluxoExtracaoDados(termoBusca, phone) {
 
             tds.forEach(td => {
                 const txt = td.innerText.trim();
-                // Regex Cirúrgica para CPF/CNPJ com pontuação
                 if (/^\d{3}\.\d{3}\.\d{3}-\d{2}$/.test(txt) || /^\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}$/.test(txt)) {
                     cpfFinal = txt;
                 }
-                // Regex para Data de Nascimento (Ano antigo)
                 if (/^\d{2}\/\d{2}\/\d{4}$/.test(txt)) {
                     const ano = parseInt(txt.split('/')[2]);
                     if (ano < 2010) nascFinal = txt;
                 }
             });
 
-            // Tenta achar o nome (Coluna em Maiúscula, sem números, mais longa)
             for (let td of tds) {
                 let txt = td.innerText.trim();
                 if (txt.length > 8 && !/\d/.test(txt) && txt.toUpperCase() === txt && txt !== "ATIVO" && txt !== "VALIDADO") {
@@ -184,14 +191,12 @@ async function fluxoExtracaoDados(termoBusca, phone) {
             return { nome: nomeFinal, cpf: cpfFinal, nasc: nascFinal };
         }, termoBusca);
 
-        // V89 FIX: O ESPELHO NO WHATSAPP (A MÁGICA DE DEPURAÇÃO)
         if (!dadosExtraidos || dadosExtraidos.cpf === "Não encontrado") {
             const textoDaTela = await page.evaluate(() => {
                 const tbody = document.querySelector('tbody');
                 return tbody ? tbody.innerText.substring(0, 300) : "Tabela não carregou";
             });
             
-            // Envia o que o robô está vendo direto pro celular do Luiz!
             await enviarMensagem(phone, `⚠️ O Robô não conseguiu extrair o CPF de ${termoBusca}.\n\n🔍 *OLHA O QUE O ROBÔ ENXERGOU NA TELA:*\n"${textoDaTela}"\n\n*(Se apareceu 'Nenhum registro', a busca falhou. Se apareceu o nome mas não o CPF, a coluna está oculta)*.`);
             await browser.close();
             return;
@@ -210,7 +215,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         await enviarMensagem(phone, mensagemFinal);
 
     } catch (error) {
-        console.error("❌ [ERRO EXTRATOR V89]:", error.message);
+        console.error("❌ [ERRO EXTRATOR V90]:", error.message);
         await enviarMensagem(phone, `⚠️ O servidor teve um soluço técnico. Erro: ${error.message}`);
         if(browser) await browser.close();
     }
@@ -228,6 +233,12 @@ app.post('/webhook/igreen', async (req, res) => {
     const textoIn = data.text?.message?.trim() || "";
     const txtL = textoIn.toLowerCase();
 
+    console.log(`[WEBHOOK] Mensagem recebida de ${phone}: ${txtL}`);
+
+    if (['novo', 'nova'].includes(txtL)) {
+        memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', IS_ATUALIZACAO: false });
+        await enviarMensagem(phone, TEXTOS.T01); return;
+    }
     if (['resgatar', 'dados', 'puxar'].includes(txtL)) {
         memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_TERMO_RESGATE' });
         await enviarMensagem(phone, TEXTOS.T_RESGATE_START); return;
@@ -246,4 +257,4 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 });
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V89 ONLINE (Espelho no WhatsApp)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V90 ONLINE (Correção de Erro 400)`));
