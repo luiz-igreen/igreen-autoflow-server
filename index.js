@@ -12,6 +12,7 @@ app.use(express.json());
 const ZAPI_INSTANCE = process.env.ZAPI_INSTANCE || "3F14E2A7F66AC2180C0BBA4D31290A14";
 const ZAPI_TOKEN = process.env.ZAPI_TOKEN || "88F232A54C5DC27793994637";
 const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN || "F177679f2434d425e9a3e58ddec1d4cf0S"; 
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "AIzaSyCz1JE0Ie6HsAocCfx16gy2x29rkV3OMPw"; 
 
 const IGREEN_LOGIN_URL = "https://escritorio.igreenenergy.com.br/login"; 
 const IGREEN_MAPA_URL = "https://escritorio.igreenenergy.com.br/mapa-clientes";
@@ -33,24 +34,19 @@ const memoriaEstado = new Map();
 
 const TEXTOS = {
     T01: "Seja muito bem-vindo(a) ao Atendimento VIP da iGreen Energy! 🌿 Para prepararmos o seu desconto, por favor, me envie uma foto bem nítida (ou PDF) da sua conta de luz mais recente.",
-    T02: "Recebemos a sua fatura! Extraindo os seus dados de consumo. Um momento...",
+    T02: "Recebemos a sua fatura! 📄 A nossa Inteligência Artificial está a extrair os dados neste exato momento. Um momento...",
     T_RESGATE_START: "⚡ *Módulo de Extração de Dados* ativado! Digite apenas o *Nome ou ID* do cliente (Ex: Robson Carlos ou 1119032):",
-    T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma iniciou a varredura profunda no *Escritório Virtual iGreen*. Isto leva cerca de 25 segundos...",
+    T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma iniciou a varredura profunda no *Escritório Virtual iGreen*...",
     T_RESGATE_FAIL: "⚠️ O Robô varreu o código-fonte da iGreen, mas o cliente não possui CPF registado na tabela ou a busca falhou."
 };
 
 const CHROME_ARGS = [
-    "--no-sandbox", 
-    "--disable-setuid-sandbox", 
-    "--disable-dev-shm-usage", 
-    "--disable-gpu",
-    "--single-process",
-    "--no-zygote",
-    "--js-flags=--expose-gc"
+    "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", 
+    "--disable-gpu", "--single-process", "--no-zygote", "--js-flags=--expose-gc"
 ];
 
 // ==========================================
-// FUNÇÃO DE ENVIO WHATSAPP (Z-API)
+// FUNÇÕES AUXILIARES (Z-API & FIREBASE)
 // ==========================================
 async function enviarMensagem(phone, message) {
     const numLimpo = String(phone).replace(/\D/g, ''); 
@@ -61,39 +57,75 @@ async function enviarMensagem(phone, message) {
             { phone: numLimpo, message: String(message) }, 
             { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN, 'Content-Type': 'application/json' } }
         ); 
-        console.log(`[Z-API] ✅ Mensagem enviada com sucesso!`);
+        console.log(`[Z-API] ✅ Mensagem enviada!`);
     } catch (e) {
-        console.error(`[Z-API] ❌ Erro ao enviar mensagem:`, e.response?.data || e.message);
+        console.error(`[Z-API] ❌ Erro:`, e.message);
+    }
+}
+
+async function salvarNoBanco(phone, dados) {
+    if (admin.apps.length > 0) {
+        try {
+            const db = admin.firestore();
+            await db.collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').doc(phone).set(
+                { ...dados, TELEFONE: phone, DATA_PROCESSAMENTO: admin.firestore.FieldValue.serverTimestamp() }, 
+                { merge: true }
+            );
+            console.log(`[FIREBASE] ✅ Dados salvos com sucesso para ${phone}`);
+        } catch (e) { console.error("Erro ao salvar no banco:", e.message); }
     }
 }
 
 // ==========================================
-// MÓDULO: EXTRATOR V100 (RAIO-X APRIMORADO)
+// MÓDULO 1: MOTOR DE INTELIGÊNCIA (GEMINI)
+// ==========================================
+async function analisarFaturaGemini(mediaUrl, mimeType) {
+    if (!GEMINI_API_KEY) throw new Error("Chave do Gemini ausente");
+    
+    console.log(`[GEMINI] Baixando documento: ${mediaUrl}`);
+    const response = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
+    const base64Data = Buffer.from(response.data, 'binary').toString('base64');
+    
+    const prompt = `
+    Aja como um auditor de faturas de energia elétrica da iGreen Energy.
+    Extraia os seguintes dados da fatura fornecida e retorne APENAS um JSON válido, sem formatações Markdown (sem crases).
+    Chaves exigidas:
+    - "NOME_CLIENTE": Nome completo do titular.
+    - "CPF": Apenas os números do CPF ou CNPJ.
+    - "DISTRIBUIDORA": Nome da concessionária de energia.
+    - "UC": Número da Unidade Consumidora (Apenas números).
+    - "MEDIA_CONSUMO": Calcule a média aritmética do consumo em kWh dos últimos meses apresentados. Apenas o número inteiro.
+    - "CEP": CEP do endereço da instalação, se visível.
+    `;
+
+    const payload = {
+        contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: mimeType, data: base64Data } }] }],
+        generationConfig: { responseMimeType: "application/json" }
+    };
+
+    console.log(`[GEMINI] Processando com Inteligência Artificial...`);
+    const aiRes = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`, payload);
+    return JSON.parse(aiRes.data.candidates[0].content.parts[0].text);
+}
+
+// ==========================================
+// MÓDULO 2: EXTRATOR RPA (PUPPETEER)
 // ==========================================
 async function fluxoExtracaoDados(termoBusca, phone) {
     let browser;
     try {
-        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V100 (O Marco Histórico)...`);
+        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma RPA...`);
         browser = await puppeteer.launch({ headless: "new", args: CHROME_ARGS });
         const page = await browser.newPage();
-        
         await page.setViewport({ width: 2560, height: 1440 });
         
-        console.log(`[EXTRATOR] 1. Acessando Login da iGreen: ${IGREEN_LOGIN_URL}`);
         await page.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
-        
-        console.log(`[EXTRATOR] Fazendo Login...`);
         const emailSel = 'input[type="email"], input[placeholder*="e-mail" i], input[name*="email" i]';
         const passSel = 'input[type="password"], input[placeholder*="senha" i], input[name*="pass" i]';
         await page.waitForSelector(emailSel, { timeout: 15000 });
         
-        await page.click(emailSel, { clickCount: 3 });
-        await page.keyboard.press('Backspace');
-        await page.type(emailSel, IGREEN_USER, { delay: 50 });
-        
-        await page.click(passSel, { clickCount: 3 });
-        await page.keyboard.press('Backspace');
-        await page.type(passSel, IGREEN_PASS, { delay: 50 });
+        await page.click(emailSel, { clickCount: 3 }); await page.keyboard.press('Backspace'); await page.type(emailSel, IGREEN_USER, { delay: 50 });
+        await page.click(passSel, { clickCount: 3 }); await page.keyboard.press('Backspace'); await page.type(passSel, IGREEN_PASS, { delay: 50 });
         
         const btnLoginEncontrado = await page.evaluate(() => {
             const btns = Array.from(document.querySelectorAll('button'));
@@ -102,105 +134,48 @@ async function fluxoExtracaoDados(termoBusca, phone) {
             return false;
         });
 
-        if (btnLoginEncontrado) await page.click('#btn_login_igreen_injetor');
-        else await page.keyboard.press('Enter');
-        
-        console.log(`[EXTRATOR] Aguardando autenticação...`);
+        if (btnLoginEncontrado) await page.click('#btn_login_igreen_injetor'); else await page.keyboard.press('Enter');
         await new Promise(r => setTimeout(r, 6000));
 
-        console.log(`[EXTRATOR] 2. Navegação Direta para: ${IGREEN_MAPA_URL}`);
         await page.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 60000 });
-        
-        console.log(`[EXTRATOR] Aguardando a tabela de clientes carregar...`);
         await new Promise(r => setTimeout(r, 8000)); 
 
-        console.log(`[EXTRATOR] 3. Pesquisando alvo: ${termoBusca}`);
         const searchSelector = 'input[placeholder*="Pesquisar" i], input[placeholder*="Buscar" i]';
         const searchInput = await page.waitForSelector(searchSelector, { timeout: 15000 });
-        
-        await searchInput.click({ clickCount: 3 }); 
-        await page.keyboard.press('Backspace'); 
-        await new Promise(r => setTimeout(r, 500));
-        await page.type(searchSelector, termoBusca, { delay: 100 });
-        await new Promise(r => setTimeout(r, 500));
-        await page.keyboard.press('Enter');
-        
-        console.log(`[EXTRATOR] 4. Iniciando Varredura Raio-X V100...`);
+        await searchInput.click({ clickCount: 3 }); await page.keyboard.press('Backspace'); 
+        await page.type(searchSelector, termoBusca, { delay: 100 }); await page.keyboard.press('Enter');
         
         let dadosExtraidos = null;
-        let textoDeErro = "";
-
         for (let tentativa = 1; tentativa <= 6; tentativa++) {
-            console.log(`[EXTRATOR] Varredura ${tentativa}/6...`);
-            
             dadosExtraidos = await page.evaluate((busca) => {
                 const areaBusca = document.querySelector('tbody') || document.querySelector('table') || document.body;
                 const textoGigante = areaBusca.textContent || "";
-                
-                if (textoGigante.includes('Nenhum registro') || textoGigante.trim() === '') {
-                    return { cpf: "Não encontrado", raw: "Tabela vazia ou aguardando load" };
-                }
+                if (textoGigante.includes('Nenhum registro') || textoGigante.trim() === '') return { cpf: "Não encontrado" };
 
-                let nomeFinal = "Cliente Localizado";
-                let cpfFinal = "Não encontrado";
-                let nascFinal = "Não consta na tabela";
-
+                let nomeFinal = "Cliente Localizado", cpfFinal = "Não encontrado", nascFinal = "Não consta na tabela";
                 const linhas = Array.from(areaBusca.querySelectorAll('tr, [role="row"]'));
                 const linhaCorreta = linhas.find(tr => tr.textContent.toLowerCase().includes(busca.toLowerCase()));
                 
                 if (linhaCorreta) {
                     const textoLinha = linhaCorreta.textContent;
-
-                    // O SCALPEL PARA O CPF 
                     const padraoCpf = textoLinha.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
                     if (padraoCpf) cpfFinal = padraoCpf[0];
 
-                    // O SCALPEL PARA A DATA (Antes de 2010)
                     const padraoDatas = textoLinha.match(/\d{2}\/\d{2}\/\d{4}/g);
                     if (padraoDatas) {
                         const datasAntigas = padraoDatas.filter(d => parseInt(d.split('/')[2]) < 2010);
                         if (datasAntigas.length > 0) nascFinal = datasAntigas[0];
                     }
 
-                    // O SCALPEL PARA O NOME (Aprimorado V100)
                     const celulas = Array.from(linhaCorreta.querySelectorAll('td, th, [role="cell"]'));
-                    
-                    // Tática 1: Pega direto da segunda coluna da tabela (historicamente a coluna do Nome)
-                    if (celulas.length > 1) {
-                        let txtCol1 = celulas[1].textContent.trim();
-                        // Se tem pelo menos 4 letras e não é um número vazio, confia que é o nome!
-                        if (/[a-zA-Z]/.test(txtCol1) && txtCol1.length > 3) {
-                            nomeFinal = txtCol1;
-                        }
-                    }
-
-                    // Tática 2: Se a tática 1 falhar, faz uma varredura buscando qualquer texto que pareça nome
-                    if (nomeFinal === "Cliente Localizado" || nomeFinal === "") {
-                        for (let celula of celulas) {
-                            let txt = celula.textContent.trim();
-                            // Ignora concessionárias e status da iGreen
-                            const ignorar = ["ATIVO", "VALIDADO", "EQUATORIAL", "CEMIG", "ENEL", "ENERGISA", "LIGHT", "CPFL"];
-                            const isIgnorado = ignorar.some(palavra => txt.toUpperCase().includes(palavra));
-                            
-                            // Se tem letras, espaço e mais de 5 caracteres, assumimos que é o nome.
-                            if (/[a-zA-Z]/.test(txt) && txt.length > 5 && txt.includes(' ') && 
-                                !txt.includes('/') && !/\d{3}\.\d{3}/.test(txt) && !isIgnorado) {
-                                nomeFinal = txt;
-                                break; 
-                            }
-                        }
+                    if (celulas.length > 1 && /[a-zA-Z]/.test(celulas[1].textContent) && celulas[1].textContent.trim().length > 3) {
+                        nomeFinal = celulas[1].textContent.trim();
                     }
                 }
-
-                return { nome: nomeFinal, cpf: cpfFinal, nasc: nascFinal, raw: "" };
+                return { nome: nomeFinal, cpf: cpfFinal, nasc: nascFinal };
             }, termoBusca);
 
-            if (dadosExtraidos && dadosExtraidos.cpf !== "Não encontrado") {
-                console.log(`[EXTRATOR] Dados encontrados com sucesso na varredura ${tentativa}!`);
-                break;
-            }
-
-            textoDeErro = dadosExtraidos ? dadosExtraidos.raw : "Sem resultados";
+            if (dadosExtraidos && dadosExtraidos.cpf !== "Não encontrado") break;
             await new Promise(r => setTimeout(r, 2000));
         }
 
@@ -211,26 +186,17 @@ async function fluxoExtracaoDados(termoBusca, phone) {
             return;
         }
 
-        console.log(`[EXTRATOR] 🎉 Montando mensagem final para o WhatsApp...`);
-        const mensagemFinal = `✅ *DADOS CAPTURADOS COM SUCESSO!* 🕵️‍♂️\n\n` +
-                              `👤 *Nome:* ${dadosExtraidos.nome}\n` +
-                              `📄 *Documento:* ${dadosExtraidos.cpf}\n` +
-                              `🎂 *Nascimento:* ${dadosExtraidos.nasc} *(Nota: A iGreen oculta este dado no relatório geral)*\n\n` +
-                              `⚡ *Atalhos (2ª Via Rápida):*\n` +
-                              `➡️ *Equatorial AL (Site Antigo):* https://al.equatorialenergia.com.br/siteantigo\n` +
-                              `➡️ *Cemig MG (WhatsApp Cemig):* https://wa.me/553135061160?text=Segunda+via`;
-
-        await enviarMensagem(phone, mensagemFinal);
+        const msgFinal = `✅ *DADOS CAPTURADOS COM SUCESSO!* 🕵️‍♂️\n\n👤 *Nome:* ${dadosExtraidos.nome}\n📄 *Documento:* ${dadosExtraidos.cpf}\n🎂 *Nascimento:* ${dadosExtraidos.nasc}\n\n⚡ *Atalhos (2ª Via Rápida):*\n➡️ *Equatorial AL:* https://al.equatorialenergia.com.br/siteantigo\n➡️ *Cemig MG:* https://wa.me/553135061160?text=Segunda+via`;
+        await enviarMensagem(phone, msgFinal);
 
     } catch (error) {
-        console.error("❌ [ERRO EXTRATOR V100]:", error.message);
-        await enviarMensagem(phone, `⚠️ O servidor teve um soluço técnico: ${error.message}`);
         if(browser) await browser.close();
+        await enviarMensagem(phone, `⚠️ O servidor teve um soluço técnico: ${error.message}`);
     }
 }
 
 // ==========================================
-// LÓGICA DO WEBHOOK
+// LÓGICA DO WEBHOOK CENTRAL
 // ==========================================
 app.post('/webhook/igreen', async (req, res) => {
     res.status(200).send("OK");
@@ -240,21 +206,61 @@ app.post('/webhook/igreen', async (req, res) => {
     const phone = data.phone;
     const textoIn = data.text?.message?.trim() || "";
     const txtL = textoIn.toLowerCase();
+    const tipoMsg = data.type; // image, document, chat
 
-    console.log(`[WEBHOOK] Mensagem recebida de ${phone}: ${txtL}`);
+    console.log(`[WEBHOOK] Msg de ${phone} | Tipo: ${tipoMsg}`);
 
+    // GATILHO 1: Iniciar novo cadastro
     if (['novo', 'nova'].includes(txtL)) {
-        memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA', IS_ATUALIZACAO: false });
-        await enviarMensagem(phone, TEXTOS.T01); return;
+        memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA' });
+        await enviarMensagem(phone, TEXTOS.T01); 
+        return;
     }
+
+    // GATILHO 2: Iniciar resgate de dados na iGreen
     if (['resgatar', 'dados', 'puxar'].includes(txtL)) {
         memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_TERMO_RESGATE' });
-        await enviarMensagem(phone, TEXTOS.T_RESGATE_START); return;
+        await enviarMensagem(phone, TEXTOS.T_RESGATE_START); 
+        return;
     }
 
     let mem = memoriaEstado.get(phone) || { STATUS_CADASTRO: 'NOVO' };
 
     switch (mem.STATUS_CADASTRO) {
+        
+        // FLUXO: LENDO A FATURA COM IA
+        case 'AGUARDANDO_FATURA':
+            if (tipoMsg === 'image' || tipoMsg === 'document') {
+                await enviarMensagem(phone, TEXTOS.T02); // Avisa que a IA começou
+                
+                const mediaUrl = data.image?.imageUrl || data.document?.documentUrl;
+                const mimeType = tipoMsg === 'document' ? 'application/pdf' : 'image/jpeg';
+                
+                try {
+                    const dadosIA = await analisarFaturaGemini(mediaUrl, mimeType);
+                    
+                    // Salva os dados lidos e MARCA COMO CONCLUÍDO (Isto dispara o Monitor RPA!)
+                    await salvarNoBanco(phone, {
+                        NOME_CLIENTE: dadosIA.NOME_CLIENTE || "Cliente",
+                        CPF: dadosIA.CPF || "Não extraído",
+                        UC: dadosIA.UC || "Não extraído",
+                        MEDIA_CONSUMO: dadosIA.MEDIA_CONSUMO || "0",
+                        DISTRIBUIDORA: dadosIA.DISTRIBUIDORA || "Equatorial",
+                        CEP: dadosIA.CEP || "",
+                        LINK_FATURA: mediaUrl,
+                        STATUS_CADASTRO: "CONCLUIDO" 
+                    });
+
+                    await enviarMensagem(phone, `✅ Fatura aprovada!\n👤 Titular: ${dadosIA.NOME_CLIENTE}\n⚡ Média: ${dadosIA.MEDIA_CONSUMO} kWh.\n\nTodos os dados foram enviados para a Central de Injeção. O consultor gerará o seu contrato em breve!`);
+                    memoriaEstado.delete(phone); // Limpa o estado
+                } catch (error) {
+                    console.error("[ERRO IA]:", error);
+                    await enviarMensagem(phone, "❌ A Inteligência Artificial teve dificuldade em ler este documento. Pode tentar enviar uma foto mais nítida ou o PDF original?");
+                }
+            }
+            break;
+
+        // FLUXO: RESGATANDO DADOS COM O PUPPETEER
         case 'AGUARDANDO_TERMO_RESGATE':
             if (textoIn.length > 2) {
                 await enviarMensagem(phone, TEXTOS.T_RESGATE_BUSCANDO);
@@ -266,4 +272,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 SERVIDOR V100 ONLINE (Raio-X Aprimorado)`));
+app.listen(PORT, () => console.log(`🚀 SERVIDOR V101 ONLINE (Cérebro Unificado IA + RPA)`));
