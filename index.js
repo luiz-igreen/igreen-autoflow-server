@@ -213,9 +213,14 @@ app.post('/webhook/igreen', async (req, res) => {
     const phone = data.phone;
     const textoIn = data.text?.message?.trim() || "";
     const txtL = textoIn.toLowerCase();
-    const tipoMsg = data.type; // image, document, chat
+    
+    // V104 FIX: A Z-API envia o tipo como "ReceivedCallback".
+    // Vamos verificar DIRETAMENTE se o pacote (payload) contém links de imagens/documentos!
+    const temMidia = !!(data.image?.imageUrl || data.document?.documentUrl);
+    const mediaUrl = data.image?.imageUrl || data.document?.documentUrl;
+    const mimeType = data.document ? 'application/pdf' : 'image/jpeg';
 
-    console.log(`[WEBHOOK] Msg de ${phone} | Tipo: ${tipoMsg} | Texto: ${txtL}`);
+    console.log(`[WEBHOOK] Msg de ${phone} | Tem Mídia? ${temMidia ? 'SIM' : 'NÃO'} | Texto: ${txtL}`);
 
     // =======================================================
     // V103: BOTÃO DE CANCELAMENTO GLOBAL (RESET)
@@ -229,7 +234,7 @@ app.post('/webhook/igreen', async (req, res) => {
     let mem = memoriaEstado.get(phone) || { STATUS_CADASTRO: 'NOVO' };
 
     // =======================================================
-    // V103: MENU DINÂMICO E RECONHECIMENTO DE COMANDOS
+    // V104: MENU DINÂMICO E RECONHECIMENTO DE COMANDOS
     // =======================================================
     if (mem.STATUS_CADASTRO === 'NOVO') {
         
@@ -254,12 +259,10 @@ app.post('/webhook/igreen', async (req, res) => {
             return;
         }
 
-        // SE O CLIENTE MANDAR UMA FATURA DIRETO (SEM ESCOLHER OPÇÃO) OU DISSER "OI"
-        if (!tipoMsg || tipoMsg === 'chat' || tipoMsg === 'conversation' || tipoMsg === 'image' || tipoMsg === 'document') {
-            // Se mandar imagem/PDF mas não escolheu a opção antes, o robô manda o menu
-            await enviarMensagem(phone, TEXTOS.T_MENU);
-            return;
-        }
+        // V104 FIX: Se o cliente mandou "Oi", não escolheu opção válida ou mandou mídia solta.
+        // O Robô vai SEMPRE enviar o menu para o guiar. Acabou o silêncio!
+        await enviarMensagem(phone, TEXTOS.T_MENU);
+        return;
     }
 
     // =======================================================
@@ -269,11 +272,8 @@ app.post('/webhook/igreen', async (req, res) => {
         
         // FLUXO COMPLETO: LENDO A FATURA COM IA (Para disparar o RPA)
         case 'AGUARDANDO_FATURA':
-            if (tipoMsg === 'image' || tipoMsg === 'document') {
+            if (temMidia) {
                 await enviarMensagem(phone, TEXTOS.T02); 
-                
-                const mediaUrl = data.image?.imageUrl || data.document?.documentUrl;
-                const mimeType = tipoMsg === 'document' ? 'application/pdf' : 'image/jpeg';
                 
                 try {
                     const dadosIA = await analisarFaturaGemini(mediaUrl, mimeType);
@@ -303,11 +303,8 @@ app.post('/webhook/igreen', async (req, res) => {
 
         // FLUXO ISOLADO: LER A FATURA E APENAS GUARDAR (Sem RPA, Sem RG)
         case 'AGUARDANDO_FATURA_SOH_BANCO':
-            if (tipoMsg === 'image' || tipoMsg === 'document') {
+            if (temMidia) {
                 await enviarMensagem(phone, TEXTOS.T02); 
-                
-                const mediaUrl = data.image?.imageUrl || data.document?.documentUrl;
-                const mimeType = tipoMsg === 'document' ? 'application/pdf' : 'image/jpeg';
                 
                 try {
                     const dadosIA = await analisarFaturaGemini(mediaUrl, mimeType);
@@ -349,4 +346,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 SERVIDOR V103 ONLINE (Menu Dinâmico Interativo)`));
+app.listen(PORT, () => console.log(`🚀 SERVIDOR V104 ONLINE (Menu Dinâmico Corrigido)`));
