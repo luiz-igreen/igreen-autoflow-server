@@ -111,7 +111,8 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
     };
 
     console.log(`[GEMINI] Processando com Inteligência Artificial...`);
-    const aiRes = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`, payload);
+    // V105 FIX: Atualizado para o modelo público estável 'gemini-1.5-flash' para evitar o Erro 404
+    const aiRes = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, payload);
     return JSON.parse(aiRes.data.candidates[0].content.parts[0].text);
 }
 
