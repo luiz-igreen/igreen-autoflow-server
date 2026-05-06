@@ -17,7 +17,9 @@ const ZAPI_TOKEN = process.env.ZAPI_TOKEN || "88F232A54C5DC27793994637";
 const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN || "F177679f2434d425e9a3e58ddec1d4cf0S"; 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "AIzaSyCz1JE0Ie6HsAocCfx16gy2x29rkV3OMPw"; 
 
-const IGREEN_ESCRITORIO_URL = "https://escritorio.igreenenergy.com.br"; 
+// V96 FIX: Usando os links diretos mapeados pelo Luiz Jorge
+const IGREEN_LOGIN_URL = "https://escritorio.igreenenergy.com.br/login"; 
+const IGREEN_MAPA_URL = "https://escritorio.igreenenergy.com.br/mapa-clientes";
 
 const IGREEN_USER = process.env.IGREEN_USER || "jorgeluizhouse@hotmail.com";
 const IGREEN_PASS = process.env.IGREEN_PASS || "@@Lkjdsa12345";
@@ -43,7 +45,7 @@ const TEXTOS = {
     T07: "Para podermos registrar o seu cadastro, digite o seu melhor e-mail:",
     T08: "Tudo pronto! 🎉 A nossa inteligência entregou toda a sua documentação na base da iGreen Energy. Eles enviarão o link oficial para assinatura em breve! 🌿",
     T_RESGATE_START: "⚡ *Módulo de Extração de Dados* ativado! Digite apenas o *Nome ou ID* do cliente (Ex: Robson Carlos ou 1119032):",
-    T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma iniciou a varredura no *Escritório Virtual iGreen*. Isto leva cerca de 25 segundos...",
+    T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma está a usar a Navegação Direta no *Escritório Virtual iGreen*. Isto leva cerca de 20 segundos...",
     T_RESGATE_FAIL: "⚠️ O Robô varreu toda a tela da iGreen, mas o cliente não possui CPF registado na plataforma ou a busca falhou."
 };
 
@@ -81,7 +83,6 @@ async function extrairDadosFatura(fileUrl, isPdf) {
         const base64Data = Buffer.from(response.data, 'binary').toString('base64');
         const mimeType = isPdf ? 'application/pdf' : 'image/jpeg';
         
-        // V95: PROMPT REFEITO - Ignora colunas repetidas/duplicidade à força
         const prompt = `Você é um auditor sênior da iGreen Energy. Extraia da fatura: "NOME_CLIENTE", "CEP", "MEDIA_CONSUMO" (int), "UC", "DATA_VENCIMENTO" (DD/MM/AAAA), "FATURA_VENCIDA" (boolean).
 IMPORTANTE: Caso existam colunas repetidas ou dados em duplicidade na tabela de histórico de consumo, DESPREZE as repetições e mantenha apenas os valores únicos e corretos. Retorne APENAS um JSON válido.`;
         
@@ -101,18 +102,19 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO: EXTRATOR V95 (ANTI-DUPLICIDADE E POLLING)
+// MÓDULO: EXTRATOR V96 (DEEP LINKING LUIZ JORGE)
 // ==========================================
 async function fluxoExtracaoDados(termoBusca, phone) {
     let browser;
     try {
-        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V95...`);
+        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V96...`);
         browser = await puppeteer.launch({ headless: "new", args: CHROME_ARGS });
         const page = await browser.newPage();
         await page.setViewport({ width: 1920, height: 1080 });
         
-        console.log(`[EXTRATOR] 1. Acessando Escritório iGreen...`);
-        await page.goto(IGREEN_ESCRITORIO_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+        // 1. VAI DIRETO PARA A TELA DE LOGIN
+        console.log(`[EXTRATOR] 1. Acessando Login da iGreen: ${IGREEN_LOGIN_URL}`);
+        await page.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
         
         console.log(`[EXTRATOR] Fazendo Login...`);
         const emailSel = 'input[type="email"], input[placeholder*="e-mail" i], input[name*="email" i]';
@@ -137,33 +139,18 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         if (btnLoginEncontrado) await page.click('#btn_login_igreen_injetor');
         else await page.keyboard.press('Enter');
         
-        console.log(`[EXTRATOR] Aguardando a tela do Painel abrir...`);
-        await new Promise(r => setTimeout(r, 8000));
+        console.log(`[EXTRATOR] Aguardando autenticação...`);
+        await new Promise(r => setTimeout(r, 6000)); // Tempo para o servidor processar a senha
 
-        console.log(`[EXTRATOR] Fechando Popups...`);
-        await page.keyboard.press('Escape');
-        await page.evaluate(() => {
-            const btns = Array.from(document.querySelectorAll('button, a, div.close, span.close'));
-            const closeBtn = btns.find(b => b.innerText.match(/fechar|agora não|entendi|ok|x/i));
-            if (closeBtn) closeBtn.click();
-        });
-        await new Promise(r => setTimeout(r, 1000));
-
-        console.log(`[EXTRATOR] 2. Navegando para Mapa de Clientes...`);
-        await page.evaluate(() => {
-            const links = Array.from(document.querySelectorAll('div, span, button, a'));
-            const btnRelatorios = links.find(e => e.textContent.trim() === 'Relatórios');
-            if(btnRelatorios) { btnRelatorios.click(); if(btnRelatorios.parentElement) btnRelatorios.parentElement.click(); }
-        });
-        await new Promise(r => setTimeout(r, 1500));
+        // 2. O PULO DO GATO (Descoberta do Luiz Jorge)
+        // Em vez de lutar com popups e clicar em menus, teletransportamos o robô direto para o Mapa!
+        console.log(`[EXTRATOR] 2. Navegação Direta (Deep Link) para: ${IGREEN_MAPA_URL}`);
+        await page.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 60000 });
         
-        await page.evaluate(() => {
-            const links = Array.from(document.querySelectorAll('div, span, a'));
-            const btnMapa = links.find(e => e.textContent.trim() === 'Mapa de Clientes');
-            if(btnMapa) { btnMapa.click(); if(btnMapa.parentElement) btnMapa.parentElement.click(); }
-        });
-        await new Promise(r => setTimeout(r, 5000)); 
+        console.log(`[EXTRATOR] Aguardando a tabela de clientes carregar...`);
+        await new Promise(r => setTimeout(r, 8000)); 
 
+        // 3. PESQUISA NA TABELA
         console.log(`[EXTRATOR] 3. Pesquisando alvo: ${termoBusca}`);
         const searchSelector = 'input[placeholder*="Pesquisar" i], input[placeholder*="Buscar" i]';
         const searchInput = await page.waitForSelector(searchSelector, { timeout: 15000 });
@@ -180,7 +167,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         let dadosExtraidos = null;
         let textoDeErro = "";
 
-        // V95: Tenta ler a tabela 6 vezes (a cada 2 segundos). Ignora o atraso do site!
+        // Tenta ler a tabela 6 vezes (a cada 2 segundos)
         for (let tentativa = 1; tentativa <= 6; tentativa++) {
             console.log(`[EXTRATOR] Varredura ${tentativa}/6...`);
             
@@ -192,7 +179,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
                     return { cpf: "Não encontrado", raw: textoGigante.substring(0, 150) };
                 }
 
-                // Despreza repetições: Pega apenas o PRIMEIRO match limpo no texto inteiro
+                // Despreza repetições
                 const padraoCpf = textoGigante.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
                 const cpfFinal = padraoCpf ? padraoCpf[0] : "Não encontrado";
 
@@ -204,10 +191,9 @@ async function fluxoExtracaoDados(termoBusca, phone) {
                     if (datasAntigas.length > 0) nascFinal = datasAntigas[0];
                 }
 
-                // Encontra o nome na linha certa
+                // Encontra o nome
                 let nomeFinal = "Cliente Localizado";
                 const linhas = Array.from(areaBusca.querySelectorAll('tr'));
-                // Procura a linha que tem o termo de busca ou o CPF encontrado
                 const linhaCorreta = linhas.find(tr => tr.innerText.includes(busca) || (cpfFinal !== "Não encontrado" && tr.innerText.includes(cpfFinal)));
                 
                 if (linhaCorreta) {
@@ -224,14 +210,13 @@ async function fluxoExtracaoDados(termoBusca, phone) {
                 return { nome: nomeFinal, cpf: cpfFinal, nasc: nascFinal, raw: "" };
             }, termoBusca);
 
-            // Se achou o CPF, sai do loop imediatamente!
             if (dadosExtraidos && dadosExtraidos.cpf !== "Não encontrado") {
                 console.log(`[EXTRATOR] Dados encontrados com sucesso na varredura ${tentativa}!`);
                 break;
             }
 
             textoDeErro = dadosExtraidos ? dadosExtraidos.raw : "Tela vazia";
-            await new Promise(r => setTimeout(r, 2000)); // Espera 2s antes de tentar de novo
+            await new Promise(r => setTimeout(r, 2000));
         }
 
         await browser.close();
@@ -253,7 +238,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         await enviarMensagem(phone, mensagemFinal);
 
     } catch (error) {
-        console.error("❌ [ERRO EXTRATOR V95]:", error.message);
+        console.error("❌ [ERRO EXTRATOR V96]:", error.message);
         await enviarMensagem(phone, `⚠️ O servidor teve um soluço técnico: ${error.message}`);
         if(browser) await browser.close();
     }
@@ -295,4 +280,4 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 });
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V95 ONLINE (Varredura Anti-Duplicidade)`));
+app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V96 ONLINE (Navegação Direta)`));
