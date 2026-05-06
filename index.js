@@ -84,7 +84,7 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO 1: MOTOR DE INTELIGÊNCIA (GEMINI V106)
+// MÓDULO 1: MOTOR DE INTELIGÊNCIA (GEMINI V107)
 // ==========================================
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     if (!GEMINI_API_KEY) throw new Error("Chave do Gemini ausente");
@@ -110,10 +110,10 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         generationConfig: { responseMimeType: "application/json" }
     };
 
-    console.log(`[GEMINI] Processando com Inteligência Artificial (Modelo gemini-1.5-flash-latest)...`);
+    console.log(`[GEMINI] Processando com Inteligência Artificial (Modelo gemini-1.5-flash)...`);
     
-    // V106 FIX: Atualizado para 'gemini-1.5-flash-latest' garantindo a versão mais robusta sem Erro 404
-    const aiRes = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`, payload);
+    // V107 FIX: Removido o "-latest". Usando estritamente o modelo base que a Google aceita.
+    const aiRes = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, payload);
     return JSON.parse(aiRes.data.candidates[0].content.parts[0].text);
 }
 
@@ -276,7 +276,7 @@ app.post('/webhook/igreen', async (req, res) => {
                     await enviarMensagem(phone, `✅ Fatura aprovada!\n👤 Titular: ${dadosIA.NOME_CLIENTE}\n⚡ Média: ${dadosIA.MEDIA_CONSUMO} kWh.\n\nTodos os dados foram enviados para a Central de Injeção. O consultor gerará o seu contrato em breve!`);
                     memoriaEstado.delete(phone); 
                 } catch (error) {
-                    // V106: RADAR DE ERROS! Imprime exatamente a resposta da Google.
+                    // Radar de erros
                     console.error("❌ [ERRO IA DETALHADO]:", error.response?.data ? JSON.stringify(error.response.data) : error.message);
                     await enviarMensagem(phone, "❌ A Inteligência Artificial teve dificuldade em ler este documento. Pode tentar enviar uma foto mais nítida ou o PDF original?");
                 }
@@ -306,7 +306,7 @@ app.post('/webhook/igreen', async (req, res) => {
                     await enviarMensagem(phone, `✅ Fatura lida e guardada no seu Banco de Dados!\n👤 Titular: ${dadosIA.NOME_CLIENTE}\n⚡ Média: ${dadosIA.MEDIA_CONSUMO} kWh.\n\n⚠️ Status: *Pendente de Documentos*. O Robô de injeção automática NÃO foi acionado. Quando o cliente tiver o RG/CNH em mãos, avise-me!`);
                     memoriaEstado.delete(phone); 
                 } catch (error) {
-                    // V106: RADAR DE ERROS!
+                    // Radar de erros
                     console.error("❌ [ERRO IA DETALHADO]:", error.response?.data ? JSON.stringify(error.response.data) : error.message);
                     await enviarMensagem(phone, "❌ A Inteligência Artificial teve dificuldade em ler este documento. Pode tentar enviar uma foto mais nítida ou o PDF original?");
                 }
@@ -328,4 +328,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 SERVIDOR V106 ONLINE (Modelo Latest e Radar de Erros)`));
+app.listen(PORT, () => console.log(`🚀 SERVIDOR V107 ONLINE (Modelo 1.5 Flash Estável Corrigido)`));
