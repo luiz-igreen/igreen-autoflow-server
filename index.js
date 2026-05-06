@@ -86,7 +86,7 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO 1: MOTOR DE INTELIGÊNCIA (GEMINI - DIAGNÓSTICO + FALLBACK APLICADO)
+// MÓDULO 1: MOTOR DE INTELIGÊNCIA (GEMINI 2.0 FLASH FORÇADO)
 // ==========================================
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     if (!GEMINI_API_KEY) {
@@ -118,28 +118,18 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         generationConfig: { responseMimeType: "application/json" }
     };
 
-    // SOLUÇÃO DO DIAGNÓSTICO: TENTATIVA 1 - Usar API Estável (v1) com gemini-1.5-flash
+    // SEM FALLBACKS! FORÇANDO O USO DO GEMINI 2.0 FLASH NA V1BETA
     try {
-        console.log(`[GEMINI] Tentativa 1: Conectando na API Oficial Estável (v1) com gemini-1.5-flash...`);
-        const endpointV1 = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${chaveLimpa}`;
-        const aiRes = await axios.post(endpointV1, payload);
+        console.log(`[GEMINI] Conectando FORÇADAMENTE na API (v1beta) com gemini-2.0-flash...`);
+        const endpointV2 = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${chaveLimpa}`;
+        const aiRes = await axios.post(endpointV2, payload);
         return JSON.parse(aiRes.data.candidates[0].content.parts[0].text);
         
-    } catch (errorV1) {
-        console.warn(`⚠️ [GEMINI ALERTA] Falha na API Estável v1 (gemini-1.5-flash). Erro:`, errorV1.response?.data || errorV1.message);
-        console.log(`🔄 [GEMINI] Iniciando Sistema de Fallback Automático...`);
-        
-        // SOLUÇÃO DO DIAGNÓSTICO: TENTATIVA 2 (FALLBACK) - Usar gemini-1.5-pro na v1beta
-        try {
-            console.log(`[GEMINI] Tentativa 2: Conectando no Fallback (v1beta) com gemini-1.5-pro...`);
-            const endpointFallback = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${chaveLimpa}`;
-            const aiResFallback = await axios.post(endpointFallback, payload);
-            return JSON.parse(aiResFallback.data.candidates[0].content.parts[0].text);
-            
-        } catch (errorFallback) {
-            console.error("❌ [ERRO IA DETALHADO - FALLBACK FALHOU]:", errorFallback.response?.data ? JSON.stringify(errorFallback.response.data) : errorFallback.message);
-            throw new Error("A Inteligência Artificial recusou o documento nas duas tentativas. Verifique os logs no Render.");
-        }
+    } catch (error) {
+        // Se a Google recusar o 2.0, nós vamos imprimir o erro EXATO na tela preta.
+        const erroGoogle = error.response?.data ? JSON.stringify(error.response.data, null, 2) : error.message;
+        console.error("❌ [ERRO FATAL GEMINI 2.0 FLASH]:\n", erroGoogle);
+        throw new Error(`A API do Gemini 2.0 falhou. Verifique os logs no Render para ver o motivo exato.`);
     }
 }
 
@@ -303,7 +293,7 @@ app.post('/webhook/igreen', async (req, res) => {
                     memoriaEstado.delete(phone); 
                 } catch (error) {
                     console.error("❌ [ERRO AO SALVAR]:", error.message);
-                    await enviarMensagem(phone, "❌ A Inteligência Artificial teve dificuldade em ler este documento ou o modelo está temporariamente indisponível. Erro Interno (Ver logs no Render).");
+                    await enviarMensagem(phone, "❌ A Inteligência Artificial teve dificuldade em ler este documento. Erro Interno (Ver logs no Render).");
                 }
             } else {
                 await enviarMensagem(phone, "⚠️ Por favor, envie a foto ou o PDF da fatura para prosseguirmos. Ou digite *0* para voltar ao menu.");
@@ -332,7 +322,7 @@ app.post('/webhook/igreen', async (req, res) => {
                     memoriaEstado.delete(phone); 
                 } catch (error) {
                     console.error("❌ [ERRO AO SALVAR]:", error.message);
-                    await enviarMensagem(phone, "❌ A Inteligência Artificial teve dificuldade em ler este documento ou o modelo está temporariamente indisponível. Erro Interno (Ver logs no Render).");
+                    await enviarMensagem(phone, "❌ A Inteligência Artificial teve dificuldade em ler este documento. Erro Interno (Ver logs no Render).");
                 }
             } else {
                 await enviarMensagem(phone, "⚠️ Aguardando a sua Fatura. Envie a imagem/PDF ou digite *0* para cancelar.");
@@ -352,4 +342,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 SERVIDOR V115 ONLINE (API v1 Estável + Fallback)`));
+app.listen(PORT, () => console.log(`🚀 SERVIDOR V116 ONLINE (Gemini 2.0 Flash FORÇADO)`));
