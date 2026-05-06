@@ -32,7 +32,7 @@ try {
 
 const memoriaEstado = new Map();
 
-// V103 FIX: Novos Textos com Menu Interativo
+// Textos com Menu Interativo
 const TEXTOS = {
     T_MENU: "👋 Olá! Bem-vindo ao *Atendimento Inteligente iGreen*. \n\nEscolha uma das opções abaixo enviando apenas o número:\n\n" +
             "1️⃣ *Novo Cadastro* (Ler fatura e preparar contrato)\n" +
@@ -84,7 +84,7 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO 1: MOTOR DE INTELIGÊNCIA (GEMINI)
+// MÓDULO 1: MOTOR DE INTELIGÊNCIA (GEMINI V105)
 // ==========================================
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     if (!GEMINI_API_KEY) throw new Error("Chave do Gemini ausente");
@@ -110,7 +110,8 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         generationConfig: { responseMimeType: "application/json" }
     };
 
-    console.log(`[GEMINI] Processando com Inteligência Artificial...`);
+    console.log(`[GEMINI] Processando com Inteligência Artificial (Modelo Estável 1.5)...`);
+    
     // V105 FIX: Atualizado para o modelo público estável 'gemini-1.5-flash' para evitar o Erro 404
     const aiRes = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, payload);
     return JSON.parse(aiRes.data.candidates[0].content.parts[0].text);
@@ -215,17 +216,14 @@ app.post('/webhook/igreen', async (req, res) => {
     const textoIn = data.text?.message?.trim() || "";
     const txtL = textoIn.toLowerCase();
     
-    // V104 FIX: A Z-API envia o tipo como "ReceivedCallback".
-    // Vamos verificar DIRETAMENTE se o pacote (payload) contém links de imagens/documentos!
+    // Verificamos DIRETAMENTE se o pacote contém links de imagens/documentos
     const temMidia = !!(data.image?.imageUrl || data.document?.documentUrl);
     const mediaUrl = data.image?.imageUrl || data.document?.documentUrl;
     const mimeType = data.document ? 'application/pdf' : 'image/jpeg';
 
     console.log(`[WEBHOOK] Msg de ${phone} | Tem Mídia? ${temMidia ? 'SIM' : 'NÃO'} | Texto: ${txtL}`);
 
-    // =======================================================
-    // V103: BOTÃO DE CANCELAMENTO GLOBAL (RESET)
-    // =======================================================
+    // BOTÃO DE CANCELAMENTO GLOBAL (RESET)
     if (txtL === '0' || txtL === 'cancelar' || txtL === 'menu') {
         memoriaEstado.set(phone, { STATUS_CADASTRO: 'NOVO' });
         await enviarMensagem(phone, "🔄 Operação cancelada com sucesso.\n\n" + TEXTOS.T_MENU);
@@ -234,9 +232,7 @@ app.post('/webhook/igreen', async (req, res) => {
 
     let mem = memoriaEstado.get(phone) || { STATUS_CADASTRO: 'NOVO' };
 
-    // =======================================================
-    // V104: MENU DINÂMICO E RECONHECIMENTO DE COMANDOS
-    // =======================================================
+    // MENU DINÂMICO E RECONHECIMENTO DE COMANDOS
     if (mem.STATUS_CADASTRO === 'NOVO') {
         
         // OPÇÃO 1: NOVO CADASTRO
@@ -260,15 +256,12 @@ app.post('/webhook/igreen', async (req, res) => {
             return;
         }
 
-        // V104 FIX: Se o cliente mandou "Oi", não escolheu opção válida ou mandou mídia solta.
-        // O Robô vai SEMPRE enviar o menu para o guiar. Acabou o silêncio!
+        // Qualquer outra coisa: Enviar Menu
         await enviarMensagem(phone, TEXTOS.T_MENU);
         return;
     }
 
-    // =======================================================
-    // MÁQUINA DE ESTADOS (O QUE FAZER APÓS ESCOLHER NO MENU)
-    // =======================================================
+    // MÁQUINA DE ESTADOS
     switch (mem.STATUS_CADASTRO) {
         
         // FLUXO COMPLETO: LENDO A FATURA COM IA (Para disparar o RPA)
@@ -347,4 +340,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 SERVIDOR V104 ONLINE (Menu Dinâmico Corrigido)`));
+app.listen(PORT, () => console.log(`🚀 SERVIDOR V105 ONLINE (Modelo Gemini Estável)`));
