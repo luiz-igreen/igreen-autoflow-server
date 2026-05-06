@@ -68,16 +68,15 @@ async function enviarMensagem(phone, message) {
 }
 
 // ==========================================
-// MÓDULO: EXTRATOR V99 (RAIO-X PROFUNDO DO DOM)
+// MÓDULO: EXTRATOR V100 (RAIO-X APRIMORADO)
 // ==========================================
 async function fluxoExtracaoDados(termoBusca, phone) {
     let browser;
     try {
-        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V99 (Raio-X)...`);
+        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V100 (O Marco Histórico)...`);
         browser = await puppeteer.launch({ headless: "new", args: CHROME_ARGS });
         const page = await browser.newPage();
         
-        // V99: Resolução ultra-wide para garantir que a tabela renderiza na memória
         await page.setViewport({ width: 2560, height: 1440 });
         
         console.log(`[EXTRATOR] 1. Acessando Login da iGreen: ${IGREEN_LOGIN_URL}`);
@@ -126,7 +125,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         await new Promise(r => setTimeout(r, 500));
         await page.keyboard.press('Enter');
         
-        console.log(`[EXTRATOR] 4. Iniciando Varredura Raio-X V99...`);
+        console.log(`[EXTRATOR] 4. Iniciando Varredura Raio-X V100...`);
         
         let dadosExtraidos = null;
         let textoDeErro = "";
@@ -135,7 +134,6 @@ async function fluxoExtracaoDados(termoBusca, phone) {
             console.log(`[EXTRATOR] Varredura ${tentativa}/6...`);
             
             dadosExtraidos = await page.evaluate((busca) => {
-                // V99 FIX: textContent aspira TUDO o que está na memória do HTML, mesmo escondido por Scroll!
                 const areaBusca = document.querySelector('tbody') || document.querySelector('table') || document.body;
                 const textoGigante = areaBusca.textContent || "";
                 
@@ -145,37 +143,51 @@ async function fluxoExtracaoDados(termoBusca, phone) {
 
                 let nomeFinal = "Cliente Localizado";
                 let cpfFinal = "Não encontrado";
-                let nascFinal = "Não consta na tabela"; // Ajustado para refletir a realidade da iGreen
+                let nascFinal = "Não consta na tabela";
 
-                // Procura exatamente a linha que tem o nome/ID pesquisado
                 const linhas = Array.from(areaBusca.querySelectorAll('tr, [role="row"]'));
                 const linhaCorreta = linhas.find(tr => tr.textContent.toLowerCase().includes(busca.toLowerCase()));
                 
                 if (linhaCorreta) {
-                    // textContent ignora a barra de rolagem (scroll)!
                     const textoLinha = linhaCorreta.textContent;
 
-                    // O SCALPEL PARA O CPF (Acha o CPF não importa em que coluna esteja escondido)
+                    // O SCALPEL PARA O CPF 
                     const padraoCpf = textoLinha.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
                     if (padraoCpf) cpfFinal = padraoCpf[0];
 
-                    // O SCALPEL PARA A DATA
-                    // Como vimos nos prints que a iGreen não coloca "Nascimento" nesta tabela, 
-                    // o robô tenta buscar qualquer data antiga (antes de 2010) que possa estar escondida no código.
+                    // O SCALPEL PARA A DATA (Antes de 2010)
                     const padraoDatas = textoLinha.match(/\d{2}\/\d{2}\/\d{4}/g);
                     if (padraoDatas) {
                         const datasAntigas = padraoDatas.filter(d => parseInt(d.split('/')[2]) < 2010);
                         if (datasAntigas.length > 0) nascFinal = datasAntigas[0];
                     }
 
-                    // O SCALPEL PARA O NOME
+                    // O SCALPEL PARA O NOME (Aprimorado V100)
                     const celulas = Array.from(linhaCorreta.querySelectorAll('td, th, [role="cell"]'));
-                    for (let celula of celulas) {
-                        let txt = celula.textContent.trim();
-                        // O Nome geralmente tem mais de 8 letras, é tudo maiúsculo e não tem números
-                        if (txt.length > 8 && !/\d/.test(txt) && txt.toUpperCase() === txt && txt !== "ATIVO" && txt !== "VALIDADO" && !txt.includes("EQUATORIAL") && !txt.includes("CEMIG")) {
-                            nomeFinal = txt;
-                            break; 
+                    
+                    // Tática 1: Pega direto da segunda coluna da tabela (historicamente a coluna do Nome)
+                    if (celulas.length > 1) {
+                        let txtCol1 = celulas[1].textContent.trim();
+                        // Se tem pelo menos 4 letras e não é um número vazio, confia que é o nome!
+                        if (/[a-zA-Z]/.test(txtCol1) && txtCol1.length > 3) {
+                            nomeFinal = txtCol1;
+                        }
+                    }
+
+                    // Tática 2: Se a tática 1 falhar, faz uma varredura buscando qualquer texto que pareça nome
+                    if (nomeFinal === "Cliente Localizado" || nomeFinal === "") {
+                        for (let celula of celulas) {
+                            let txt = celula.textContent.trim();
+                            // Ignora concessionárias e status da iGreen
+                            const ignorar = ["ATIVO", "VALIDADO", "EQUATORIAL", "CEMIG", "ENEL", "ENERGISA", "LIGHT", "CPFL"];
+                            const isIgnorado = ignorar.some(palavra => txt.toUpperCase().includes(palavra));
+                            
+                            // Se tem letras, espaço e mais de 5 caracteres, assumimos que é o nome.
+                            if (/[a-zA-Z]/.test(txt) && txt.length > 5 && txt.includes(' ') && 
+                                !txt.includes('/') && !/\d{3}\.\d{3}/.test(txt) && !isIgnorado) {
+                                nomeFinal = txt;
+                                break; 
+                            }
                         }
                     }
                 }
@@ -211,7 +223,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         await enviarMensagem(phone, mensagemFinal);
 
     } catch (error) {
-        console.error("❌ [ERRO EXTRATOR V99]:", error.message);
+        console.error("❌ [ERRO EXTRATOR V100]:", error.message);
         await enviarMensagem(phone, `⚠️ O servidor teve um soluço técnico: ${error.message}`);
         if(browser) await browser.close();
     }
@@ -254,4 +266,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 SERVIDOR V99 ONLINE (Raio-X Profundo Imune a Scroll)`));
+app.listen(PORT, () => console.log(`🚀 SERVIDOR V100 ONLINE (Raio-X Aprimorado)`));
