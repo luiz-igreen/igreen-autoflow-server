@@ -13,7 +13,7 @@ const ZAPI_INSTANCE = process.env.ZAPI_INSTANCE || "3F14E2A7F66AC2180C0BBA4D3129
 const ZAPI_TOKEN = process.env.ZAPI_TOKEN || "88F232A54C5DC27793994637";
 const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN || "F177679f2434d425e9a3e58ddec1d4cf0S"; 
 
-// A chave vem do Cofre do Render
+// A chave vem do Cofre Seguro do Render
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY; 
 
 const IGREEN_LOGIN_URL = "https://escritorio.igreenenergy.com.br/login"; 
@@ -86,7 +86,7 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO 1: MOTOR DE INTELIGÊNCIA (GEMINI V113 - ESTÁVEL + FALLBACK)
+// MÓDULO 1: MOTOR DE INTELIGÊNCIA (GEMINI V114 - 2.0 FLASH)
 // ==========================================
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     if (!GEMINI_API_KEY) {
@@ -94,6 +94,7 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         throw new Error("Chave do Gemini ausente no Cofre do Servidor.");
     }
     
+    // Limpeza da chave para evitar quebras invisíveis
     const chaveLimpa = String(GEMINI_API_KEY).trim();
 
     console.log(`[GEMINI] Baixando documento: ${mediaUrl}`);
@@ -117,26 +118,26 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         generationConfig: { responseMimeType: "application/json" }
     };
 
-    // V113: TENTATIVA 1 - API ESTÁVEL v1 (Conforme o seu diagnóstico)
+    // V114: FORÇAR O GEMINI 2.0 FLASH (O modelo mais avançado que a chave nova suporta)
     try {
-        console.log(`[GEMINI] Tentativa 1: Conectando na API Estável (v1) com gemini-1.5-flash...`);
-        const endpointV1 = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${chaveLimpa}`;
-        const aiRes = await axios.post(endpointV1, payload);
+        console.log(`[GEMINI] Conectando na API Oficial com o modelo gemini-2.0-flash...`);
+        const endpointV2 = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${chaveLimpa}`;
+        const aiRes = await axios.post(endpointV2, payload);
         return JSON.parse(aiRes.data.candidates[0].content.parts[0].text);
         
-    } catch (errorV1) {
-        console.warn(`⚠️ [GEMINI ALERTA] A API v1 falhou (Erro ${errorV1.response?.status}). Iniciando o Protocolo de Fallback...`);
+    } catch (errorV2) {
+        console.warn(`⚠️ [GEMINI ALERTA] Falha no gemini-2.0-flash. Erro exato:`, errorV2.response?.data || errorV2.message);
         
-        // V113: TENTATIVA 2 - FALLBACK (Usa o gemini-1.5-pro na v1beta caso o flash falhe)
+        // Fallback redundante para 1.5-flash padrão caso a Google mude as regras novamente
         try {
-            console.log(`[GEMINI] Tentativa 2: Conectando no Fallback (v1beta) com gemini-1.5-pro...`);
-            const endpointFallback = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${chaveLimpa}`;
+            console.log(`[GEMINI] Tentando Fallback com gemini-1.5-flash...`);
+            const endpointFallback = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${chaveLimpa}`;
             const aiResFallback = await axios.post(endpointFallback, payload);
             return JSON.parse(aiResFallback.data.candidates[0].content.parts[0].text);
             
         } catch (errorFallback) {
             console.error("❌ [ERRO IA DETALHADO - FALLBACK FALHOU]:", errorFallback.response?.data ? JSON.stringify(errorFallback.response.data) : errorFallback.message);
-            throw new Error("Falha total na comunicação com os servidores do Google Gemini.");
+            throw new Error("A Inteligência Artificial recusou o documento. Verifique os logs no Render.");
         }
     }
 }
@@ -350,4 +351,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 SERVIDOR V113 ONLINE (Endpoint v1 + Fallback)`));
+app.listen(PORT, () => console.log(`🚀 SERVIDOR V114 ONLINE (Motor Gemini 2.0 Flash Fixo)`));
