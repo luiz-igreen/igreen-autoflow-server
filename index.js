@@ -34,14 +34,9 @@ const memoriaEstado = new Map();
 const TEXTOS = {
     T01: "Seja muito bem-vindo(a) ao Atendimento VIP da iGreen Energy! 🌿 Para prepararmos o seu desconto, por favor, me envie uma foto bem nítida (ou PDF) da sua conta de luz mais recente.",
     T02: "Recebemos a sua fatura! Extraindo os seus dados de consumo. Um momento...",
-    T04: "Fatura validada! ✅ Para finalizarmos a documentação antifraude, envie uma foto nítida apenas da FRENTE do seu RG ou CNH.",
-    T05: "Frente guardada. Agora, envie a foto do VERSO do documento.",
-    T06: "Excelente! Os documentos estão sendo encriptados.",
-    T07: "Para podermos registrar o seu cadastro, digite o seu melhor e-mail:",
-    T08: "Tudo pronto! 🎉 A nossa inteligência entregou toda a sua documentação na base da iGreen Energy. Eles enviarão o link oficial para assinatura em breve! 🌿",
     T_RESGATE_START: "⚡ *Módulo de Extração de Dados* ativado! Digite apenas o *Nome ou ID* do cliente (Ex: Robson Carlos ou 1119032):",
-    T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma está a usar a Navegação Direta no *Escritório Virtual iGreen*. Isto leva cerca de 20 a 30 segundos...",
-    T_RESGATE_FAIL: "⚠️ O Robô varreu toda a tela da iGreen, mas o cliente não possui CPF registado na plataforma ou a busca falhou."
+    T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma iniciou a varredura profunda no *Escritório Virtual iGreen*. Isto leva cerca de 25 segundos...",
+    T_RESGATE_FAIL: "⚠️ O Robô varreu o código-fonte da iGreen, mas o cliente não possui CPF registado na tabela ou a busca falhou."
 };
 
 const CHROME_ARGS = [
@@ -55,7 +50,7 @@ const CHROME_ARGS = [
 ];
 
 // ==========================================
-// FUNÇÕES AUXILIARES (Z-API BLINDADA)
+// FUNÇÃO DE ENVIO WHATSAPP (Z-API)
 // ==========================================
 async function enviarMensagem(phone, message) {
     const numLimpo = String(phone).replace(/\D/g, ''); 
@@ -66,30 +61,24 @@ async function enviarMensagem(phone, message) {
             { phone: numLimpo, message: String(message) }, 
             { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN, 'Content-Type': 'application/json' } }
         ); 
+        console.log(`[Z-API] ✅ Mensagem enviada com sucesso!`);
     } catch (e) {
         console.error(`[Z-API] ❌ Erro ao enviar mensagem:`, e.response?.data || e.message);
     }
 }
 
-async function salvarNoBanco(phone, dados) {
-    if (admin.apps.length > 0) {
-        try {
-            const db = admin.firestore();
-            await db.collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').doc(phone).set({ ...dados, TELEFONE: phone, DATA_PROCESSAMENTO: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        } catch (e) {}
-    }
-}
-
 // ==========================================
-// MÓDULO: EXTRATOR V98 (LEITOR DE CABEÇALHOS)
+// MÓDULO: EXTRATOR V99 (RAIO-X PROFUNDO DO DOM)
 // ==========================================
 async function fluxoExtracaoDados(termoBusca, phone) {
     let browser;
     try {
-        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V98...`);
+        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V99 (Raio-X)...`);
         browser = await puppeteer.launch({ headless: "new", args: CHROME_ARGS });
         const page = await browser.newPage();
-        await page.setViewport({ width: 1920, height: 1080 });
+        
+        // V99: Resolução ultra-wide para garantir que a tabela renderiza na memória
+        await page.setViewport({ width: 2560, height: 1440 });
         
         console.log(`[EXTRATOR] 1. Acessando Login da iGreen: ${IGREEN_LOGIN_URL}`);
         await page.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
@@ -120,7 +109,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         console.log(`[EXTRATOR] Aguardando autenticação...`);
         await new Promise(r => setTimeout(r, 6000));
 
-        console.log(`[EXTRATOR] 2. Navegação Direta (Deep Link) para: ${IGREEN_MAPA_URL}`);
+        console.log(`[EXTRATOR] 2. Navegação Direta para: ${IGREEN_MAPA_URL}`);
         await page.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 60000 });
         
         console.log(`[EXTRATOR] Aguardando a tabela de clientes carregar...`);
@@ -137,7 +126,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         await new Promise(r => setTimeout(r, 500));
         await page.keyboard.press('Enter');
         
-        console.log(`[EXTRATOR] 4. Iniciando Varredura com Leitor de Cabeçalhos (V98)...`);
+        console.log(`[EXTRATOR] 4. Iniciando Varredura Raio-X V99...`);
         
         let dadosExtraidos = null;
         let textoDeErro = "";
@@ -146,78 +135,50 @@ async function fluxoExtracaoDados(termoBusca, phone) {
             console.log(`[EXTRATOR] Varredura ${tentativa}/6...`);
             
             dadosExtraidos = await page.evaluate((busca) => {
+                // V99 FIX: textContent aspira TUDO o que está na memória do HTML, mesmo escondido por Scroll!
                 const areaBusca = document.querySelector('tbody') || document.querySelector('table') || document.body;
-                const textoGigante = areaBusca.innerText || "";
+                const textoGigante = areaBusca.textContent || "";
                 
                 if (textoGigante.includes('Nenhum registro') || textoGigante.trim() === '') {
-                    return { cpf: "Não encontrado", raw: textoGigante.substring(0, 150) };
-                }
-
-                // V98 FIX: O MAPA INTELIGENTE DE COLUNAS
-                let idxNome = -1, idxDoc = -1, idxNasc = -1;
-                const thead = document.querySelector('thead') || document.querySelector('tr'); 
-                if (thead) {
-                    const headers = Array.from(thead.querySelectorAll('th, td'));
-                    headers.forEach((th, index) => {
-                        const text = th.innerText.toLowerCase().trim();
-                        if (text.includes('nome')) idxNome = index;
-                        if (text === 'documento' || text.includes('cpf')) idxDoc = index;
-                        // Mapeia exatamente a coluna que o Luiz Jorge indicou
-                        if (text.includes('data nascimento') || text === 'nascimento') idxNasc = index;
-                    });
+                    return { cpf: "Não encontrado", raw: "Tabela vazia ou aguardando load" };
                 }
 
                 let nomeFinal = "Cliente Localizado";
                 let cpfFinal = "Não encontrado";
-                let nascFinal = "Não consta no sistema";
+                let nascFinal = "Não consta na tabela"; // Ajustado para refletir a realidade da iGreen
 
-                const linhas = Array.from(areaBusca.querySelectorAll('tr'));
-                // Procura a linha correta pelo termo de busca
-                const linhaCorreta = linhas.find(tr => tr.innerText.includes(busca));
+                // Procura exatamente a linha que tem o nome/ID pesquisado
+                const linhas = Array.from(areaBusca.querySelectorAll('tr, [role="row"]'));
+                const linhaCorreta = linhas.find(tr => tr.textContent.toLowerCase().includes(busca.toLowerCase()));
                 
                 if (linhaCorreta) {
-                    const tds = Array.from(linhaCorreta.querySelectorAll('td, th'));
-                    
-                    // Se achou a coluna certa no cabeçalho, pega a informação direto na veia!
-                    if (idxNome !== -1 && tds[idxNome]) nomeFinal = tds[idxNome].innerText.trim();
-                    if (idxDoc !== -1 && tds[idxDoc]) cpfFinal = tds[idxDoc].innerText.trim();
-                    if (idxNasc !== -1 && tds[idxNasc]) nascFinal = tds[idxNasc].innerText.trim();
+                    // textContent ignora a barra de rolagem (scroll)!
+                    const textoLinha = linhaCorreta.textContent;
 
-                    // PLANO B: Se a tabela não tiver cabeçalhos legíveis, usamos a Força Bruta (Regex)
-                    const textoLinha = linhaCorreta.innerText;
+                    // O SCALPEL PARA O CPF (Acha o CPF não importa em que coluna esteja escondido)
+                    const padraoCpf = textoLinha.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
+                    if (padraoCpf) cpfFinal = padraoCpf[0];
 
-                    if (cpfFinal === "Não encontrado" || cpfFinal === "") {
-                        const padraoCpf = textoLinha.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
-                        if (padraoCpf) cpfFinal = padraoCpf[0];
+                    // O SCALPEL PARA A DATA
+                    // Como vimos nos prints que a iGreen não coloca "Nascimento" nesta tabela, 
+                    // o robô tenta buscar qualquer data antiga (antes de 2010) que possa estar escondida no código.
+                    const padraoDatas = textoLinha.match(/\d{2}\/\d{2}\/\d{4}/g);
+                    if (padraoDatas) {
+                        const datasAntigas = padraoDatas.filter(d => parseInt(d.split('/')[2]) < 2010);
+                        if (datasAntigas.length > 0) nascFinal = datasAntigas[0];
                     }
 
-                    if (nascFinal === "Não consta no sistema" || nascFinal === "") {
-                        const padraoDatas = textoLinha.match(/\d{2}\/\d{2}\/\d{4}/g);
-                        if (padraoDatas) {
-                            // Pega todas as datas e pega a mais antiga (pois o Nascimento vem antes do Cadastro)
-                            const datasOrdenadas = padraoDatas.sort((a, b) => {
-                                const [dA, mA, yA] = a.split('/');
-                                const [dB, mB, yB] = b.split('/');
-                                return new Date(yA, mA - 1, dA) - new Date(yB, mB - 1, dB);
-                            });
-                            nascFinal = datasOrdenadas[0];
-                        }
-                    }
-
-                    if (nomeFinal === "Cliente Localizado" || nomeFinal === "") {
-                        for (let td of tds) {
-                            let txt = td.innerText.trim();
-                            if (txt.length > 6 && !/\d/.test(txt) && txt.toUpperCase() === txt && txt !== "ATIVO" && txt !== "VALIDADO") {
-                                nomeFinal = txt;
-                                break; 
-                            }
+                    // O SCALPEL PARA O NOME
+                    const celulas = Array.from(linhaCorreta.querySelectorAll('td, th, [role="cell"]'));
+                    for (let celula of celulas) {
+                        let txt = celula.textContent.trim();
+                        // O Nome geralmente tem mais de 8 letras, é tudo maiúsculo e não tem números
+                        if (txt.length > 8 && !/\d/.test(txt) && txt.toUpperCase() === txt && txt !== "ATIVO" && txt !== "VALIDADO" && !txt.includes("EQUATORIAL") && !txt.includes("CEMIG")) {
+                            nomeFinal = txt;
+                            break; 
                         }
                     }
                 }
-
-                // Proteção final contra campos literalmente vazios na iGreen
-                if (nascFinal === "") nascFinal = "Data em branco no sistema";
-                if (cpfFinal === "") cpfFinal = "Sem documento no sistema";
 
                 return { nome: nomeFinal, cpf: cpfFinal, nasc: nascFinal, raw: "" };
             }, termoBusca);
@@ -227,14 +188,14 @@ async function fluxoExtracaoDados(termoBusca, phone) {
                 break;
             }
 
-            textoDeErro = dadosExtraidos ? dadosExtraidos.raw : "Tela vazia";
+            textoDeErro = dadosExtraidos ? dadosExtraidos.raw : "Sem resultados";
             await new Promise(r => setTimeout(r, 2000));
         }
 
         await browser.close();
 
         if (!dadosExtraidos || dadosExtraidos.cpf === "Não encontrado") {
-            await enviarMensagem(phone, TEXTOS.T_RESGATE_FAIL + `\n\n🔍 *Raio-X (Tela)*: ${textoDeErro}`);
+            await enviarMensagem(phone, TEXTOS.T_RESGATE_FAIL);
             return;
         }
 
@@ -242,7 +203,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         const mensagemFinal = `✅ *DADOS CAPTURADOS COM SUCESSO!* 🕵️‍♂️\n\n` +
                               `👤 *Nome:* ${dadosExtraidos.nome}\n` +
                               `📄 *Documento:* ${dadosExtraidos.cpf}\n` +
-                              `🎂 *Nascimento:* ${dadosExtraidos.nasc}\n\n` +
+                              `🎂 *Nascimento:* ${dadosExtraidos.nasc} *(Nota: A iGreen oculta este dado no relatório geral)*\n\n` +
                               `⚡ *Atalhos das Concessionárias:*\n` +
                               `➡️ *Equatorial AL:* https://al.equatorialenergia.com.br/sua-conta/segunda-via/\n` +
                               `➡️ *Cemig MG:* https://atendimento.cemig.com.br/`;
@@ -250,7 +211,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         await enviarMensagem(phone, mensagemFinal);
 
     } catch (error) {
-        console.error("❌ [ERRO EXTRATOR V98]:", error.message);
+        console.error("❌ [ERRO EXTRATOR V99]:", error.message);
         await enviarMensagem(phone, `⚠️ O servidor teve um soluço técnico: ${error.message}`);
         if(browser) await browser.close();
     }
@@ -293,4 +254,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 SERVIDOR V98 ONLINE (Leitor de Cabeçalhos Inteligente)`));
+app.listen(PORT, () => console.log(`🚀 SERVIDOR V99 ONLINE (Raio-X Profundo Imune a Scroll)`));
