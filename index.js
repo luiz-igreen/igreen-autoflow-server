@@ -1,10 +1,7 @@
-const express = require('express');
-const axios = require('axios');
-const admin = require('firebase-admin');
-const path = require('path');
-const fs = require('fs');
-const os = require('os');
-const puppeteer = require('puppeteer');
+import express from 'express';
+import axios from 'axios';
+import admin from 'firebase-admin';
+import puppeteer from 'puppeteer';
 
 const app = express();
 app.use(express.json());
@@ -15,9 +12,8 @@ app.use(express.json());
 const ZAPI_INSTANCE = process.env.ZAPI_INSTANCE || "3F14E2A7F66AC2180C0BBA4D31290A14";
 const ZAPI_TOKEN = process.env.ZAPI_TOKEN || "88F232A54C5DC27793994637";
 const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN || "F177679f2434d425e9a3e58ddec1d4cf0S"; 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "AIzaSyCz1JE0Ie6HsAocCfx16gy2x29rkV3OMPw"; 
 
-// V96 FIX: Usando os links diretos mapeados pelo Luiz Jorge
+// V97: Usando os links diretos mapeados pelo Luiz Jorge
 const IGREEN_LOGIN_URL = "https://escritorio.igreenenergy.com.br/login"; 
 const IGREEN_MAPA_URL = "https://escritorio.igreenenergy.com.br/mapa-clientes";
 
@@ -45,7 +41,7 @@ const TEXTOS = {
     T07: "Para podermos registrar o seu cadastro, digite o seu melhor e-mail:",
     T08: "Tudo pronto! 🎉 A nossa inteligência entregou toda a sua documentação na base da iGreen Energy. Eles enviarão o link oficial para assinatura em breve! 🌿",
     T_RESGATE_START: "⚡ *Módulo de Extração de Dados* ativado! Digite apenas o *Nome ou ID* do cliente (Ex: Robson Carlos ou 1119032):",
-    T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma está a usar a Navegação Direta no *Escritório Virtual iGreen*. Isto leva cerca de 20 segundos...",
+    T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma está a usar a Navegação Direta no *Escritório Virtual iGreen*. Isto leva cerca de 20 a 30 segundos...",
     T_RESGATE_FAIL: "⚠️ O Robô varreu toda a tela da iGreen, mas o cliente não possui CPF registado na plataforma ou a busca falhou."
 };
 
@@ -76,22 +72,6 @@ async function enviarMensagem(phone, message) {
     }
 }
 
-async function extrairDadosFatura(fileUrl, isPdf) {
-    if (!GEMINI_API_KEY) return null;
-    try {
-        const response = await axios.get(fileUrl, { responseType: 'arraybuffer' });
-        const base64Data = Buffer.from(response.data, 'binary').toString('base64');
-        const mimeType = isPdf ? 'application/pdf' : 'image/jpeg';
-        
-        const prompt = `Você é um auditor sênior da iGreen Energy. Extraia da fatura: "NOME_CLIENTE", "CEP", "MEDIA_CONSUMO" (int), "UC", "DATA_VENCIMENTO" (DD/MM/AAAA), "FATURA_VENCIDA" (boolean).
-IMPORTANTE: Caso existam colunas repetidas ou dados em duplicidade na tabela de histórico de consumo, DESPREZE as repetições e mantenha apenas os valores únicos e corretos. Retorne APENAS um JSON válido.`;
-        
-        const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: mimeType, data: base64Data } }] }], generationConfig: { responseMimeType: "application/json" } };
-        const geminiRes = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`, payload);
-        return JSON.parse(geminiRes.data.candidates[0].content.parts[0].text);
-    } catch (error) { return null; }
-}
-
 async function salvarNoBanco(phone, dados) {
     if (admin.apps.length > 0) {
         try {
@@ -102,12 +82,12 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO: EXTRATOR V96 (DEEP LINKING LUIZ JORGE)
+// MÓDULO: EXTRATOR V97 (DEEP LINKING + ES6)
 // ==========================================
 async function fluxoExtracaoDados(termoBusca, phone) {
     let browser;
     try {
-        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V96...`);
+        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V97...`);
         browser = await puppeteer.launch({ headless: "new", args: CHROME_ARGS });
         const page = await browser.newPage();
         await page.setViewport({ width: 1920, height: 1080 });
@@ -140,10 +120,9 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         else await page.keyboard.press('Enter');
         
         console.log(`[EXTRATOR] Aguardando autenticação...`);
-        await new Promise(r => setTimeout(r, 6000)); // Tempo para o servidor processar a senha
+        await new Promise(r => setTimeout(r, 6000));
 
-        // 2. O PULO DO GATO (Descoberta do Luiz Jorge)
-        // Em vez de lutar com popups e clicar em menus, teletransportamos o robô direto para o Mapa!
+        // 2. NAVEGAÇÃO DIRETA AO MAPA
         console.log(`[EXTRATOR] 2. Navegação Direta (Deep Link) para: ${IGREEN_MAPA_URL}`);
         await page.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 60000 });
         
@@ -179,11 +158,9 @@ async function fluxoExtracaoDados(termoBusca, phone) {
                     return { cpf: "Não encontrado", raw: textoGigante.substring(0, 150) };
                 }
 
-                // Despreza repetições
                 const padraoCpf = textoGigante.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
                 const cpfFinal = padraoCpf ? padraoCpf[0] : "Não encontrado";
 
-                // Pega a data de nascimento (anos antigos)
                 const padraoDatas = textoGigante.match(/\d{2}\/\d{2}\/\d{4}/g);
                 let nascFinal = "Não consta no sistema";
                 if (padraoDatas) {
@@ -191,7 +168,6 @@ async function fluxoExtracaoDados(termoBusca, phone) {
                     if (datasAntigas.length > 0) nascFinal = datasAntigas[0];
                 }
 
-                // Encontra o nome
                 let nomeFinal = "Cliente Localizado";
                 const linhas = Array.from(areaBusca.querySelectorAll('tr'));
                 const linhaCorreta = linhas.find(tr => tr.innerText.includes(busca) || (cpfFinal !== "Não encontrado" && tr.innerText.includes(cpfFinal)));
@@ -238,7 +214,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         await enviarMensagem(phone, mensagemFinal);
 
     } catch (error) {
-        console.error("❌ [ERRO EXTRATOR V96]:", error.message);
+        console.error("❌ [ERRO EXTRATOR V97]:", error.message);
         await enviarMensagem(phone, `⚠️ O servidor teve um soluço técnico: ${error.message}`);
         if(browser) await browser.close();
     }
@@ -280,4 +256,5 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 });
 
-app.listen(process.env.PORT || 10000, () => console.log(`🚀 SERVIDOR V96 ONLINE (Navegação Direta)`));
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`🚀 SERVIDOR V97 ONLINE (Módulos Modernos ES6)`));
