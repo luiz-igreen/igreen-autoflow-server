@@ -84,7 +84,7 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO 1: MOTOR DE INTELIGÊNCIA (GEMINI V107)
+// MÓDULO 1: MOTOR DE INTELIGÊNCIA (GEMINI V108 - 2.0 FLASH)
 // ==========================================
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     if (!GEMINI_API_KEY) throw new Error("Chave do Gemini ausente");
@@ -110,10 +110,11 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         generationConfig: { responseMimeType: "application/json" }
     };
 
-    console.log(`[GEMINI] Processando com Inteligência Artificial (Modelo gemini-1.5-flash)...`);
+    console.log(`[GEMINI] Processando com Inteligência Artificial (Modelo NOVO: gemini-2.0-flash)...`);
     
-    // V107 FIX: Removido o "-latest". Usando estritamente o modelo base que a Google aceita.
-    const aiRes = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, payload);
+    // V108 FIX: Upgrade oficial para o Gemini 2.0 Flash (Mais rápido e preciso no OCR)
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+    const aiRes = await axios.post(endpoint, payload);
     return JSON.parse(aiRes.data.candidates[0].content.parts[0].text);
 }
 
@@ -328,4 +329,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 SERVIDOR V107 ONLINE (Modelo 1.5 Flash Estável Corrigido)`));
+app.listen(PORT, () => console.log(`🚀 SERVIDOR V108 ONLINE (Gemini 2.0 Flash Ativado!)`));
