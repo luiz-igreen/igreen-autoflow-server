@@ -84,7 +84,7 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO 1: MOTOR DE INTELIGÊNCIA (GEMINI V105)
+// MÓDULO 1: MOTOR DE INTELIGÊNCIA (GEMINI V106)
 // ==========================================
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     if (!GEMINI_API_KEY) throw new Error("Chave do Gemini ausente");
@@ -110,10 +110,10 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         generationConfig: { responseMimeType: "application/json" }
     };
 
-    console.log(`[GEMINI] Processando com Inteligência Artificial (Modelo Estável 1.5)...`);
+    console.log(`[GEMINI] Processando com Inteligência Artificial (Modelo gemini-1.5-flash-latest)...`);
     
-    // V105 FIX: Atualizado para o modelo público estável 'gemini-1.5-flash' para evitar o Erro 404
-    const aiRes = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, payload);
+    // V106 FIX: Atualizado para 'gemini-1.5-flash-latest' garantindo a versão mais robusta sem Erro 404
+    const aiRes = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`, payload);
     return JSON.parse(aiRes.data.candidates[0].content.parts[0].text);
 }
 
@@ -216,14 +216,12 @@ app.post('/webhook/igreen', async (req, res) => {
     const textoIn = data.text?.message?.trim() || "";
     const txtL = textoIn.toLowerCase();
     
-    // Verificamos DIRETAMENTE se o pacote contém links de imagens/documentos
     const temMidia = !!(data.image?.imageUrl || data.document?.documentUrl);
     const mediaUrl = data.image?.imageUrl || data.document?.documentUrl;
     const mimeType = data.document ? 'application/pdf' : 'image/jpeg';
 
     console.log(`[WEBHOOK] Msg de ${phone} | Tem Mídia? ${temMidia ? 'SIM' : 'NÃO'} | Texto: ${txtL}`);
 
-    // BOTÃO DE CANCELAMENTO GLOBAL (RESET)
     if (txtL === '0' || txtL === 'cancelar' || txtL === 'menu') {
         memoriaEstado.set(phone, { STATUS_CADASTRO: 'NOVO' });
         await enviarMensagem(phone, "🔄 Operação cancelada com sucesso.\n\n" + TEXTOS.T_MENU);
@@ -232,39 +230,31 @@ app.post('/webhook/igreen', async (req, res) => {
 
     let mem = memoriaEstado.get(phone) || { STATUS_CADASTRO: 'NOVO' };
 
-    // MENU DINÂMICO E RECONHECIMENTO DE COMANDOS
     if (mem.STATUS_CADASTRO === 'NOVO') {
-        
-        // OPÇÃO 1: NOVO CADASTRO
         if (txtL === '1' || ['novo', 'nova'].includes(txtL)) {
             memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA' });
             await enviarMensagem(phone, TEXTOS.T01); 
             return;
         }
 
-        // OPÇÃO 2: GUARDAR FATURA
         if (txtL === '2' || ['guardar', 'atualizar', 'salvar'].includes(txtL)) {
             memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA_SOH_BANCO' });
             await enviarMensagem(phone, TEXTOS.T_GUARDAR_START); 
             return;
         }
 
-        // OPÇÃO 3: RESGATAR DADOS
         if (txtL === '3' || ['resgatar', 'dados', 'puxar'].includes(txtL)) {
             memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_TERMO_RESGATE' });
             await enviarMensagem(phone, TEXTOS.T_RESGATE_START); 
             return;
         }
 
-        // Qualquer outra coisa: Enviar Menu
         await enviarMensagem(phone, TEXTOS.T_MENU);
         return;
     }
 
-    // MÁQUINA DE ESTADOS
     switch (mem.STATUS_CADASTRO) {
         
-        // FLUXO COMPLETO: LENDO A FATURA COM IA (Para disparar o RPA)
         case 'AGUARDANDO_FATURA':
             if (temMidia) {
                 await enviarMensagem(phone, TEXTOS.T02); 
@@ -272,7 +262,6 @@ app.post('/webhook/igreen', async (req, res) => {
                 try {
                     const dadosIA = await analisarFaturaGemini(mediaUrl, mimeType);
                     
-                    // STATUS_CADASTRO: CONCLUIDO acorda o Robô RPA no Monitor
                     await salvarNoBanco(phone, {
                         NOME_CLIENTE: dadosIA.NOME_CLIENTE || "Cliente",
                         CPF: dadosIA.CPF || "Não extraído",
@@ -287,7 +276,8 @@ app.post('/webhook/igreen', async (req, res) => {
                     await enviarMensagem(phone, `✅ Fatura aprovada!\n👤 Titular: ${dadosIA.NOME_CLIENTE}\n⚡ Média: ${dadosIA.MEDIA_CONSUMO} kWh.\n\nTodos os dados foram enviados para a Central de Injeção. O consultor gerará o seu contrato em breve!`);
                     memoriaEstado.delete(phone); 
                 } catch (error) {
-                    console.error("[ERRO IA]:", error);
+                    // V106: RADAR DE ERROS! Imprime exatamente a resposta da Google.
+                    console.error("❌ [ERRO IA DETALHADO]:", error.response?.data ? JSON.stringify(error.response.data) : error.message);
                     await enviarMensagem(phone, "❌ A Inteligência Artificial teve dificuldade em ler este documento. Pode tentar enviar uma foto mais nítida ou o PDF original?");
                 }
             } else {
@@ -295,7 +285,6 @@ app.post('/webhook/igreen', async (req, res) => {
             }
             break;
 
-        // FLUXO ISOLADO: LER A FATURA E APENAS GUARDAR (Sem RPA, Sem RG)
         case 'AGUARDANDO_FATURA_SOH_BANCO':
             if (temMidia) {
                 await enviarMensagem(phone, TEXTOS.T02); 
@@ -303,7 +292,6 @@ app.post('/webhook/igreen', async (req, res) => {
                 try {
                     const dadosIA = await analisarFaturaGemini(mediaUrl, mimeType);
                     
-                    // STATUS: PENDENTE_DOCUMENTOS (O Robô RPA ignora isto e deixa na gaveta)
                     await salvarNoBanco(phone, {
                         NOME_CLIENTE: dadosIA.NOME_CLIENTE || "Cliente",
                         CPF: dadosIA.CPF || "Não extraído",
@@ -318,7 +306,8 @@ app.post('/webhook/igreen', async (req, res) => {
                     await enviarMensagem(phone, `✅ Fatura lida e guardada no seu Banco de Dados!\n👤 Titular: ${dadosIA.NOME_CLIENTE}\n⚡ Média: ${dadosIA.MEDIA_CONSUMO} kWh.\n\n⚠️ Status: *Pendente de Documentos*. O Robô de injeção automática NÃO foi acionado. Quando o cliente tiver o RG/CNH em mãos, avise-me!`);
                     memoriaEstado.delete(phone); 
                 } catch (error) {
-                    console.error("[ERRO IA]:", error);
+                    // V106: RADAR DE ERROS!
+                    console.error("❌ [ERRO IA DETALHADO]:", error.response?.data ? JSON.stringify(error.response.data) : error.message);
                     await enviarMensagem(phone, "❌ A Inteligência Artificial teve dificuldade em ler este documento. Pode tentar enviar uma foto mais nítida ou o PDF original?");
                 }
             } else {
@@ -326,7 +315,6 @@ app.post('/webhook/igreen', async (req, res) => {
             }
             break;
 
-        // FLUXO: RESGATANDO DADOS COM O PUPPETEER
         case 'AGUARDANDO_TERMO_RESGATE':
             if (textoIn.length >= 2) {
                 await enviarMensagem(phone, TEXTOS.T_RESGATE_BUSCANDO);
@@ -340,4 +328,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 SERVIDOR V105 ONLINE (Modelo Gemini Estável)`));
+app.listen(PORT, () => console.log(`🚀 SERVIDOR V106 ONLINE (Modelo Latest e Radar de Erros)`));
