@@ -86,7 +86,7 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO 1: MOTOR DE INTELIGÊNCIA (GEMINI V114 - 2.0 FLASH)
+// MÓDULO 1: MOTOR DE INTELIGÊNCIA (GEMINI - DIAGNÓSTICO + FALLBACK APLICADO)
 // ==========================================
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     if (!GEMINI_API_KEY) {
@@ -118,26 +118,27 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         generationConfig: { responseMimeType: "application/json" }
     };
 
-    // V114: FORÇAR O GEMINI 2.0 FLASH (O modelo mais avançado que a chave nova suporta)
+    // SOLUÇÃO DO DIAGNÓSTICO: TENTATIVA 1 - Usar API Estável (v1) com gemini-1.5-flash
     try {
-        console.log(`[GEMINI] Conectando na API Oficial com o modelo gemini-2.0-flash...`);
-        const endpointV2 = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${chaveLimpa}`;
-        const aiRes = await axios.post(endpointV2, payload);
+        console.log(`[GEMINI] Tentativa 1: Conectando na API Oficial Estável (v1) com gemini-1.5-flash...`);
+        const endpointV1 = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${chaveLimpa}`;
+        const aiRes = await axios.post(endpointV1, payload);
         return JSON.parse(aiRes.data.candidates[0].content.parts[0].text);
         
-    } catch (errorV2) {
-        console.warn(`⚠️ [GEMINI ALERTA] Falha no gemini-2.0-flash. Erro exato:`, errorV2.response?.data || errorV2.message);
+    } catch (errorV1) {
+        console.warn(`⚠️ [GEMINI ALERTA] Falha na API Estável v1 (gemini-1.5-flash). Erro:`, errorV1.response?.data || errorV1.message);
+        console.log(`🔄 [GEMINI] Iniciando Sistema de Fallback Automático...`);
         
-        // Fallback redundante para 1.5-flash padrão caso a Google mude as regras novamente
+        // SOLUÇÃO DO DIAGNÓSTICO: TENTATIVA 2 (FALLBACK) - Usar gemini-1.5-pro na v1beta
         try {
-            console.log(`[GEMINI] Tentando Fallback com gemini-1.5-flash...`);
-            const endpointFallback = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${chaveLimpa}`;
+            console.log(`[GEMINI] Tentativa 2: Conectando no Fallback (v1beta) com gemini-1.5-pro...`);
+            const endpointFallback = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${chaveLimpa}`;
             const aiResFallback = await axios.post(endpointFallback, payload);
             return JSON.parse(aiResFallback.data.candidates[0].content.parts[0].text);
             
         } catch (errorFallback) {
             console.error("❌ [ERRO IA DETALHADO - FALLBACK FALHOU]:", errorFallback.response?.data ? JSON.stringify(errorFallback.response.data) : errorFallback.message);
-            throw new Error("A Inteligência Artificial recusou o documento. Verifique os logs no Render.");
+            throw new Error("A Inteligência Artificial recusou o documento nas duas tentativas. Verifique os logs no Render.");
         }
     }
 }
@@ -351,4 +352,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 SERVIDOR V114 ONLINE (Motor Gemini 2.0 Flash Fixo)`));
+app.listen(PORT, () => console.log(`🚀 SERVIDOR V115 ONLINE (API v1 Estável + Fallback)`));
