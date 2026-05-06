@@ -204,9 +204,9 @@ async function fluxoExtracaoDados(termoBusca, phone) {
                               `👤 *Nome:* ${dadosExtraidos.nome}\n` +
                               `📄 *Documento:* ${dadosExtraidos.cpf}\n` +
                               `🎂 *Nascimento:* ${dadosExtraidos.nasc} *(Nota: A iGreen oculta este dado no relatório geral)*\n\n` +
-                              `⚡ *Atalhos das Concessionárias:*\n` +
-                              `➡️ *Equatorial AL:* https://al.equatorialenergia.com.br/sua-conta/segunda-via/\n` +
-                              `➡️ *Cemig MG:* https://atendimento.cemig.com.br/`;
+                              `⚡ *Atalhos (2ª Via Rápida):*\n` +
+                              `➡️ *Equatorial AL (Site Antigo):* https://al.equatorialenergia.com.br/siteantigo\n` +
+                              `➡️ *Cemig MG (WhatsApp Cemig):* https://wa.me/553135061160?text=Segunda+via`;
 
         await enviarMensagem(phone, mensagemFinal);
 
