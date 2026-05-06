@@ -32,12 +32,19 @@ try {
 
 const memoriaEstado = new Map();
 
+// V103 FIX: Novos Textos com Menu Interativo
 const TEXTOS = {
-    T01: "Seja muito bem-vindo(a) ao Atendimento VIP da iGreen Energy! 🌿 Para prepararmos o seu desconto, por favor, me envie uma foto bem nítida (ou PDF) da sua conta de luz mais recente.",
+    T_MENU: "👋 Olá! Bem-vindo ao *Atendimento Inteligente iGreen*. \n\nEscolha uma das opções abaixo enviando apenas o número:\n\n" +
+            "1️⃣ *Novo Cadastro* (Ler fatura e preparar contrato)\n" +
+            "2️⃣ *Guardar Fatura* (Apenas salvar no Banco de Dados)\n" +
+            "3️⃣ *Resgatar Dados* (Puxar dados do portal iGreen)\n\n" +
+            "_(Digite *0* a qualquer momento para cancelar e voltar a este menu)_",
+    T01: "Opção 1️⃣ selecionada! 🌿 \nPara prepararmos o seu desconto e gerar o contrato, por favor, me envie uma foto bem nítida (ou PDF) da sua conta de luz mais recente.",
     T02: "Recebemos a sua fatura! 📄 A nossa Inteligência Artificial está a extrair os dados neste exato momento. Um momento...",
-    T_RESGATE_START: "⚡ *Módulo de Extração de Dados* ativado! Digite apenas o *Nome ou ID* do cliente (Ex: Robson Carlos ou 1119032):",
+    T_RESGATE_START: "Opção 3️⃣ selecionada! ⚡ \n*Módulo de Extração* ativado! Digite apenas o *Nome ou ID* do cliente (Ex: Robson Carlos ou 1119032):",
     T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma iniciou a varredura profunda no *Escritório Virtual iGreen*...",
-    T_RESGATE_FAIL: "⚠️ O Robô varreu o código-fonte da iGreen, mas o cliente não possui CPF registado na tabela ou a busca falhou."
+    T_RESGATE_FAIL: "⚠️ O Robô varreu o código-fonte da iGreen, mas o cliente não possui CPF registado na tabela ou a busca falhou.",
+    T_GUARDAR_START: "Opção 2️⃣ selecionada! 💾 \n*Módulo de Pré-Cadastro* ativado! Envie apenas a foto ou PDF da *Fatura de Energia*. Eu vou extrair os dados e guardar no banco sem acionar o Robô RPA."
 };
 
 const CHROME_ARGS = [
@@ -208,30 +215,62 @@ app.post('/webhook/igreen', async (req, res) => {
     const txtL = textoIn.toLowerCase();
     const tipoMsg = data.type; // image, document, chat
 
-    console.log(`[WEBHOOK] Msg de ${phone} | Tipo: ${tipoMsg}`);
+    console.log(`[WEBHOOK] Msg de ${phone} | Tipo: ${tipoMsg} | Texto: ${txtL}`);
 
-    // GATILHO 1: Iniciar novo cadastro
-    if (['novo', 'nova'].includes(txtL)) {
-        memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA' });
-        await enviarMensagem(phone, TEXTOS.T01); 
-        return;
-    }
-
-    // GATILHO 2: Iniciar resgate de dados na iGreen
-    if (['resgatar', 'dados', 'puxar'].includes(txtL)) {
-        memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_TERMO_RESGATE' });
-        await enviarMensagem(phone, TEXTOS.T_RESGATE_START); 
+    // =======================================================
+    // V103: BOTÃO DE CANCELAMENTO GLOBAL (RESET)
+    // =======================================================
+    if (txtL === '0' || txtL === 'cancelar' || txtL === 'menu') {
+        memoriaEstado.set(phone, { STATUS_CADASTRO: 'NOVO' });
+        await enviarMensagem(phone, "🔄 Operação cancelada com sucesso.\n\n" + TEXTOS.T_MENU);
         return;
     }
 
     let mem = memoriaEstado.get(phone) || { STATUS_CADASTRO: 'NOVO' };
 
+    // =======================================================
+    // V103: MENU DINÂMICO E RECONHECIMENTO DE COMANDOS
+    // =======================================================
+    if (mem.STATUS_CADASTRO === 'NOVO') {
+        
+        // OPÇÃO 1: NOVO CADASTRO
+        if (txtL === '1' || ['novo', 'nova'].includes(txtL)) {
+            memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA' });
+            await enviarMensagem(phone, TEXTOS.T01); 
+            return;
+        }
+
+        // OPÇÃO 2: GUARDAR FATURA
+        if (txtL === '2' || ['guardar', 'atualizar', 'salvar'].includes(txtL)) {
+            memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA_SOH_BANCO' });
+            await enviarMensagem(phone, TEXTOS.T_GUARDAR_START); 
+            return;
+        }
+
+        // OPÇÃO 3: RESGATAR DADOS
+        if (txtL === '3' || ['resgatar', 'dados', 'puxar'].includes(txtL)) {
+            memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_TERMO_RESGATE' });
+            await enviarMensagem(phone, TEXTOS.T_RESGATE_START); 
+            return;
+        }
+
+        // SE O CLIENTE MANDAR UMA FATURA DIRETO (SEM ESCOLHER OPÇÃO) OU DISSER "OI"
+        if (!tipoMsg || tipoMsg === 'chat' || tipoMsg === 'conversation' || tipoMsg === 'image' || tipoMsg === 'document') {
+            // Se mandar imagem/PDF mas não escolheu a opção antes, o robô manda o menu
+            await enviarMensagem(phone, TEXTOS.T_MENU);
+            return;
+        }
+    }
+
+    // =======================================================
+    // MÁQUINA DE ESTADOS (O QUE FAZER APÓS ESCOLHER NO MENU)
+    // =======================================================
     switch (mem.STATUS_CADASTRO) {
         
-        // FLUXO: LENDO A FATURA COM IA
+        // FLUXO COMPLETO: LENDO A FATURA COM IA (Para disparar o RPA)
         case 'AGUARDANDO_FATURA':
             if (tipoMsg === 'image' || tipoMsg === 'document') {
-                await enviarMensagem(phone, TEXTOS.T02); // Avisa que a IA começou
+                await enviarMensagem(phone, TEXTOS.T02); 
                 
                 const mediaUrl = data.image?.imageUrl || data.document?.documentUrl;
                 const mimeType = tipoMsg === 'document' ? 'application/pdf' : 'image/jpeg';
@@ -239,7 +278,7 @@ app.post('/webhook/igreen', async (req, res) => {
                 try {
                     const dadosIA = await analisarFaturaGemini(mediaUrl, mimeType);
                     
-                    // Salva os dados lidos e MARCA COMO CONCLUÍDO (Isto dispara o Monitor RPA!)
+                    // STATUS_CADASTRO: CONCLUIDO acorda o Robô RPA no Monitor
                     await salvarNoBanco(phone, {
                         NOME_CLIENTE: dadosIA.NOME_CLIENTE || "Cliente",
                         CPF: dadosIA.CPF || "Não extraído",
@@ -252,24 +291,62 @@ app.post('/webhook/igreen', async (req, res) => {
                     });
 
                     await enviarMensagem(phone, `✅ Fatura aprovada!\n👤 Titular: ${dadosIA.NOME_CLIENTE}\n⚡ Média: ${dadosIA.MEDIA_CONSUMO} kWh.\n\nTodos os dados foram enviados para a Central de Injeção. O consultor gerará o seu contrato em breve!`);
-                    memoriaEstado.delete(phone); // Limpa o estado
+                    memoriaEstado.delete(phone); 
                 } catch (error) {
                     console.error("[ERRO IA]:", error);
                     await enviarMensagem(phone, "❌ A Inteligência Artificial teve dificuldade em ler este documento. Pode tentar enviar uma foto mais nítida ou o PDF original?");
                 }
+            } else {
+                await enviarMensagem(phone, "⚠️ Por favor, envie a foto ou o PDF da fatura para prosseguirmos. Ou digite *0* para voltar ao menu.");
+            }
+            break;
+
+        // FLUXO ISOLADO: LER A FATURA E APENAS GUARDAR (Sem RPA, Sem RG)
+        case 'AGUARDANDO_FATURA_SOH_BANCO':
+            if (tipoMsg === 'image' || tipoMsg === 'document') {
+                await enviarMensagem(phone, TEXTOS.T02); 
+                
+                const mediaUrl = data.image?.imageUrl || data.document?.documentUrl;
+                const mimeType = tipoMsg === 'document' ? 'application/pdf' : 'image/jpeg';
+                
+                try {
+                    const dadosIA = await analisarFaturaGemini(mediaUrl, mimeType);
+                    
+                    // STATUS: PENDENTE_DOCUMENTOS (O Robô RPA ignora isto e deixa na gaveta)
+                    await salvarNoBanco(phone, {
+                        NOME_CLIENTE: dadosIA.NOME_CLIENTE || "Cliente",
+                        CPF: dadosIA.CPF || "Não extraído",
+                        UC: dadosIA.UC || "Não extraído",
+                        MEDIA_CONSUMO: dadosIA.MEDIA_CONSUMO || "0",
+                        DISTRIBUIDORA: dadosIA.DISTRIBUIDORA || "Equatorial",
+                        CEP: dadosIA.CEP || "",
+                        LINK_FATURA: mediaUrl,
+                        STATUS_CADASTRO: "PENDENTE_DOCUMENTOS" 
+                    });
+
+                    await enviarMensagem(phone, `✅ Fatura lida e guardada no seu Banco de Dados!\n👤 Titular: ${dadosIA.NOME_CLIENTE}\n⚡ Média: ${dadosIA.MEDIA_CONSUMO} kWh.\n\n⚠️ Status: *Pendente de Documentos*. O Robô de injeção automática NÃO foi acionado. Quando o cliente tiver o RG/CNH em mãos, avise-me!`);
+                    memoriaEstado.delete(phone); 
+                } catch (error) {
+                    console.error("[ERRO IA]:", error);
+                    await enviarMensagem(phone, "❌ A Inteligência Artificial teve dificuldade em ler este documento. Pode tentar enviar uma foto mais nítida ou o PDF original?");
+                }
+            } else {
+                await enviarMensagem(phone, "⚠️ Aguardando a sua Fatura. Envie a imagem/PDF ou digite *0* para cancelar.");
             }
             break;
 
         // FLUXO: RESGATANDO DADOS COM O PUPPETEER
         case 'AGUARDANDO_TERMO_RESGATE':
-            if (textoIn.length > 2) {
+            if (textoIn.length >= 2) {
                 await enviarMensagem(phone, TEXTOS.T_RESGATE_BUSCANDO);
                 memoriaEstado.delete(phone); 
                 setTimeout(() => { fluxoExtracaoDados(textoIn, phone); }, 3000);
+            } else {
+                await enviarMensagem(phone, "⚠️ Digite o Nome ou ID para buscar. Ou digite *0* para voltar ao menu.");
             }
             break;
     }
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 SERVIDOR V101 ONLINE (Cérebro Unificado IA + RPA)`));
+app.listen(PORT, () => console.log(`🚀 SERVIDOR V103 ONLINE (Menu Dinâmico Interativo)`));
