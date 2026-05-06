@@ -13,7 +13,6 @@ const ZAPI_INSTANCE = process.env.ZAPI_INSTANCE || "3F14E2A7F66AC2180C0BBA4D3129
 const ZAPI_TOKEN = process.env.ZAPI_TOKEN || "88F232A54C5DC27793994637";
 const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN || "F177679f2434d425e9a3e58ddec1d4cf0S"; 
 
-// V97: Usando os links diretos mapeados pelo Luiz Jorge
 const IGREEN_LOGIN_URL = "https://escritorio.igreenenergy.com.br/login"; 
 const IGREEN_MAPA_URL = "https://escritorio.igreenenergy.com.br/mapa-clientes";
 
@@ -82,17 +81,16 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO: EXTRATOR V97 (DEEP LINKING + ES6)
+// MÓDULO: EXTRATOR V98 (LEITOR DE CABEÇALHOS)
 // ==========================================
 async function fluxoExtracaoDados(termoBusca, phone) {
     let browser;
     try {
-        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V97...`);
+        console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma V98...`);
         browser = await puppeteer.launch({ headless: "new", args: CHROME_ARGS });
         const page = await browser.newPage();
         await page.setViewport({ width: 1920, height: 1080 });
         
-        // 1. VAI DIRETO PARA A TELA DE LOGIN
         console.log(`[EXTRATOR] 1. Acessando Login da iGreen: ${IGREEN_LOGIN_URL}`);
         await page.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
         
@@ -122,14 +120,12 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         console.log(`[EXTRATOR] Aguardando autenticação...`);
         await new Promise(r => setTimeout(r, 6000));
 
-        // 2. NAVEGAÇÃO DIRETA AO MAPA
         console.log(`[EXTRATOR] 2. Navegação Direta (Deep Link) para: ${IGREEN_MAPA_URL}`);
         await page.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 60000 });
         
         console.log(`[EXTRATOR] Aguardando a tabela de clientes carregar...`);
         await new Promise(r => setTimeout(r, 8000)); 
 
-        // 3. PESQUISA NA TABELA
         console.log(`[EXTRATOR] 3. Pesquisando alvo: ${termoBusca}`);
         const searchSelector = 'input[placeholder*="Pesquisar" i], input[placeholder*="Buscar" i]';
         const searchInput = await page.waitForSelector(searchSelector, { timeout: 15000 });
@@ -141,12 +137,11 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         await new Promise(r => setTimeout(r, 500));
         await page.keyboard.press('Enter');
         
-        console.log(`[EXTRATOR] 4. Iniciando Varredura Anti-Duplicidade (Polling)...`);
+        console.log(`[EXTRATOR] 4. Iniciando Varredura com Leitor de Cabeçalhos (V98)...`);
         
         let dadosExtraidos = null;
         let textoDeErro = "";
 
-        // Tenta ler a tabela 6 vezes (a cada 2 segundos)
         for (let tentativa = 1; tentativa <= 6; tentativa++) {
             console.log(`[EXTRATOR] Varredura ${tentativa}/6...`);
             
@@ -158,30 +153,71 @@ async function fluxoExtracaoDados(termoBusca, phone) {
                     return { cpf: "Não encontrado", raw: textoGigante.substring(0, 150) };
                 }
 
-                const padraoCpf = textoGigante.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
-                const cpfFinal = padraoCpf ? padraoCpf[0] : "Não encontrado";
-
-                const padraoDatas = textoGigante.match(/\d{2}\/\d{2}\/\d{4}/g);
-                let nascFinal = "Não consta no sistema";
-                if (padraoDatas) {
-                    const datasAntigas = padraoDatas.filter(d => parseInt(d.split('/')[2]) < 2010);
-                    if (datasAntigas.length > 0) nascFinal = datasAntigas[0];
+                // V98 FIX: O MAPA INTELIGENTE DE COLUNAS
+                let idxNome = -1, idxDoc = -1, idxNasc = -1;
+                const thead = document.querySelector('thead') || document.querySelector('tr'); 
+                if (thead) {
+                    const headers = Array.from(thead.querySelectorAll('th, td'));
+                    headers.forEach((th, index) => {
+                        const text = th.innerText.toLowerCase().trim();
+                        if (text.includes('nome')) idxNome = index;
+                        if (text === 'documento' || text.includes('cpf')) idxDoc = index;
+                        // Mapeia exatamente a coluna que o Luiz Jorge indicou
+                        if (text.includes('data nascimento') || text === 'nascimento') idxNasc = index;
+                    });
                 }
 
                 let nomeFinal = "Cliente Localizado";
+                let cpfFinal = "Não encontrado";
+                let nascFinal = "Não consta no sistema";
+
                 const linhas = Array.from(areaBusca.querySelectorAll('tr'));
-                const linhaCorreta = linhas.find(tr => tr.innerText.includes(busca) || (cpfFinal !== "Não encontrado" && tr.innerText.includes(cpfFinal)));
+                // Procura a linha correta pelo termo de busca
+                const linhaCorreta = linhas.find(tr => tr.innerText.includes(busca));
                 
                 if (linhaCorreta) {
                     const tds = Array.from(linhaCorreta.querySelectorAll('td, th'));
-                    for (let td of tds) {
-                        let txt = td.innerText.trim();
-                        if (txt.length > 6 && !/\d/.test(txt) && txt.toUpperCase() === txt && txt !== "ATIVO" && txt !== "VALIDADO") {
-                            nomeFinal = txt;
-                            break; 
+                    
+                    // Se achou a coluna certa no cabeçalho, pega a informação direto na veia!
+                    if (idxNome !== -1 && tds[idxNome]) nomeFinal = tds[idxNome].innerText.trim();
+                    if (idxDoc !== -1 && tds[idxDoc]) cpfFinal = tds[idxDoc].innerText.trim();
+                    if (idxNasc !== -1 && tds[idxNasc]) nascFinal = tds[idxNasc].innerText.trim();
+
+                    // PLANO B: Se a tabela não tiver cabeçalhos legíveis, usamos a Força Bruta (Regex)
+                    const textoLinha = linhaCorreta.innerText;
+
+                    if (cpfFinal === "Não encontrado" || cpfFinal === "") {
+                        const padraoCpf = textoLinha.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
+                        if (padraoCpf) cpfFinal = padraoCpf[0];
+                    }
+
+                    if (nascFinal === "Não consta no sistema" || nascFinal === "") {
+                        const padraoDatas = textoLinha.match(/\d{2}\/\d{2}\/\d{4}/g);
+                        if (padraoDatas) {
+                            // Pega todas as datas e pega a mais antiga (pois o Nascimento vem antes do Cadastro)
+                            const datasOrdenadas = padraoDatas.sort((a, b) => {
+                                const [dA, mA, yA] = a.split('/');
+                                const [dB, mB, yB] = b.split('/');
+                                return new Date(yA, mA - 1, dA) - new Date(yB, mB - 1, dB);
+                            });
+                            nascFinal = datasOrdenadas[0];
+                        }
+                    }
+
+                    if (nomeFinal === "Cliente Localizado" || nomeFinal === "") {
+                        for (let td of tds) {
+                            let txt = td.innerText.trim();
+                            if (txt.length > 6 && !/\d/.test(txt) && txt.toUpperCase() === txt && txt !== "ATIVO" && txt !== "VALIDADO") {
+                                nomeFinal = txt;
+                                break; 
+                            }
                         }
                     }
                 }
+
+                // Proteção final contra campos literalmente vazios na iGreen
+                if (nascFinal === "") nascFinal = "Data em branco no sistema";
+                if (cpfFinal === "") cpfFinal = "Sem documento no sistema";
 
                 return { nome: nomeFinal, cpf: cpfFinal, nasc: nascFinal, raw: "" };
             }, termoBusca);
@@ -214,7 +250,7 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         await enviarMensagem(phone, mensagemFinal);
 
     } catch (error) {
-        console.error("❌ [ERRO EXTRATOR V97]:", error.message);
+        console.error("❌ [ERRO EXTRATOR V98]:", error.message);
         await enviarMensagem(phone, `⚠️ O servidor teve um soluço técnico: ${error.message}`);
         if(browser) await browser.close();
     }
@@ -257,4 +293,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 SERVIDOR V97 ONLINE (Módulos Modernos ES6)`));
+app.listen(PORT, () => console.log(`🚀 SERVIDOR V98 ONLINE (Leitor de Cabeçalhos Inteligente)`));
