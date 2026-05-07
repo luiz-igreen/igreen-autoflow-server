@@ -85,7 +85,7 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO 1: MOTOR DE INTELIGÊNCIA (GEMINI - VERSÃO FINAL)
+// MÓDULO 1: MOTOR DE INTELIGÊNCIA (GEMINI - VERSÃO ESTÁVEL)
 // ==========================================
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     if (!GEMINI_API_KEY) {
@@ -122,10 +122,10 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         generationConfig: { responseMimeType: "application/json" }
     };
 
-    // VERSÃO FINAL: APENAS gemini-1.5-flash (modelo confirmado que funciona)
+    // VERSÃO ESTÁVEL: gemini-pro na v1 (modelo garantido)
     try {
-        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${chaveLimpa}`;
-        console.log(`[GEMINI] Conectando com gemini-1.5-flash (v1beta)...`);
+        const endpoint = `https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${chaveLimpa}`;
+        console.log(`[GEMINI] Conectando com gemini-pro (v1 - Estável)...`);
         
         const aiRes = await axios.post(endpoint, payload, { timeout: 30000 });
         
@@ -367,4 +367,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 SERVIDOR IGREEN ONLINE (Gemini 1.5 Flash - Modelo Validado)`));
+app.listen(PORT, () => console.log(`🚀 SERVIDOR IGREEN ONLINE (Gemini Pro v1 - Modelo Estável)`));
