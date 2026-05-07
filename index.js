@@ -89,7 +89,7 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO 1: O "MUTIRÃO" DA IA (AUTO-DISCOVERY V119)
+// MÓDULO 1: MOTOR IA (V120 - GEMINI 2.5 FLASH DEFINITIVO)
 // ==========================================
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     if (!GEMINI_API_KEY) {
@@ -120,40 +120,20 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         generationConfig: { responseMimeType: "application/json" }
     };
 
-    // V119: O MUTIRÃO DAS PORTAS GOOGLE (Tenta todas até conseguir)
-    const portasGoogle = [
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${chaveLimpa}`,
-        `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${chaveLimpa}`,
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${chaveLimpa}`,
-        `https://generativelanguage.googleapis.com/v1alpha/models/gemini-3.1-pro-preview:generateContent?key=${chaveLimpa}`,
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${chaveLimpa}`
-    ];
+    // V120: CÓDIGO DEFINITIVO BASEADO NO PRINT DO GOOGLE AI STUDIO DO LUIZ JORGE
+    // Utilizando exclusivamente o modelo 'gemini-2.5-flash' confirmado na conta.
+    const endpointFinal = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${chaveLimpa}`;
 
-    let ultimoErro = null;
-
-    console.log(`🚀 [MUTIRÃO IA] Iniciando varredura nas rotas da Google...`);
-
-    for (let i = 0; i < portasGoogle.length; i++) {
-        const endpoint = portasGoogle[i];
-        const modeloNome = endpoint.split('/models/')[1].split(':')[0];
-        const versaoApi = endpoint.split('googleapis.com/')[1].split('/')[0];
-
-        try {
-            console.log(`[TESTE ${i+1}/${portasGoogle.length}] Batendo na porta: ${modeloNome} (${versaoApi})...`);
-            const aiRes = await axios.post(endpoint, payload);
-            
-            console.log(`✅ [SUCESSO] A porta ${modeloNome} (${versaoApi}) abriu e processou a fatura!`);
-            return JSON.parse(aiRes.data.candidates[0].content.parts[0].text);
-            
-        } catch (error) {
-            ultimoErro = error.response?.data ? JSON.stringify(error.response.data) : error.message;
-            console.warn(`⚠️ A porta ${modeloNome} falhou (Provável 404). Partindo para a próxima...`);
-        }
+    try {
+        console.log(`[GEMINI] Conectando na API Oficial com o modelo gemini-2.5-flash...`);
+        const aiRes = await axios.post(endpointFinal, payload);
+        return JSON.parse(aiRes.data.candidates[0].content.parts[0].text);
+        
+    } catch (error) {
+        const erroGoogle = error.response?.data ? JSON.stringify(error.response.data, null, 2) : error.message;
+        console.error("❌ [ERRO FATAL GEMINI 2.5 FLASH]:\n", erroGoogle);
+        throw new Error(`A API do Gemini 2.5 Flash falhou. Veja os logs no Render para o motivo exato.`);
     }
-
-    // Se o código chegou aqui, significa que a Google fechou absolutamente todas as portas.
-    console.error("❌ [ERRO FATAL MUTIRÃO]: Todas as rotas falharam. A Google bloqueou o acesso. Último erro:", ultimoErro);
-    throw new Error("A Inteligência Artificial recusou o documento em todas as versões testadas.");
 }
 
 // ==========================================
@@ -367,4 +347,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 SERVIDOR V119 ONLINE (O Mutirão IA Ativado!)`));  
+app.listen(PORT, () => console.log(`🚀 SERVIDOR V120 ONLINE (Gemini 2.5 Flash Oficializado)`));
