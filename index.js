@@ -7,86 +7,7 @@ const app = express();
 app.use(express.json());
 
 // ==========================================
-// CONFIGURAÇÕES GERAIS E CHAVES
-// ==========================================
-const ZAPI_INSTANCE = process.env.ZAPI_INSTANCE || "3F14E2A7F66AC2180C0BBA4D31290A14";
-const ZAPI_TOKEN = process.env.ZAPI_TOKEN || "88F232A54C5DC27793994637";
-const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN || "F177679f2434d425e9a3e58ddec1d4cf0S"; 
-
-// A chave vem do Cofre Seguro do Render
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY; 
-
-const IGREEN_LOGIN_URL = "https://escritorio.igreenenergy.com.br/login"; 
-const IGREEN_MAPA_URL = "https://escritorio.igreenenergy.com.br/mapa-clientes";
-
-const IGREEN_USER = process.env.IGREEN_USER || "jorgeluizhouse@hotmail.com";
-const IGREEN_PASS = process.env.IGREEN_PASS || "@@Lkjdsa12345";
-
-const APP_ID = 'igreen-autoflow-v4';
-
-try {
-  const firebaseConfig = process.env.FIREBASE_CONFIG ? JSON.parse(process.env.FIREBASE_CONFIG) : null;
-  if (firebaseConfig && admin.apps.length === 0) {
-    admin.initializeApp({ credential: admin.credential.cert(firebaseConfig) });
-    console.log("✅ Banco de Dados Cloud ligado!");
-  }
-} catch (e) { console.error("Erro DB:", e.message); }
-
-const memoriaEstado = new Map();
-
-// Textos com Menu Interativo
-const TEXTOS = {
-    T_MENU: "👋 Olá! Bem-vindo ao *Atendimento Inteligente iGreen*. \n\nEscolha uma das opções abaixo enviando apenas o número:\n\n" +
-            "1️⃣ *Novo Cadastro* (Ler fatura e preparar contrato)\n" +
-            "2️⃣ *Guardar Fatura* (Apenas salvar no Banco de Dados)\n" +
-            "3️⃣ *Resgatar Dados* (Puxar dados do portal iGreen)\n\n" +
-            "_(Digite *0* a qualquer momento para cancelar e voltar a este menu)_",
-    T01: "Opção 1️⃣ selecionada! 🌿 \nPara prepararmos o seu desconto e gerar o contrato, por favor, me envie uma foto bem nítida (ou PDF) da sua conta de luz mais recente.",
-    T02: "Recebemos a sua fatura! 📄 A nossa Inteligência Artificial está a extrair os dados neste exato momento. Um momento...",
-    T_RESGATE_START: "Opção 3️⃣ selecionada! ⚡ \n*Módulo de Extração* ativado! Digite apenas o *Nome ou ID* do cliente (Ex: Robson Carlos ou 1119032):",
-    T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma iniciou a varredura profunda no *Escritório Virtual iGreen*...",
-    T_RESGATE_FAIL: "⚠️ O Robô varreu o código-fonte da iGreen, mas o cliente não possui CPF registado na tabela ou a busca falhou.",
-    T_GUARDAR_START: "Opção 2️⃣ selecionada! 💾 \n*Módulo de Pré-Cadastro* ativado! Envie apenas a foto ou PDF da *Fatura de Energia*. Eu vou extrair os dados e guardar no banco sem acionar o Robô RPA."
-};
-
-const CHROME_ARGS = [
-    "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", 
-    "--disable-gpu", "--single-process", "--no-zygote", "--js-flags=--expose-gc"
-];
-
-// ==========================================
-// FUNÇÕES AUXILIARES (Z-API & FIREBASE)
-// ==========================================
-async function enviarMensagem(phone, message) {
-    const numLimpo = String(phone).replace(/\D/g, ''); 
-    try { 
-        console.log(`[Z-API] Enviando mensagem para ${numLimpo}...`);
-        await axios.post(
-            `https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, 
-            { phone: numLimpo, message: String(message) }, 
-            { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN, 'Content-Type': 'application/json' } }
-        ); 
-        console.log(`[Z-API] ✅ Mensagem enviada!`);
-    } catch (e) {
-        console.error(`[Z-API] ❌ Erro:`, e.message);
-    }
-}
-
-async function salvarNoBanco(phone, dados) {
-    if (admin.apps.length > 0) {
-        try {
-            const db = admin.firestore();
-            await db.collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').doc(phone).set(
-                { ...dados, TELEFONE: phone, DATA_PROCESSAMENTO: admin.firestore.FieldValue.serverTimestamp() }, 
-                { merge: true }
-            );
-            console.log(`[FIREBASE] ✅ Dados salvos com sucesso para ${phone}`);
-        } catch (e) { console.error("Erro ao salvar no banco:", e.message); }
-    }
-}
-
-// ==========================================
-// MÓDULO 1: MOTOR DE INTELIGÊNCIA (GEMINI 2.0 FLASH FORÇADO)
+// MÓDULO 1: MOTOR DE INTELIGÊNCIA (GEMINI 3.1 PRO FORÇADO)
 // ==========================================
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     if (!GEMINI_API_KEY) {
@@ -118,18 +39,18 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         generationConfig: { responseMimeType: "application/json" }
     };
 
-    // SEM FALLBACKS! FORÇANDO O USO DO GEMINI 2.0 FLASH NA V1BETA
+    // V117: UPGRADE OFICIAL DE ACORDO COM A DOCUMENTAÇÃO DA GOOGLE (Gemini 3.1 Pro Preview)
     try {
-        console.log(`[GEMINI] Conectando FORÇADAMENTE na API (v1beta) com gemini-2.0-flash...`);
-        const endpointV2 = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${chaveLimpa}`;
-        const aiRes = await axios.post(endpointV2, payload);
+        console.log(`[GEMINI] Conectando na API Oficial com o modelo gemini-3.1-pro-preview...`);
+        const endpointV3 = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${chaveLimpa}`;
+        const aiRes = await axios.post(endpointV3, payload);
         return JSON.parse(aiRes.data.candidates[0].content.parts[0].text);
         
     } catch (error) {
-        // Se a Google recusar o 2.0, nós vamos imprimir o erro EXATO na tela preta.
+        // Radar de Erros Ativo
         const erroGoogle = error.response?.data ? JSON.stringify(error.response.data, null, 2) : error.message;
-        console.error("❌ [ERRO FATAL GEMINI 2.0 FLASH]:\n", erroGoogle);
-        throw new Error(`A API do Gemini 2.0 falhou. Verifique os logs no Render para ver o motivo exato.`);
+        console.error("❌ [ERRO FATAL GEMINI 3.1 PRO]:\n", erroGoogle);
+        throw new Error(`A API do Gemini 3.1 falhou. Verifique os logs no Render para ver o motivo exato.`);
     }
 }
 
@@ -342,4 +263,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 SERVIDOR V116 ONLINE (Gemini 2.0 Flash FORÇADO)`));
+app.listen(PORT, () => console.log(`🚀 SERVIDOR V117 ONLINE (Motor Gemini 3.1 Pro Ativado!)`));
