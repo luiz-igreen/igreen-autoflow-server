@@ -7,20 +7,19 @@ const app = express();
 app.use(express.json());
 
 // ==========================================
-// CONFIGURAÇÕES GERAIS E CHAVES
+// CONFIGURAÇÕES GERAIS E CHAVES (Agora puxando apenas do Render)
 // ==========================================
-const ZAPI_INSTANCE = process.env.ZAPI_INSTANCE || "3F14E2A7F66AC2180C0BBA4D31290A14";
-const ZAPI_TOKEN = process.env.ZAPI_TOKEN || "88F232A54C5DC27793994637";
-const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN || "F177679f2434d425e9a3e58ddec1d4cf0S"; 
+const ZAPI_INSTANCE = process.env.ZAPI_INSTANCE;
+const ZAPI_TOKEN = process.env.ZAPI_TOKEN;
+const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN; 
 
-// A chave vem do Cofre Seguro do Render
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY; 
 
-const IGREEN_LOGIN_URL = "[https://escritorio.igreenenergy.com.br/login](https://escritorio.igreenenergy.com.br/login)"; 
-const IGREEN_MAPA_URL = "[https://escritorio.igreenenergy.com.br/mapa-clientes](https://escritorio.igreenenergy.com.br/mapa-clientes)";
+const IGREEN_LOGIN_URL = "https://escritorio.igreenenergy.com.br/login"; 
+const IGREEN_MAPA_URL = "https://escritorio.igreenenergy.com.br/mapa-clientes";
 
-const IGREEN_USER = process.env.IGREEN_USER || "jorgeluizhouse@hotmail.com";
-const IGREEN_PASS = process.env.IGREEN_PASS || "@@Lkjdsa12345";
+const IGREEN_USER = process.env.IGREEN_USER;
+const IGREEN_PASS = process.env.IGREEN_PASS;
 
 const APP_ID = 'igreen-autoflow-v4';
 
@@ -99,7 +98,6 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
     const response = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
     const base64Data = Buffer.from(response.data, 'binary').toString('base64');
     
-    // Inovação - Usando System Instructions para blindar a IA
     const payload = {
         systemInstruction: {
             parts: [{ text: "Você é um auditor sênior de faturas de energia elétrica da iGreen Energy. Extraia os dados solicitados com precisão absoluta. Não adicione nenhum comentário ou texto fora do JSON." }]
@@ -110,7 +108,6 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
                 { inlineData: { mimeType: mimeType, data: base64Data } }
             ] 
         }],
-        // Inovação - JSON Schema Rígido (Força a resposta perfeita)
         generationConfig: { 
             responseMimeType: "application/json",
             responseSchema: {
@@ -128,10 +125,8 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         }
     };
 
-    // O Modelo de Produção Atualizado! Ativo e livre de erro 404.
     const endpointFinal = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${chaveLimpa}`;
 
-    // Retentativas Inteligentes (Exponential Backoff)
     let tentativas = 3;
     let atraso = 1000;
 
@@ -164,7 +159,8 @@ async function fluxoExtracaoDados(termoBusca, phone) {
     let browser;
     try {
         console.log(`[EXTRATOR] ⚠️ Iniciando Navegador Fantasma RPA...`);
-        browser = await puppeteer.launch({ headless: "new", args: CHROME_ARGS });
+        // Alterado de "new" para true
+        browser = await puppeteer.launch({ headless: true, args: CHROME_ARGS });
         const page = await browser.newPage();
         await page.setViewport({ width: 2560, height: 1440 });
         
@@ -365,9 +361,8 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 });
 
-// Defina a porta pegando a variável do ambiente do Render ou usando 3000 localmente
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
-});
+});  
