@@ -85,7 +85,7 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO 1: MOTOR DE INTELIGÊNCIA (GEMINI - CORRIGIDO V2)
+// MÓDULO 1: MOTOR DE INTELIGÊNCIA (GEMINI - VERSÃO FINAL)
 // ==========================================
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     if (!GEMINI_API_KEY) {
@@ -122,51 +122,40 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         generationConfig: { responseMimeType: "application/json" }
     };
 
-    // ESTRATÉGIA DE FALLBACK CORRIGIDA - APENAS MODELOS QUE EXISTEM
-    const modelos = [
-        { nome: "gemini-1.5-flash", versao: "v1beta", prioridade: 1 },
-        { nome: "gemini-1.5-pro", versao: "v1beta", prioridade: 2 }
-    ];
-
-    let ultimoErro = null;
-
-    for (const modelo of modelos) {
-        try {
-            const endpoint = `https://generativelanguage.googleapis.com/${modelo.versao}/models/${modelo.nome}:generateContent?key=${chaveLimpa}`;
-            console.log(`[GEMINI] Tentando ${modelo.nome} (${modelo.versao})...`);
-            
-            const aiRes = await axios.post(endpoint, payload, { timeout: 30000 });
-            
-            if (aiRes.data.candidates && aiRes.data.candidates[0].content.parts[0].text) {
-                console.log(`[GEMINI] ✅ Sucesso com ${modelo.nome}!`);
-                const resposta = aiRes.data.candidates[0].content.parts[0].text;
-                return JSON.parse(resposta);
-            }
-        } catch (error) {
-            const statusCode = error.response?.status;
-            const errorMsg = error.response?.data?.error?.message || error.message;
-            
-            ultimoErro = { statusCode, errorMsg, modelo: modelo.nome };
-            console.warn(`⚠️ [GEMINI] ${modelo.nome} falhou (${statusCode}): ${errorMsg}`);
-            
-            // Se for 429 (rate limit) ou 503 (serviço indisponível), joga exceção imediatamente
-            if (statusCode === 429 || statusCode === 503) {
-                throw new Error(`Serviço Gemini temporariamente indisponível (${statusCode}). Tente novamente em alguns instantes.`);
-            }
-            
-            // Se for 401 (não autorizado), joga exceção
-            if (statusCode === 401) {
-                throw new Error("Chave API do Gemini inválida ou expirada.");
-            }
-            
-            // Continua pro próximo modelo se for 404 ou outro erro
-            continue;
+    // VERSÃO FINAL: APENAS gemini-1.5-flash (modelo confirmado que funciona)
+    try {
+        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${chaveLimpa}`;
+        console.log(`[GEMINI] Conectando com gemini-1.5-flash (v1beta)...`);
+        
+        const aiRes = await axios.post(endpoint, payload, { timeout: 30000 });
+        
+        if (aiRes.data.candidates && aiRes.data.candidates[0].content.parts[0].text) {
+            console.log(`[GEMINI] ✅ Sucesso!`);
+            const resposta = aiRes.data.candidates[0].content.parts[0].text;
+            return JSON.parse(resposta);
         }
+    } catch (error) {
+        const statusCode = error.response?.status;
+        const errorMsg = error.response?.data?.error?.message || error.message;
+        
+        console.error(`[GEMINI] ❌ Erro (${statusCode}):`, errorMsg);
+        
+        // Mensagens de erro específicas
+        if (statusCode === 401) {
+            throw new Error("Chave API do Gemini inválida ou expirada. Verifique no Render.");
+        }
+        if (statusCode === 429) {
+            throw new Error("Limite de requisições atingido. Tente novamente em alguns instantes.");
+        }
+        if (statusCode === 503) {
+            throw new Error("Serviço Gemini temporariamente indisponível. Tente novamente em alguns instantes.");
+        }
+        if (statusCode === 404) {
+            throw new Error("Modelo Gemini não disponível. Verifique sua chave API e permissões.");
+        }
+        
+        throw new Error(`Erro ao processar documento: ${errorMsg}`);
     }
-
-    // Se chegou aqui, nenhum modelo funcionou
-    console.error("[GEMINI] Último erro:", ultimoErro);
-    throw new Error("Nenhum modelo Gemini disponível funcionou. Verifique sua chave API e tente novamente.");
 }
 
 // ==========================================
@@ -378,4 +367,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 SERVIDOR IGREEN ONLINE (Gemini v1beta - Modelos Validados)`));
+app.listen(PORT, () => console.log(`🚀 SERVIDOR IGREEN ONLINE (Gemini 1.5 Flash - Modelo Validado)`));
