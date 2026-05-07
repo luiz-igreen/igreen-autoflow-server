@@ -16,8 +16,8 @@ const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN || "F177679f2434d425e9a3
 // A chave vem do Cofre Seguro do Render
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY; 
 
-const IGREEN_LOGIN_URL = "https://escritorio.igreenenergy.com.br/login"; 
-const IGREEN_MAPA_URL = "https://escritorio.igreenenergy.com.br/mapa-clientes";
+const IGREEN_LOGIN_URL = "[https://escritorio.igreenenergy.com.br/login](https://escritorio.igreenenergy.com.br/login)"; 
+const IGREEN_MAPA_URL = "[https://escritorio.igreenenergy.com.br/mapa-clientes](https://escritorio.igreenenergy.com.br/mapa-clientes)";
 
 const IGREEN_USER = process.env.IGREEN_USER || "jorgeluizhouse@hotmail.com";
 const IGREEN_PASS = process.env.IGREEN_PASS || "@@Lkjdsa12345";
@@ -85,7 +85,7 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO 1: MOTOR IA (V124 - GEMINI 3 FLASH PREVIEW + JSON SCHEMA)
+// MÓDULO 1: MOTOR IA (V125 - GEMINI 3 FLASH PREVIEW + JSON SCHEMA)
 // ==========================================
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     if (!GEMINI_API_KEY) {
@@ -99,7 +99,7 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
     const response = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
     const base64Data = Buffer.from(response.data, 'binary').toString('base64');
     
-    // V124: Inovação - Usando System Instructions para blindar a IA
+    // Inovação - Usando System Instructions para blindar a IA
     const payload = {
         systemInstruction: {
             parts: [{ text: "Você é um auditor sênior de faturas de energia elétrica da iGreen Energy. Extraia os dados solicitados com precisão absoluta. Não adicione nenhum comentário ou texto fora do JSON." }]
@@ -110,7 +110,7 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
                 { inlineData: { mimeType: mimeType, data: base64Data } }
             ] 
         }],
-        // V124: Inovação - JSON Schema Rígido (Força a resposta perfeita)
+        // Inovação - JSON Schema Rígido (Força a resposta perfeita)
         generationConfig: { 
             responseMimeType: "application/json",
             responseSchema: {
@@ -128,7 +128,7 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         }
     };
 
-    // V124: O Modelo de Produção Atualizado! Ativo e livre de erro 404.
+    // O Modelo de Produção Atualizado! Ativo e livre de erro 404.
     const endpointFinal = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${chaveLimpa}`;
 
     // Retentativas Inteligentes (Exponential Backoff)
@@ -147,7 +147,7 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
             tentativas--;
             if (tentativas === 0) {
                 const erroGoogle = error.response?.data ? JSON.stringify(error.response.data, null, 2) : error.message;
-                console.error("❌ [ERRO FATAL GEMINI V124]:\n", erroGoogle);
+                console.error("❌ [ERRO FATAL GEMINI V125]:\n", erroGoogle);
                 throw new Error("A Inteligência Artificial da Google recusou o documento. Verifique os logs no Render.");
             }
             console.warn(`[GEMINI] A tentar novamente em ${atraso}ms...`);
@@ -366,4 +366,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 SERVIDOR V124 ONLINE (Gemini 3 Flash Preview + JSON Schema Ativado!)`));
+app.listen(PORT, () => console.log(`🚀 SERVIDOR V125 ONLINE (Sintaxe Corrigida + JSON Schema)`));
