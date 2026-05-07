@@ -7,6 +7,88 @@ const app = express();
 app.use(express.json());
 
 // ==========================================
+// CONFIGURAÇÕES GERAIS E CHAVES
+// ==========================================
+const ZAPI_INSTANCE = process.env.ZAPI_INSTANCE || "3F14E2A7F66AC2180C0BBA4D31290A14";
+const ZAPI_TOKEN = process.env.ZAPI_TOKEN || "88F232A54C5DC27793994637";
+const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN || "F177679f2434d425e9a3e58ddec1d4cf0S"; 
+
+// A chave vem do Cofre Seguro do Render
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY; 
+
+const IGREEN_LOGIN_URL = "https://escritorio.igreenenergy.com.br/login"; 
+const IGREEN_MAPA_URL = "https://escritorio.igreenenergy.com.br/mapa-clientes";
+
+const IGREEN_USER = process.env.IGREEN_USER || "jorgeluizhouse@hotmail.com";
+const IGREEN_PASS = process.env.IGREEN_PASS || "@@Lkjdsa12345";
+
+const APP_ID = 'igreen-autoflow-v4';
+
+try {
+  const firebaseConfig = process.env.FIREBASE_CONFIG ? JSON.parse(process.env.FIREBASE_CONFIG) : null;
+  if (firebaseConfig && admin.apps.length === 0) {
+    admin.initializeApp({ credential: admin.credential.cert(firebaseConfig) });
+    console.log("✅ Banco de Dados Cloud ligado!");
+  }
+} catch (e) { console.error("Erro DB:", e.message); }
+
+// ==========================================
+// CORREÇÃO CRÍTICA V118: RESTAURAÇÃO DA MEMÓRIA
+// ==========================================
+const memoriaEstado = new Map();
+
+// Textos com Menu Interativo
+const TEXTOS = {
+    T_MENU: "👋 Olá! Bem-vindo ao *Atendimento Inteligente iGreen*. \n\nEscolha uma das opções abaixo enviando apenas o número:\n\n" +
+            "1️⃣ *Novo Cadastro* (Ler fatura e preparar contrato)\n" +
+            "2️⃣ *Guardar Fatura* (Apenas salvar no Banco de Dados)\n" +
+            "3️⃣ *Resgatar Dados* (Puxar dados do portal iGreen)\n\n" +
+            "_(Digite *0* a qualquer momento para cancelar e voltar a este menu)_",
+    T01: "Opção 1️⃣ selecionada! 🌿 \nPara prepararmos o seu desconto e gerar o contrato, por favor, me envie uma foto bem nítida (ou PDF) da sua conta de luz mais recente.",
+    T02: "Recebemos a sua fatura! 📄 A nossa Inteligência Artificial está a extrair os dados neste exato momento. Um momento...",
+    T_RESGATE_START: "Opção 3️⃣ selecionada! ⚡ \n*Módulo de Extração* ativado! Digite apenas o *Nome ou ID* do cliente (Ex: Robson Carlos ou 1119032):",
+    T_RESGATE_BUSCANDO: "🔍 O Robô Fantasma iniciou a varredura profunda no *Escritório Virtual iGreen*...",
+    T_RESGATE_FAIL: "⚠️ O Robô varreu o código-fonte da iGreen, mas o cliente não possui CPF registado na tabela ou a busca falhou.",
+    T_GUARDAR_START: "Opção 2️⃣ selecionada! 💾 \n*Módulo de Pré-Cadastro* ativado! Envie apenas a foto ou PDF da *Fatura de Energia*. Eu vou extrair os dados e guardar no banco sem acionar o Robô RPA."
+};
+
+const CHROME_ARGS = [
+    "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", 
+    "--disable-gpu", "--single-process", "--no-zygote", "--js-flags=--expose-gc"
+];
+
+// ==========================================
+// FUNÇÕES AUXILIARES (Z-API & FIREBASE)
+// ==========================================
+async function enviarMensagem(phone, message) {
+    const numLimpo = String(phone).replace(/\D/g, ''); 
+    try { 
+        console.log(`[Z-API] Enviando mensagem para ${numLimpo}...`);
+        await axios.post(
+            `https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, 
+            { phone: numLimpo, message: String(message) }, 
+            { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN, 'Content-Type': 'application/json' } }
+        ); 
+        console.log(`[Z-API] ✅ Mensagem enviada!`);
+    } catch (e) {
+        console.error(`[Z-API] ❌ Erro:`, e.message);
+    }
+}
+
+async function salvarNoBanco(phone, dados) {
+    if (admin.apps.length > 0) {
+        try {
+            const db = admin.firestore();
+            await db.collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').doc(phone).set(
+                { ...dados, TELEFONE: phone, DATA_PROCESSAMENTO: admin.firestore.FieldValue.serverTimestamp() }, 
+                { merge: true }
+            );
+            console.log(`[FIREBASE] ✅ Dados salvos com sucesso para ${phone}`);
+        } catch (e) { console.error("Erro ao salvar no banco:", e.message); }
+    }
+}
+
+// ==========================================
 // MÓDULO 1: MOTOR DE INTELIGÊNCIA (GEMINI 3.1 PRO FORÇADO)
 // ==========================================
 async function analisarFaturaGemini(mediaUrl, mimeType) {
@@ -39,7 +121,7 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         generationConfig: { responseMimeType: "application/json" }
     };
 
-    // V117: UPGRADE OFICIAL DE ACORDO COM A DOCUMENTAÇÃO DA GOOGLE (Gemini 3.1 Pro Preview)
+    // V118: UPGRADE OFICIAL DE ACORDO COM A DOCUMENTAÇÃO DA GOOGLE (Gemini 3.1 Pro Preview)
     try {
         console.log(`[GEMINI] Conectando na API Oficial com o modelo gemini-3.1-pro-preview...`);
         const endpointV3 = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${chaveLimpa}`;
@@ -213,8 +295,9 @@ app.post('/webhook/igreen', async (req, res) => {
                     await enviarMensagem(phone, `✅ Fatura aprovada!\n👤 Titular: ${dadosIA.NOME_CLIENTE}\n⚡ Média: ${dadosIA.MEDIA_CONSUMO} kWh.\n\nTodos os dados foram enviados para a Central de Injeção. O consultor gerará o seu contrato em breve!`);
                     memoriaEstado.delete(phone); 
                 } catch (error) {
-                    console.error("❌ [ERRO AO SALVAR]:", error.message);
-                    await enviarMensagem(phone, "❌ A Inteligência Artificial teve dificuldade em ler este documento. Erro Interno (Ver logs no Render).");
+                    // Radar de Erros Ativo
+                    console.error("❌ [ERRO IA DETALHADO]:", error.response?.data ? JSON.stringify(error.response.data) : error.message);
+                    await enviarMensagem(phone, "❌ A Inteligência Artificial teve dificuldade em ler este documento. Pode tentar enviar uma foto mais nítida ou o PDF original?");
                 }
             } else {
                 await enviarMensagem(phone, "⚠️ Por favor, envie a foto ou o PDF da fatura para prosseguirmos. Ou digite *0* para voltar ao menu.");
@@ -242,8 +325,9 @@ app.post('/webhook/igreen', async (req, res) => {
                     await enviarMensagem(phone, `✅ Fatura lida e guardada no seu Banco de Dados!\n👤 Titular: ${dadosIA.NOME_CLIENTE}\n⚡ Média: ${dadosIA.MEDIA_CONSUMO} kWh.\n\n⚠️ Status: *Pendente de Documentos*. O Robô de injeção automática NÃO foi acionado. Quando o cliente tiver o RG/CNH em mãos, avise-me!`);
                     memoriaEstado.delete(phone); 
                 } catch (error) {
-                    console.error("❌ [ERRO AO SALVAR]:", error.message);
-                    await enviarMensagem(phone, "❌ A Inteligência Artificial teve dificuldade em ler este documento. Erro Interno (Ver logs no Render).");
+                    // Radar de Erros Ativo
+                    console.error("❌ [ERRO IA DETALHADO]:", error.response?.data ? JSON.stringify(error.response.data) : error.message);
+                    await enviarMensagem(phone, "❌ A Inteligência Artificial teve dificuldade em ler este documento. Pode tentar enviar uma foto mais nítida ou o PDF original?");
                 }
             } else {
                 await enviarMensagem(phone, "⚠️ Aguardando a sua Fatura. Envie a imagem/PDF ou digite *0* para cancelar.");
@@ -263,4 +347,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 SERVIDOR V117 ONLINE (Motor Gemini 3.1 Pro Ativado!)`));
+app.listen(PORT, () => console.log(`🚀 SERVIDOR V118 ONLINE (Gemini 3.1 Pro + Memória Restaurada)`));
