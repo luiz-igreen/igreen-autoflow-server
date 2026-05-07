@@ -85,7 +85,7 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO 1: MOTOR DE INTELIGÊNCIA (GEMINI - VERSÃO ESTÁVEL)
+// MÓDULO 1: MOTOR DE INTELIGÊNCIA (GEMINI - CORRIGIDO)
 // ==========================================
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     if (!GEMINI_API_KEY) {
@@ -117,12 +117,11 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
     - "CEP": CEP do endereço da instalação, se visível.
     `;
 
+    // CORREÇÃO: Remover generationConfig (não existe na v1)
     const payload = {
-        contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: mimeType, data: base64Data } }] }],
-        generationConfig: { responseMimeType: "application/json" }
+        contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: mimeType, data: base64Data } }] }]
     };
 
-    // VERSÃO ESTÁVEL: gemini-pro na v1 (modelo garantido)
     try {
         const endpoint = `https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${chaveLimpa}`;
         console.log(`[GEMINI] Conectando com gemini-pro (v1 - Estável)...`);
@@ -140,7 +139,6 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         
         console.error(`[GEMINI] ❌ Erro (${statusCode}):`, errorMsg);
         
-        // Mensagens de erro específicas
         if (statusCode === 401) {
             throw new Error("Chave API do Gemini inválida ou expirada. Verifique no Render.");
         }
@@ -150,8 +148,8 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         if (statusCode === 503) {
             throw new Error("Serviço Gemini temporariamente indisponível. Tente novamente em alguns instantes.");
         }
-        if (statusCode === 404) {
-            throw new Error("Modelo Gemini não disponível. Verifique sua chave API e permissões.");
+        if (statusCode === 400) {
+            throw new Error("Erro na requisição. Verifique o formato do documento.");
         }
         
         throw new Error(`Erro ao processar documento: ${errorMsg}`);
@@ -367,4 +365,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 SERVIDOR IGREEN ONLINE (Gemini Pro v1 - Modelo Estável)`));
+app.listen(PORT, () => console.log(`🚀 SERVIDOR IGREEN ONLINE (Gemini Pro v1 - Payload Corrigido)`));
