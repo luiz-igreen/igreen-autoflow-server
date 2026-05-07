@@ -365,5 +365,9 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 });
 
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 SERVIDOR V125 ONLINE (Sintaxe Corrigida + JSON Schema)`));
+// Defina a porta pegando a variável do ambiente do Render ou usando 3000 localmente
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+    console.log(`Servidor rodando na porta ${PORT}`);
+});
