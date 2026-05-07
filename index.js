@@ -89,7 +89,7 @@ async function salvarNoBanco(phone, dados) {
 }
 
 // ==========================================
-// MÓDULO 1: MOTOR IA (V120 - GEMINI 2.5 FLASH DEFINITIVO)
+// MÓDULO 1: MOTOR IA (V121 - NOME DE CÓDIGO EXATO + BACKOFF)
 // ==========================================
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     if (!GEMINI_API_KEY) {
@@ -120,19 +120,34 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         generationConfig: { responseMimeType: "application/json" }
     };
 
-    // V120: CÓDIGO DEFINITIVO BASEADO NO PRINT DO GOOGLE AI STUDIO DO LUIZ JORGE
-    // Utilizando exclusivamente o modelo 'gemini-2.5-flash' confirmado na conta.
-    const endpointFinal = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${chaveLimpa}`;
+    // V121: O Nome de Código EXATO que a Google exige nos bastidores da API para chaves novas
+    const endpointFinal = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${chaveLimpa}`;
 
-    try {
-        console.log(`[GEMINI] Conectando na API Oficial com o modelo gemini-2.5-flash...`);
-        const aiRes = await axios.post(endpointFinal, payload);
-        return JSON.parse(aiRes.data.candidates[0].content.parts[0].text);
-        
-    } catch (error) {
-        const erroGoogle = error.response?.data ? JSON.stringify(error.response.data, null, 2) : error.message;
-        console.error("❌ [ERRO FATAL GEMINI 2.5 FLASH]:\n", erroGoogle);
-        throw new Error(`A API do Gemini 2.5 Flash falhou. Veja os logs no Render para o motivo exato.`);
+    // SISTEMA ENTERPRISE: Retentativas Inteligentes (Exponential Backoff)
+    // Se a Google falhar, o sistema tenta 5 vezes secretamente antes de avisar o cliente
+    let tentativas = 5;
+    let atraso = 1000;
+
+    console.log(`[GEMINI] Conectando na API Oficial com o modelo secreto gemini-2.5-flash-preview-09-2025...`);
+
+    while (tentativas > 0) {
+        try {
+            const aiRes = await axios.post(endpointFinal, payload);
+            console.log(`[GEMINI] ✅ Sucesso na extração IA!`);
+            return JSON.parse(aiRes.data.candidates[0].content.parts[0].text);
+            
+        } catch (error) {
+            tentativas--;
+            if (tentativas === 0) {
+                // Só dispara erro real depois de tentar 5 vezes
+                const erroGoogle = error.response?.data ? JSON.stringify(error.response.data, null, 2) : error.message;
+                console.error("❌ [ERRO FATAL GEMINI V121]:\n", erroGoogle);
+                throw new Error("A Inteligência Artificial não conseguiu processar o documento neste momento. Por favor, tente novamente mais tarde.");
+            }
+            // Espera progressivamente (1s, 2s, 4s, 8s) antes da próxima tentativa invisível
+            await new Promise(r => setTimeout(r, atraso));
+            atraso *= 2; 
+        }
     }
 }
 
@@ -295,7 +310,7 @@ app.post('/webhook/igreen', async (req, res) => {
                     await enviarMensagem(phone, `✅ Fatura aprovada!\n👤 Titular: ${dadosIA.NOME_CLIENTE}\n⚡ Média: ${dadosIA.MEDIA_CONSUMO} kWh.\n\nTodos os dados foram enviados para a Central de Injeção. O consultor gerará o seu contrato em breve!`);
                     memoriaEstado.delete(phone); 
                 } catch (error) {
-                    // Radar de Erros Ativo
+                    // O erro só chega aqui se a IA falhar todas as 5 tentativas
                     console.error("❌ [ERRO IA DETALHADO]:", error.message);
                     await enviarMensagem(phone, "❌ A Inteligência Artificial teve dificuldade em ler este documento. Pode tentar enviar uma foto mais nítida ou o PDF original?");
                 }
@@ -325,7 +340,6 @@ app.post('/webhook/igreen', async (req, res) => {
                     await enviarMensagem(phone, `✅ Fatura lida e guardada no seu Banco de Dados!\n👤 Titular: ${dadosIA.NOME_CLIENTE}\n⚡ Média: ${dadosIA.MEDIA_CONSUMO} kWh.\n\n⚠️ Status: *Pendente de Documentos*. O Robô de injeção automática NÃO foi acionado. Quando o cliente tiver o RG/CNH em mãos, avise-me!`);
                     memoriaEstado.delete(phone); 
                 } catch (error) {
-                    // Radar de Erros Ativo
                     console.error("❌ [ERRO IA DETALHADO]:", error.message);
                     await enviarMensagem(phone, "❌ A Inteligência Artificial teve dificuldade em ler este documento. Pode tentar enviar uma foto mais nítida ou o PDF original?");
                 }
@@ -347,4 +361,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 SERVIDOR V120 ONLINE (Gemini 2.5 Flash Oficializado)`));
+app.listen(PORT, () => console.log(`🚀 SERVIDOR V121 ONLINE (API Definita + Retentativas)`));
