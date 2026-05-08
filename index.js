@@ -18,6 +18,7 @@ const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY; 
 
 const IGREEN_LOGIN_URL = "https://escritorio.igreenenergy.com.br"; 
+const IGREEN_MAPA_URL = "https://escritorio.igreenenergy.com.br/mapa-clientes";
 const EQUATORIAL_AL_URL = "https://al.equatorialenergia.com.br/siteantigo";
 
 const IGREEN_USER = process.env.IGREEN_USER;
@@ -36,23 +37,23 @@ try {
 const memoriaEstado = new Map();
 
 // ==========================================
-// TEXTOS NACIONALIZADOS
+// TEXTOS DA OPERAÇÃO
 // ==========================================
 const TEXTOS = {
     T_MENU: "👋 Olá! Bem-vindo ao *Atendimento Inteligente iGreen*. \n\nComo posso ajudar hoje? Escolha uma das opções abaixo enviando apenas o número:\n\n" +
             "1️⃣ *Novo Cadastro* (Analisar fatura e preparar o seu desconto)\n" +
             "2️⃣ *Pré-Cadastro* (Salvar dados da fatura)\n" +
-            "3️⃣ *Resolver Devolutiva* (Buscar fatura atualizada na distribuidora local e reenviar para a iGreen)\n" +
+            "3️⃣ *Resolver Devolutiva* (Automação completa Equatorial/iGreen)\n" +
             "4️⃣ *Enviar Documentos* (Anexar RG ou CNH pendentes)\n\n" +
             "_(Dica: Digite *0* a qualquer momento para voltar a este menu)_",
             
     T01: "Opção 1️⃣ selecionada! 🌿 \nPara prepararmos o seu desconto e o seu contrato, por favor, envie uma foto bem nítida (ou arquivo PDF) da sua conta de luz mais recente.",
     T02: "Recebemos o seu documento! 📄 A nossa assistente virtual está a analisar as informações neste exato momento. Só um instante...",
     
-    T_RESGATE_START: "Opção 3️⃣ selecionada! ⚡ \nPara buscarmos a sua fatura atualizada na sua *Distribuidora Local* e resolvermos a pendência de consumo, por favor, digite o seu **CPF**, sua **Data de Nascimento** e o número da **UC**, separados por um espaço.\n\n*(Ex: 12345678900 15/08/1985 987654)*:",
-    T_RESGATE_BUSCANDO: "🔍 Iniciando o robô de integração...\n\n1️⃣ Acessando a Distribuidora Local...\n2️⃣ Localizando a UC exata e baixando fatura...\n3️⃣ Injetando no painel de Devolutivas da iGreen...\n\nIsso pode levar alguns segundos, por favor aguarde...",
-    T_RESGATE_SUCESSO: "✅ Sucesso! A fatura atualizada foi resgatada da Distribuidora Local e anexada na aba de Devolutivas do seu escritório iGreen para reanálise. A sua pendência foi resolvida!",
-    T_RESGATE_FAIL: "⚠️ Ocorreu um erro ao tentar buscar a fatura ou acessar o painel da iGreen. Por favor, verifique se o CPF, Nascimento e UC estão corretos.",
+    T_RESGATE_START: "Opção 3️⃣ selecionada! ⚡ \nPara resolvermos a devolutiva, o robô vai buscar os dados no seu escritório, baixar a fatura na Distribuidora e anexar.\n\nPor favor, digite o **Nome do Cliente (ou ID)** e o número da **UC** no final, separados por espaço.\n\n*(Exemplo: Robson Carlos da Silva 987654)*:",
+    T_RESGATE_BUSCANDO: "🔍 Iniciando a Automação Total...\n\n1️⃣ Buscando CPF e Nascimento no relatório da iGreen...\n2️⃣ Acessando a Distribuidora Local...\n3️⃣ Baixando fatura atualizada da UC...\n4️⃣ Retornando à iGreen para injetar o documento...\n\nIsso pode levar alguns segundos, aguarde...",
+    T_RESGATE_SUCESSO: "✅ Sucesso Absoluto! A fatura atualizada foi resgatada e anexada na aba de Devolutivas do escritório iGreen. A sua pendência foi resolvida!",
+    T_RESGATE_FAIL: "⚠️ Ocorreu um erro no processo. Verifique se o Nome/ID e a UC estão corretos e se o cliente possui os dados completos no sistema.",
 
     T_GUARDAR_START: "Opção 2️⃣ selecionada! 💾 \n*Módulo de Pré-Cadastro* ativado!\nPor favor, envie a foto ou PDF da sua *Fatura de Energia*.",
     T_PEDIR_TELEFONE: "✅ Fatura analisada e salva!\n👤 Titular: ${nome}\n⚡ UC: ${uc}\n\nPara completarmos o seu pré-cadastro, digite o **Número de Telefone (com DDD)** do titular:",
@@ -131,7 +132,7 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
                     "DISTRIBUIDORA": { type: "STRING" }, "NOME_CLIENTE": { type: "STRING" }, "MASCARA_CPF": { type: "STRING" }, "CPF": { type: "STRING" },
                     "ENDERECO": { type: "STRING" }, "ENDERECO_NUMERO": { type: "STRING" }, "ENDERECO_COMPLEMENTO": { type: "STRING" },
                     "BAIRRO": { type: "STRING" }, "CIDADE": { type: "STRING" }, "ESTADO": { type: "STRING" }, "CEP": { type: "STRING" },
-                    "UC": { type: "STRING" }, "CONTA_MES": { type: "STRING" }, "VENCIMENTO": { type: "STRING" }, "VALOR_FATURA": { type: "STRING" }, "MEDIA_CONSUMO": { type: "STRING" }
+                    "UC": { type: "STRING" }, "CONTA_MES": { type: "STRING" }, "VENCIMENTO": { type: "STRING" }, "VALOR_FATURA": { type: "STRING" }, "MEDIA_CONSUMO": { type: "STRING" }, "DATA_NASCIMENTO": { type: "STRING" }
                 }
             }
         }
@@ -141,48 +142,86 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
 }
 
 // ==========================================
-// MÓDULO 2: EXTRATOR RPA (DEVOLUTIVAS MAPEADAS)
+// MÓDULO 2: EXTRATOR RPA TOTAL (IGREEN -> EQUATORIAL -> IGREEN)
 // ==========================================
-async function fluxoResgateDevolutiva(cpf, nascimento, uc, phone, isAutomated = false) {
+async function fluxoResgateDevolutiva(termoBuscaIgreen, uc, phone, cpfBanco = null, nascBanco = null, isAutomated = false) {
     let browser;
     const caminhoFaturaLocal = path.join('/tmp', `fatura_${Date.now()}.pdf`);
-    let pdfInterceptado = false;
+    let cpf = cpfBanco;
+    let nascimento = nascBanco;
 
     try {
         browser = await puppeteer.launch({ headless: true, args: CHROME_ARGS });
         const page = await browser.newPage();
-        
-        // INTERCEPTADOR: Configura o robô para roubar o PDF da rede quando ele tentar abrir
+
+        // ---------------------------------------------------------
+        // ETAPA 1: EXTRAIR CPF/NASCIMENTO NA IGREEN (Se não fornecido pelo CRON)
+        // ---------------------------------------------------------
+        if (!cpf || !nascimento) {
+            console.log(`[RPA] ETAPA 1: Buscando dados de ${termoBuscaIgreen} na iGreen...`);
+            await page.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+            
+            try { await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Começar')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
+            
+            await page.waitForSelector('input[type="email"]');
+            await page.type('input[type="email"]', IGREEN_USER);
+            await page.type('input[type="password"]', IGREEN_PASS);
+            await page.keyboard.press('Enter');
+            await new Promise(r => setTimeout(r, 6000));
+
+            try { await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
+
+            await page.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2' });
+            await new Promise(r => setTimeout(r, 6000));
+
+            const searchInput = await page.waitForSelector('input[placeholder*="Pesquisar" i]');
+            await searchInput.type(termoBuscaIgreen); 
+            await page.keyboard.press('Enter');
+            await new Promise(r => setTimeout(r, 4000));
+
+            const dadosExtraidos = await page.evaluate((busca) => {
+                const linha = Array.from(document.querySelectorAll('tr')).find(tr => tr.textContent.toLowerCase().includes(busca.toLowerCase()));
+                if (!linha) return null;
+                const cpfMatch = linha.textContent.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
+                const dataMatch = linha.textContent.match(/\d{2}\/\d{2}\/\d{4}/g);
+                return { cpfExt: cpfMatch ? cpfMatch[0] : null, nascExt: dataMatch ? dataMatch[0] : null };
+            }, termoBuscaIgreen);
+
+            if (!dadosExtraidos || !dadosExtraidos.cpfExt || !dadosExtraidos.nascExt) {
+                throw new Error("Não foi possível localizar o CPF ou Nascimento no relatório da iGreen.");
+            }
+
+            cpf = dadosExtraidos.cpfExt.replace(/\D/g, '');
+            nascimento = dadosExtraidos.nascExt;
+            console.log(`[RPA] Sucesso na Etapa 1! CPF: ${cpf} | Nasc: ${nascimento}`);
+        }
+
+        // INTERCEPTADOR DE PDF (Prepara para a Etapa 2)
         page.on('response', async (response) => {
             const contentType = response.headers()['content-type'];
             if (contentType && contentType.includes('application/pdf')) {
                 console.log("[RPA] ✅ PDF Detectado na rede! Capturando buffer...");
                 const buffer = await response.buffer();
                 fs.writeFileSync(caminhoFaturaLocal, buffer);
-                pdfInterceptado = true;
                 console.log("[RPA] 📄 Arquivo PDF gravado com sucesso no servidor.");
             }
         });
-        
-        // --- ETAPA A: DISTRIBUIDORA LOCAL (EQUATORIAL AL) ---
-        console.log(`[RPA] Acessando Equatorial AL -> Doc: ${cpf} | Nasc: ${nascimento}`);
+
+        // ---------------------------------------------------------
+        // ETAPA 2: BAIXAR FATURA NA EQUATORIAL AL
+        // ---------------------------------------------------------
+        console.log(`[RPA] ETAPA 2: Acessando Equatorial AL...`);
         await page.goto(EQUATORIAL_AL_URL, { waitUntil: 'networkidle2', timeout: 60000 });
 
-        // 1. Termos de Privacidade ("Li e Entendi" e "Enviar")
         try {
             await page.evaluate(() => {
-                const check = document.querySelector('input[type="checkbox"]');
-                if(check) check.click();
-                const btnEnviar = Array.from(document.querySelectorAll('button, div, span')).find(el => el.textContent.toUpperCase().includes('ENVIAR'));
-                if(btnEnviar) btnEnviar.click();
-                const btnFechar = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase().includes('FECHAR'));
-                if(btnFechar) btnFechar.click();
+                const check = document.querySelector('input[type="checkbox"]'); if(check) check.click();
+                const btnEnviar = Array.from(document.querySelectorAll('button, div, span')).find(el => el.textContent.toUpperCase().includes('ENVIAR')); if(btnEnviar) btnEnviar.click();
+                const btnFechar = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase().includes('FECHAR')); if(btnFechar) btnFechar.click();
             });
             await new Promise(r => setTimeout(r, 2000));
-        } catch(e) { console.log("[RPA] Banner LGPD não encontrado, seguindo..."); }
+        } catch(e) {}
 
-        // 2. Login (CPF e Nascimento)
-        // O robô tenta achar qualquer input que pareça CPF ou Nascimento usando seletores genéricos e seguros
         await page.evaluate((cpfBusca, nascBusca) => {
             const inputs = document.querySelectorAll('input');
             inputs.forEach(input => {
@@ -194,26 +233,20 @@ async function fluxoResgateDevolutiva(cpf, nascimento, uc, phone, isAutomated = 
         }, cpf, nascimento);
         await new Promise(r => setTimeout(r, 5000));
 
-        // 3. Selecionar a Conta Contrato (UC)
-        console.log(`[RPA] Procurando e selecionando a UC Exata: ${uc}...`);
         await page.evaluate((alvoUc) => {
             const btnSair = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase().includes('SAIR'));
-            if(btnSair) btnSair.click(); // Limpa caixinha se estiver preenchida com outro imóvel
-            
-            // Clica na UC correspondente na lista que aparecer
+            if(btnSair) btnSair.click(); 
             const elemUc = Array.from(document.querySelectorAll('span, div, option, li, p')).find(el => el.textContent.includes(alvoUc));
             if(elemUc) elemUc.click();
         }, uc);
         await new Promise(r => setTimeout(r, 3000));
 
-        // 4. Clicar em "Emitir segunda via e consultar débito"
         await page.evaluate(() => {
             const btn2via = Array.from(document.querySelectorAll('span, a, div, button')).find(el => el.textContent.toLowerCase().includes('segunda via'));
             if(btn2via) btn2via.click();
         });
         await new Promise(r => setTimeout(r, 4000));
 
-        // 5. Clicar no Valor (R$) e "VER FATURA"
         await page.evaluate(() => {
             const valorFatura = Array.from(document.querySelectorAll('span, td, div')).find(el => el.textContent.includes('R$'));
             if(valorFatura) valorFatura.click();
@@ -225,27 +258,16 @@ async function fluxoResgateDevolutiva(cpf, nascimento, uc, phone, isAutomated = 
             if(btnVerFatura) btnVerFatura.click();
         });
         
-        console.log("[RPA] Aguardando o download do PDF em background...");
-        await new Promise(r => setTimeout(r, 8000)); // Espera 8 segundos pro PDF ser capturado pela rede
-        
-        // Verifica se o PDF foi baixado
-        if (!fs.existsSync(caminhoFaturaLocal)) {
-            throw new Error("Falha ao capturar o PDF na Equatorial.");
-        }
+        await new Promise(r => setTimeout(r, 8000)); 
+        if (!fs.existsSync(caminhoFaturaLocal)) throw new Error("Falha ao capturar o PDF na Equatorial.");
 
-        // --- ETAPA B: INJEÇÃO NA IGREEN ---
-        console.log(`[RPA] Etapa A concluída! Acessando portal iGreen para injeção...`);
-        await page.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
-
-        try { await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Começar')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
-
-        await page.waitForSelector('input[type="email"]');
-        await page.type('input[type="email"]', IGREEN_USER);
-        await page.type('input[type="password"]', IGREEN_PASS);
-        await page.keyboard.press('Enter');
-        await new Promise(r => setTimeout(r, 6000));
-
-        try { await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
+        // ---------------------------------------------------------
+        // ETAPA 3: INJEÇÃO NA DEVOLUTIVA DA IGREEN
+        // ---------------------------------------------------------
+        console.log(`[RPA] ETAPA 3: Injetando na iGreen...`);
+        // Como já estamos logados no mesmo navegador, apenas voltamos para a tela inicial
+        await page.goto("https://escritorio.igreenenergy.com.br", { waitUntil: 'networkidle2' });
+        await new Promise(r => setTimeout(r, 4000));
 
         await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('span, div')).find(el => el.textContent.trim() === 'Clientes'); if(btn) btn.click(); });
         await new Promise(r => setTimeout(r, 4000));
@@ -253,15 +275,11 @@ async function fluxoResgateDevolutiva(cpf, nascimento, uc, phone, isAutomated = 
         await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('span, div, p')).find(el => el.textContent.trim() === 'Green'); if(btn) btn.click(); });
         await new Promise(r => setTimeout(r, 4000));
 
-        // 1. Pesquisa CPF na iGreen
-        console.log(`[RPA] Pesquisando cliente pelo CPF: ${cpf}...`);
-        const searchInput = await page.waitForSelector('input[placeholder*="Pesquisar"]');
-        await searchInput.type(cpf);
+        const searchDevolutiva = await page.waitForSelector('input[placeholder*="Pesquisar"]');
+        await searchDevolutiva.type(cpf);
         await page.keyboard.press('Enter');
         await new Promise(r => setTimeout(r, 4000));
 
-        // 2. Trava de segurança: Acha a linha exata da UC
-        console.log(`[RPA] Cruzando dados: Procurando a UC ${uc} na lista de imóveis...`);
         await page.evaluate((alvoUc) => { 
             const linhas = Array.from(document.querySelectorAll('tr')); 
             const linhaExata = linhas.find(row => row.textContent.includes(alvoUc)); 
@@ -272,28 +290,22 @@ async function fluxoResgateDevolutiva(cpf, nascimento, uc, phone, isAutomated = 
         }, uc);
         await new Promise(r => setTimeout(r, 2000));
 
-        // 3. Menu Devolutivas > Realizar ação
         await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('span, li, div')).find(el => el.textContent.includes('Devolutivas')); if(btn) btn.click(); });
         await new Promise(r => setTimeout(r, 3000));
 
         await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, span, div')).find(el => el.textContent.includes('Realizar ação')); if(btn) btn.click(); });
         await new Promise(r => setTimeout(r, 3000));
 
-        // 4. O UPLOAD FÍSICO DO ARQUIVO PDF
-        console.log(`[RPA] Realizando UPLOAD do documento atualizado na iGreen...`);
         const [fileChooser] = await Promise.all([
             page.waitForFileChooser(),
-            // Clica no botão que aciona a janela de seleção de arquivo do Windows/Navegador
             page.evaluate(() => { 
                 const b = Array.from(document.querySelectorAll('*')).find(el => el.textContent.includes('Selecionar arquivo') || el.type === 'file'); 
                 if (b) b.click(); 
             })
         ]);
-        // Injeta o arquivo do servidor no botão virtual
         await fileChooser.accept([caminhoFaturaLocal]);
         await new Promise(r => setTimeout(r, 2000));
 
-        // 5. Clica no botão final de enviar/salvar
         await page.evaluate(() => { 
             const btnSalvar = Array.from(document.querySelectorAll('button')).find(el => el.textContent.toUpperCase().includes('ENVIAR') || el.textContent.toUpperCase().includes('SALVAR')); 
             if (btnSalvar) btnSalvar.click(); 
@@ -301,16 +313,14 @@ async function fluxoResgateDevolutiva(cpf, nascimento, uc, phone, isAutomated = 
         await new Promise(r => setTimeout(r, 4000));
         
         await browser.close();
-
-        // Apaga o arquivo temporário do servidor para não lotar o disco
-        fs.unlinkSync(caminhoFaturaLocal);
+        if(fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
 
         if(!isAutomated) await enviarMensagem(phone, TEXTOS.T_RESGATE_SUCESSO);
         
     } catch (e) { 
         console.error("Erro RPA Devolutivas:", e);
         if(browser) await browser.close(); 
-        if(fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal); // Apaga lixo se der erro
+        if(fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
         if(!isAutomated) await enviarMensagem(phone, TEXTOS.T_RESGATE_FAIL);
     }
 }
@@ -334,7 +344,8 @@ function iniciarMotorRecorrente() {
                     
                     if (diasPassados >= 15) {
                         console.log(`🔄 [CRON] 15 dias atingidos. RPA automático para UC: ${lead.UC}`);
-                        fluxoResgateDevolutiva(lead.CPF, lead.DATA_NASCIMENTO, lead.UC, lead.TELEFONE_REMETENTE, true);
+                        // No CRON, o robô já manda o CPF e Nasc, então ele PULA a Etapa 1 e vai direto pra Equatorial!
+                        fluxoResgateDevolutiva(lead.NOME_CLIENTE, lead.UC, lead.TELEFONE_REMETENTE, lead.CPF, lead.DATA_NASCIMENTO, true);
                         await salvarNoBanco(doc.id, lead.TELEFONE_REMETENTE, { STATUS_CADASTRO: 'PENDENTE_MEDIA' }); 
                     }
                 });
@@ -424,18 +435,18 @@ app.post('/webhook/igreen', async (req, res) => {
         }
 
         case 'AGUARDANDO_DADOS_DEVOLUTIVA': {
-            const dadosSplit = textoIn.split(' ').filter(v => v.trim() !== '');
-            if (dadosSplit.length >= 3) {
-                const cpf = dadosSplit[0].replace(/\D/g, ''); 
-                const nascimento = dadosSplit[1]; 
-                const uc = dadosSplit[2].replace(/\D/g, ''); 
+            // Inteligência para separar o Nome da UC no final
+            const partes = textoIn.split(' ').filter(v => v.trim() !== '');
+            if (partes.length >= 2) {
+                const uc = partes.pop().replace(/\D/g, ''); // O último bloco é a UC
+                const termoBusca = partes.join(' '); // O resto é o Nome ou ID
                 
                 await enviarMensagem(phone, TEXTOS.T_RESGATE_BUSCANDO);
                 memoriaEstado.delete(phone); 
                 
-                setTimeout(() => { fluxoResgateDevolutiva(cpf, nascimento, uc, phone, false); }, 2000);
+                setTimeout(() => { fluxoResgateDevolutiva(termoBusca, uc, phone, null, null, false); }, 2000);
             } else {
-                await enviarMensagem(phone, "⚠️ Formato inválido. Digite o CPF, Data de Nascimento e UC separados por espaço.");
+                await enviarMensagem(phone, "⚠️ Formato inválido. Digite o Nome (ou ID) e a UC no final.\nEx: Robson Carlos 987654");
             }
             break;
         }
@@ -510,4 +521,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Rodando na porta ${PORT}`));    
+app.listen(PORT, () => console.log(`Rodando na porta ${PORT}`));
