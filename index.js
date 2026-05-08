@@ -49,8 +49,12 @@ const TEXTOS = {
     T_RESGATE_BUSCANDO: "🔍 Aguarde um momento. Estou buscando as informações de forma segura no sistema...",
     T_RESGATE_FAIL: "⚠️ Não consegui localizar este cliente no sistema. Por favor, verifique se o Nome ou ID estão digitados corretamente.",
     T_GUARDAR_START: "Opção 2️⃣ selecionada! 💾 \n*Módulo de Pré-Cadastro* ativado!\nPor favor, envie a foto ou PDF da sua *Fatura de Energia*. Vou analisar os dados e deixá-los salvos com total segurança no nosso sistema.",
-    T_PEDIR_NASCIMENTO: "✅ Fatura analisada e salva com segurança!\n👤 Titular: ${nome}\n⚡ Unidade Consumidora: ${uc}\n💰 Valor: R$ ${valor}\n\nPara facilitar emissões de *Segunda Via* no futuro, por favor, digite a sua **Data de Nascimento** (Ex: 15/08/1985):",
-    T_FIM_PRE_CADASTRO: "Obrigado! 📅 Data de nascimento salva no seu perfil.\n\n⚠️ *Aviso Importante:* O seu cadastro está 'Pendente de Documentos'. Como você já é cliente iGreen, não há pressa! Quando quiser atualizar nosso sistema com a foto do seu documento (RG ou CNH), basta voltar a este atendimento e escolher a **Opção 4**.",
+    
+    // NOVOS TEXTOS DE COLETA DE DADOS (OPÇÃO 2)
+    T_PEDIR_TELEFONE: "✅ Fatura analisada e salva com segurança!\n👤 Titular: ${nome}\n⚡ UC: ${uc}\n\nPara completarmos o seu pré-cadastro, por favor, digite o **Número de Telefone (com DDD)** do titular:",
+    T_PEDIR_EMAIL: "Ótimo! 📱 Telefone salvo.\n\nAgora, por favor, digite o **melhor E-mail** do titular:",
+    T_FIM_PRE_CADASTRO: "Perfeito! 📧 E-mail salvo no seu perfil.\n\n⚠️ *Aviso Importante:* O seu cadastro está 'Pendente de Documentos'. Como você já é cliente iGreen, não há pressa! Quando quiser atualizar nosso sistema com a foto do seu documento (Frente e Verso), basta voltar a este atendimento e escolher a **Opção 4**.",
+    
     T_START_OPCAO_4: "Opção 4️⃣ selecionada! 📎\nPara anexarmos o documento no imóvel correto, por favor, digite primeiro o número da sua **UC (Unidade Consumidora) ou Conta Contrato** (apenas os números):",
     T_PEDIR_FOTO_DOC_FRENTE: "🔍 Imóvel localizado! \n\nPara seguirmos o padrão da distribuidora, por favor, envie agora uma foto legível apenas da **FRENTE** do seu Documento de Identificação (RG ou CNH):",
     T_PEDIR_FOTO_DOC_VERSO: "✅ Frente recebida e salva!\n\nAgora, para concluirmos, por favor envie a foto do **VERSO** do mesmo documento:",
@@ -102,7 +106,7 @@ async function salvarNoBanco(docId, phone, dadosExtras) {
 }
 
 // ==========================================
-// MÓDULO 1: MOTOR IA (ORGANIZAÇÃO DE FATURA)
+// MÓDULO 1: MOTOR IA
 // ==========================================
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     if (!GEMINI_API_KEY) throw new Error("Chave do Gemini ausente.");
@@ -120,7 +124,7 @@ Se um dado não estiver visível, deixe vazio.`;
         },
         contents: [{ 
             parts: [
-                { text: "Analise esta fatura e extraia os dados organizadamente conforme o esquema solicitado." }, 
+                { text: "Analise esta fatura e extraia os dados organizadamente." }, 
                 { inlineData: { mimeType: mimeType, data: base64Data } }
             ] 
         }],
@@ -131,20 +135,20 @@ Se um dado não estiver visível, deixe vazio.`;
                 properties: {
                     "DISTRIBUIDORA": { type: "STRING" },
                     "NOME_CLIENTE": { type: "STRING" },
-                    "MASCARA_CPF": { type: "STRING", description: "CPF com asteriscos da LGPD" },
-                    "CPF": { type: "STRING", description: "Números visíveis do CPF" },
+                    "MASCARA_CPF": { type: "STRING" },
+                    "CPF": { type: "STRING" },
                     "ENDERECO": { type: "STRING" },
                     "ENDERECO_NUMERO": { type: "STRING" },
-                    "ENDERECO_COMPLEMENTO": { type: "STRING", description: "Bloco, Apto, Casa, Quadra, etc" },
+                    "ENDERECO_COMPLEMENTO": { type: "STRING" },
                     "BAIRRO": { type: "STRING" },
                     "CIDADE": { type: "STRING" },
-                    "ESTADO": { type: "STRING", description: "Sigla UF" },
+                    "ESTADO": { type: "STRING" },
                     "CEP": { type: "STRING" },
-                    "UC": { type: "STRING", description: "Número da UC ou Conta Contrato" },
-                    "CONTA_MES": { type: "STRING", description: "Mês/Ano referência" },
+                    "UC": { type: "STRING" },
+                    "CONTA_MES": { type: "STRING" },
                     "VENCIMENTO": { type: "STRING" },
-                    "VALOR_FATURA": { type: "STRING", description: "Valor total a pagar em R$" },
-                    "MEDIA_CONSUMO": { type: "STRING", description: "Média calculada de 6 meses em kWh" }
+                    "VALOR_FATURA": { type: "STRING" },
+                    "MEDIA_CONSUMO": { type: "STRING" }
                 },
                 required: ["DISTRIBUIDORA", "NOME_CLIENTE", "MASCARA_CPF", "CPF", "ENDERECO", "ENDERECO_NUMERO", "ENDERECO_COMPLEMENTO", "BAIRRO", "CIDADE", "ESTADO", "CEP", "UC", "CONTA_MES", "VENCIMENTO", "VALOR_FATURA", "MEDIA_CONSUMO"]
             }
@@ -163,7 +167,7 @@ Se um dado não estiver visível, deixe vazio.`;
 }
 
 // ==========================================
-// MÓDULO 2: EXTRATOR RPA (MANTIDO)
+// MÓDULO 2: EXTRATOR RPA
 // ==========================================
 async function fluxoExtracaoDados(termoBusca, phone) {
     let browser;
@@ -248,22 +252,35 @@ app.post('/webhook/igreen', async (req, res) => {
                     const dadosIA = await analisarFaturaGemini(mediaUrl, mimeType);
                     const docId = (dadosIA.UC && dadosIA.UC !== "Não extraído" && dadosIA.UC !== "") ? dadosIA.UC.replace(/\D/g, '') : `SEM_UC_${Date.now()}`;
                     
-                    await salvarNoBanco(docId, phone, { ...dadosIA, LINK_FATURA: mediaUrl, STATUS_CADASTRO: "AGUARDANDO_NASCIMENTO" });
-                    memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_NASCIMENTO', docId: docId });
+                    await salvarNoBanco(docId, phone, { ...dadosIA, LINK_FATURA: mediaUrl, STATUS_CADASTRO: "AGUARDANDO_TELEFONE" });
                     
-                    const msgNasc = TEXTOS.T_PEDIR_NASCIMENTO.replace('${nome}', dadosIA.NOME_CLIENTE).replace('${uc}', dadosIA.UC).replace('${valor}', dadosIA.VALOR_FATURA);
-                    await enviarMensagem(phone, msgNasc);
+                    // Vai para o próximo passo: Pedir Telefone
+                    memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_TELEFONE', docId: docId });
+                    
+                    const msgTel = TEXTOS.T_PEDIR_TELEFONE.replace('${nome}', dadosIA.NOME_CLIENTE).replace('${uc}', dadosIA.UC);
+                    await enviarMensagem(phone, msgTel);
                 } catch (e) { await enviarMensagem(phone, "❌ Erro na análise. Tente novamente."); }
             }
             break;
 
-        case 'AGUARDANDO_NASCIMENTO':
+        case 'AGUARDANDO_TELEFONE':
             if (textoIn.length >= 8) { 
                 const docId = mem.docId; 
-                await salvarNoBanco(docId, phone, { DATA_NASCIMENTO: textoIn, STATUS_CADASTRO: "PENDENTE_DOCUMENTOS" });
+                await salvarNoBanco(docId, phone, { TELEFONE: textoIn, STATUS_CADASTRO: "AGUARDANDO_EMAIL" });
+                
+                // Vai para o próximo passo: Pedir Email
+                memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_EMAIL', docId: docId });
+                await enviarMensagem(phone, TEXTOS.T_PEDIR_EMAIL);
+            } else { await enviarMensagem(phone, "⚠️ Digite um telefone válido ou digite *0* para cancelar."); }
+            break;
+
+        case 'AGUARDANDO_EMAIL':
+            if (textoIn.includes('@')) { 
+                const docId = mem.docId; 
+                await salvarNoBanco(docId, phone, { EMAIL: textoIn, STATUS_CADASTRO: "PENDENTE_DOCUMENTOS" });
                 await enviarMensagem(phone, TEXTOS.T_FIM_PRE_CADASTRO);
-                memoriaEstado.delete(phone); 
-            } else { await enviarMensagem(phone, "⚠️ Digite uma data válida."); }
+                memoriaEstado.delete(phone); // Fim do fluxo de Pré-Cadastro!
+            } else { await enviarMensagem(phone, "⚠️ Digite um E-mail válido contendo '@' ou digite *0* para cancelar."); }
             break;
 
         case 'AGUARDANDO_TERMO_RESGATE':
@@ -274,7 +291,6 @@ app.post('/webhook/igreen', async (req, res) => {
             }
             break;
 
-        // --- FLUXO DA OPÇÃO 4 EM 2 PASSOS (FRENTE E VERSO) ---
         case 'AGUARDANDO_UC_DOC':
             if (textoIn.length >= 4) { 
                 const ucLimpa = textoIn.replace(/\D/g, '');
@@ -286,27 +302,19 @@ app.post('/webhook/igreen', async (req, res) => {
         case 'AGUARDANDO_DOC_FRENTE': 
             if (temMidia) {
                 const docId = mem.docId; 
-                // Salva a frente com a nomenclatura exata que o seu Dashboard HTML exige
                 await salvarNoBanco(docId, phone, { LINK_DOC_FRENTE: mediaUrl });
-                
-                // Muda o status para pedir o verso
                 memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO', docId: docId });
                 await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_VERSO);
-            } else {
-                await enviarMensagem(phone, "⚠️ Por favor, envie a imagem da FRENTE do documento ou digite *0* para cancelar.");
-            }
+            } else { await enviarMensagem(phone, "⚠️ Envie a imagem da FRENTE do documento."); }
             break;
 
         case 'AGUARDANDO_DOC_VERSO': 
             if (temMidia) {
                 const docId = mem.docId; 
-                // Salva o verso e muda o status para Concluído
                 await salvarNoBanco(docId, phone, { LINK_DOC_VERSO: mediaUrl, STATUS_CADASTRO: "CONCLUIDO_COM_DOCS" });
                 await enviarMensagem(phone, TEXTOS.T_DOCS_RECEBIDOS);
-                memoriaEstado.delete(phone); // Fim do fluxo!
-            } else {
-                await enviarMensagem(phone, "⚠️ Por favor, envie a imagem do VERSO do documento ou digite *0* para cancelar.");
-            }
+                memoriaEstado.delete(phone);
+            } else { await enviarMensagem(phone, "⚠️ Envie a imagem do VERSO do documento."); }
             break;
     }
 });
