@@ -49,7 +49,7 @@ const TEXTOS = {
     T_RESGATE_BUSCANDO: "🔍 Aguarde um momento. Estou buscando as informações de forma segura no sistema...",
     T_RESGATE_FAIL: "⚠️ Não consegui localizar este cliente no sistema. Por favor, verifique se o Nome ou ID estão digitados corretamente.",
     T_GUARDAR_START: "Opção 2️⃣ selecionada! 💾 \n*Módulo de Pré-Cadastro* ativado!\nPor favor, envie a foto ou PDF da sua *Fatura de Energia*. Vou analisar os dados e deixá-los salvos com total segurança no nosso sistema.",
-    T_PEDIR_NASCIMENTO: "✅ Fatura analisada e salva com segurança!\n👤 Titular: ${nome}\n⚡ Unidade Consumidora: ${uc}\n\nPara facilitar emissões de *Segunda Via* no futuro, por favor, digite a sua **Data de Nascimento** (Ex: 15/08/1985):",
+    T_PEDIR_NASCIMENTO: "✅ Fatura analisada e salva com segurança!\n👤 Titular: ${nome}\n⚡ Unidade Consumidora: ${uc}\n💰 Valor: R$ ${valor}\n\nPara facilitar emissões de *Segunda Via* no futuro, por favor, digite a sua **Data de Nascimento** (Ex: 15/08/1985):",
     T_FIM_PRE_CADASTRO: "Obrigado! 📅 Data de nascimento salva no seu perfil.\n\n⚠️ *Aviso Importante:* O seu cadastro está 'Pendente de Documentos'. Como você já é cliente iGreen, não há pressa! Quando quiser atualizar nosso sistema com a foto do seu documento (RG ou CNH), basta voltar a este atendimento e escolher a **Opção 4**.",
     T_START_OPCAO_4: "Opção 4️⃣ selecionada! 📎\nPara anexarmos o documento no imóvel correto, por favor, digite primeiro o número da sua **UC (Unidade Consumidora) ou Conta Contrato** (apenas os números):",
     T_PEDIR_FOTO_DOC: "🔍 Imóvel localizado e pronto para atualização! \n\nAgora, por favor, envie a **foto legível do seu Documento de Identificação (RG ou CNH)**:",
@@ -90,7 +90,7 @@ async function salvarNoBanco(docId, phone, dadosExtras) {
                 { 
                     ...dadosLimpos, 
                     TELEFONE_REMETENTE: phone, 
-                    DATA_PROCESSAMENTO: admin.firestore.FieldValue.serverTimestamp(), // Corrigido para o Dashboard!
+                    DATA_PROCESSAMENTO: admin.firestore.FieldValue.serverTimestamp(),
                     DATA_ULTIMA_ATUALIZACAO: admin.firestore.FieldValue.serverTimestamp()
                 }, 
                 { merge: true } 
@@ -101,7 +101,7 @@ async function salvarNoBanco(docId, phone, dadosExtras) {
 }
 
 // ==========================================
-// MÓDULO 1: MOTOR IA (OCR AVANÇADO)
+// MÓDULO 1: MOTOR IA (ORGANIZAÇÃO DE FATURA)
 // ==========================================
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     if (!GEMINI_API_KEY) throw new Error("Chave do Gemini ausente.");
@@ -109,9 +109,9 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
     const response = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
     const base64Data = Buffer.from(response.data, 'binary').toString('base64');
     
-    const instrucaoSistema = `Você é um auditor sênior de faturas de energia iGreen. Extraia os dados com precisão absoluta. 
-REGRA DE CÁLCULO DA MEDIA_CONSUMO: Localize o histórico de consumo em kWh na fatura. Contando de baixo para cima (do mais recente para o mais antigo), pegue os últimos 6 meses registrados. Some o consumo (kWh) desses 6 meses e divida por 6. Se o cliente for novo e o histórico tiver menos de 6 meses (ex: apenas 3 meses), some os consumos disponíveis e divida pela exata quantidade de meses disponíveis. Retorne o valor numérico em kWh.
-Se um dado não estiver visível ou estiver oculto por LGPD, coloque o que estiver escrito ou deixe vazio.`;
+    const instrucaoSistema = `Você é um auditor sênior de faturas de energia iGreen. Extraia os dados com precisão absoluta seguindo a ordem lógica da fatura.
+REGRA DE CÁLCULO DA MEDIA_CONSUMO: Localize o histórico em kWh. Some os últimos 6 meses (de baixo para cima) e divida por 6. Se tiver menos meses, divida pelo número de meses disponíveis.
+Se um dado não estiver visível, deixe vazio.`;
 
     const payload = {
         systemInstruction: {
@@ -119,7 +119,7 @@ Se um dado não estiver visível ou estiver oculto por LGPD, coloque o que estiv
         },
         contents: [{ 
             parts: [
-                { text: "Analise esta fatura e extraia todos os dados solicitados no JSON Schema, quebrando o endereço em partes." }, 
+                { text: "Analise esta fatura e extraia os dados organizadamente conforme o esquema solicitado." }, 
                 { inlineData: { mimeType: mimeType, data: base64Data } }
             ] 
         }],
@@ -128,23 +128,29 @@ Se um dado não estiver visível ou estiver oculto por LGPD, coloque o que estiv
             responseSchema: {
                 type: "OBJECT",
                 properties: {
-                    "NOME_CLIENTE": { type: "STRING" },
-                    "MASCARA_CPF": { type: "STRING", description: "O CPF exatamente como impresso na fatura, com os asteriscos da LGPD (Ex: ***.123.456-**)" },
-                    "CPF": { type: "STRING", description: "Apenas os números visíveis do CPF. Se estiver totalmente legível, coloque completo." },
+                    // ORDEM LÓGICA DA FATURA
                     "DISTRIBUIDORA": { type: "STRING" },
-                    "UC": { type: "STRING", description: "Número da Unidade Consumidora ou Conta Contrato (apenas números)." },
-                    "MEDIA_CONSUMO": { type: "STRING", description: "Média proporcional dos últimos 6 meses em kWh." },
-                    "CONTA_MES": { type: "STRING", description: "Mês e ano de referência (Ex: 04/2026)" },
-                    "VENCIMENTO": { type: "STRING", description: "Data de vencimento da fatura" },
+                    "NOME_CLIENTE": { type: "STRING" },
+                    "MASCARA_CPF": { type: "STRING", description: "CPF com asteriscos da LGPD" },
+                    "CPF": { type: "STRING", description: "Números visíveis do CPF" },
+                    
+                    // ENDEREÇO COMPLETO
+                    "ENDERECO": { type: "STRING" },
+                    "ENDERECO_NUMERO": { type: "STRING" },
+                    "ENDERECO_COMPLEMENTO": { type: "STRING", description: "Bloco, Apto, Casa, Quadra, etc" },
+                    "BAIRRO": { type: "STRING" },
+                    "CIDADE": { type: "STRING" },
+                    "ESTADO": { type: "STRING", description: "Sigla UF" },
                     "CEP": { type: "STRING" },
-                    "ENDERECO": { type: "STRING", description: "Nome da Rua/Avenida/Logradouro" },
-                    "ENDERECO_NUMERO": { type: "STRING", description: "Número do imóvel" },
-                    "COMPLEMENTO": { type: "STRING", description: "Complemento (Bloco, Apto, Casa, Quadra, etc)" },
-                    "BAIRRO": { type: "STRING", description: "Bairro" },
-                    "CIDADE": { type: "STRING", description: "Cidade" },
-                    "ESTADO": { type: "STRING", description: "Sigla do Estado/UF (Ex: AL, MG, SP)" }
+
+                    // DADOS TÉCNICOS E VALORES
+                    "UC": { type: "STRING", description: "Número da UC ou Conta Contrato" },
+                    "CONTA_MES": { type: "STRING", description: "Mês/Ano referência" },
+                    "VENCIMENTO": { type: "STRING" },
+                    "VALOR_FATURA": { type: "STRING", description: "Valor total a pagar em R$" },
+                    "MEDIA_CONSUMO": { type: "STRING", description: "Média calculada de 6 meses em kWh" }
                 },
-                required: ["NOME_CLIENTE", "MASCARA_CPF", "CPF", "DISTRIBUIDORA", "UC", "MEDIA_CONSUMO", "CEP", "CONTA_MES", "VENCIMENTO", "ENDERECO", "ENDERECO_NUMERO", "COMPLEMENTO", "BAIRRO", "CIDADE", "ESTADO"]
+                required: ["DISTRIBUIDORA", "NOME_CLIENTE", "MASCARA_CPF", "CPF", "ENDERECO", "ENDERECO_NUMERO", "ENDERECO_COMPLEMENTO", "BAIRRO", "CIDADE", "ESTADO", "CEP", "UC", "CONTA_MES", "VENCIMENTO", "VALOR_FATURA", "MEDIA_CONSUMO"]
             }
         }
     };
@@ -161,7 +167,7 @@ Se um dado não estiver visível ou estiver oculto por LGPD, coloque o que estiv
 }
 
 // ==========================================
-// MÓDULO 2: EXTRATOR RPA (PUPPETEER)
+// MÓDULO 2: EXTRATOR RPA (MANTIDO)
 // ==========================================
 async function fluxoExtracaoDados(termoBusca, phone) {
     let browser;
@@ -169,20 +175,16 @@ async function fluxoExtracaoDados(termoBusca, phone) {
         browser = await puppeteer.launch({ headless: true, args: CHROME_ARGS });
         const page = await browser.newPage();
         await page.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
-        
         await page.waitForSelector('input[type="email"]');
         await page.type('input[type="email"]', IGREEN_USER);
         await page.type('input[type="password"]', IGREEN_PASS);
         await page.keyboard.press('Enter');
         await new Promise(r => setTimeout(r, 6000));
-
         await page.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2' });
         await new Promise(r => setTimeout(r, 8000)); 
-
         const searchInput = await page.waitForSelector('input[placeholder*="Pesquisar" i]');
         await searchInput.type(termoBusca); await page.keyboard.press('Enter');
         await new Promise(r => setTimeout(r, 4000));
-
         const dadosExtraidos = await page.evaluate((busca) => {
             const linha = Array.from(document.querySelectorAll('tr')).find(tr => tr.textContent.toLowerCase().includes(busca.toLowerCase()));
             if (!linha) return null;
@@ -190,14 +192,8 @@ async function fluxoExtracaoDados(termoBusca, phone) {
             const dataMatch = linha.textContent.match(/\d{2}\/\d{2}\/\d{4}/g);
             return { nome: "Cliente Encontrado", cpf: cpfMatch ? cpfMatch[0] : "Não consta", nasc: dataMatch ? dataMatch[0] : "Não consta" };
         }, termoBusca);
-
         await browser.close();
-
-        if (dadosExtraidos) {
-            await enviarMensagem(phone, `✅ *DADOS CAPTURADOS!* \n👤 *Nome:* ${dadosExtraidos.nome}\n📄 *CPF:* ${dadosExtraidos.cpf}\n🎂 *Nascimento:* ${dadosExtraidos.nasc}`);
-        } else {
-            await enviarMensagem(phone, TEXTOS.T_RESGATE_FAIL);
-        }
+        if (dadosExtraidos) await enviarMensagem(phone, `✅ *DADOS CAPTURADOS!* \n👤 *Nome:* ${dadosExtraidos.nome}\n📄 *CPF:* ${dadosExtraidos.cpf}\n🎂 *Nascimento:* ${dadosExtraidos.nasc}`);
     } catch (e) { if(browser) await browser.close(); }
 }
 
@@ -243,9 +239,9 @@ app.post('/webhook/igreen', async (req, res) => {
                     const docId = (dadosIA.UC && dadosIA.UC !== "Não extraído" && dadosIA.UC !== "") ? dadosIA.UC.replace(/\D/g, '') : `SEM_UC_${Date.now()}`;
                     
                     await salvarNoBanco(docId, phone, { ...dadosIA, LINK_FATURA: mediaUrl, STATUS_CADASTRO: "CONCLUIDO" });
-                    await enviarMensagem(phone, `✅ Tudo certo!\n👤 Titular: ${dadosIA.NOME_CLIENTE}\n⚡ UC/Contrato: ${dadosIA.UC}\n📍 Bairro/Cidade: ${dadosIA.BAIRRO}, ${dadosIA.CIDADE}\n📊 Média Calculada: ${dadosIA.MEDIA_CONSUMO} kWh\n\nOs seus dados foram validados e o especialista gerará o contrato em breve!`);
+                    await enviarMensagem(phone, `✅ Tudo certo!\n👤 Titular: ${dadosIA.NOME_CLIENTE}\n⚡ UC/Contrato: ${dadosIA.UC}\n💰 Valor: R$ ${dadosIA.VALOR_FATURA}\n📊 Média: ${dadosIA.MEDIA_CONSUMO} kWh\n\nDados validados com sucesso!`);
                     memoriaEstado.delete(phone); 
-                } catch (e) { await enviarMensagem(phone, "❌ Erro ao ler fatura. Tente enviar uma foto mais nítida."); }
+                } catch (e) { await enviarMensagem(phone, "❌ Erro ao ler fatura. Tente novamente."); }
             }
             break;
 
@@ -259,9 +255,9 @@ app.post('/webhook/igreen', async (req, res) => {
                     await salvarNoBanco(docId, phone, { ...dadosIA, LINK_FATURA: mediaUrl, STATUS_CADASTRO: "AGUARDANDO_NASCIMENTO" });
                     memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_NASCIMENTO', docId: docId });
                     
-                    const msgNasc = TEXTOS.T_PEDIR_NASCIMENTO.replace('${nome}', dadosIA.NOME_CLIENTE).replace('${uc}', dadosIA.UC);
+                    const msgNasc = TEXTOS.T_PEDIR_NASCIMENTO.replace('${nome}', dadosIA.NOME_CLIENTE).replace('${uc}', dadosIA.UC).replace('${valor}', dadosIA.VALOR_FATURA);
                     await enviarMensagem(phone, msgNasc);
-                } catch (e) { await enviarMensagem(phone, "❌ Erro na análise. Tente enviar uma foto mais nítida."); }
+                } catch (e) { await enviarMensagem(phone, "❌ Erro na análise. Tente novamente."); }
             }
             break;
 
@@ -287,9 +283,7 @@ app.post('/webhook/igreen', async (req, res) => {
                 const ucLimpa = textoIn.replace(/\D/g, '');
                 memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOCUMENTOS_AVULSOS', docId: ucLimpa });
                 await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC);
-            } else {
-                await enviarMensagem(phone, "⚠️ Por favor, digite os números da sua UC ou Conta Contrato, ou digite *0* para cancelar.");
-            }
+            } else { await enviarMensagem(phone, "⚠️ Digite o número da UC ou digite *0*."); }
             break;
 
         case 'AGUARDANDO_DOCUMENTOS_AVULSOS': 
@@ -298,8 +292,6 @@ app.post('/webhook/igreen', async (req, res) => {
                 await salvarNoBanco(docId, phone, { LINK_DOCUMENTO_ID: mediaUrl, STATUS_CADASTRO: "CONCLUIDO_COM_DOCS" });
                 await enviarMensagem(phone, TEXTOS.T_DOCS_RECEBIDOS);
                 memoriaEstado.delete(phone);
-            } else {
-                await enviarMensagem(phone, "⚠️ Por favor, envie a foto do documento ou digite *0* para cancelar.");
             }
             break;
     }
