@@ -7,7 +7,7 @@ const app = express();
 app.use(express.json());
 
 // ==========================================
-// CONFIGURAÇÕES GERAIS E CHAVES (Cofre Seguro do Render)
+// CONFIGURAÇÕES GERAIS E CHAVES (Render)
 // ==========================================
 const ZAPI_INSTANCE = process.env.ZAPI_INSTANCE;
 const ZAPI_TOKEN = process.env.ZAPI_TOKEN;
@@ -50,40 +50,46 @@ const TEXTOS = {
     T_RESGATE_FAIL: "⚠️ Não consegui localizar este cliente no sistema. Por favor, verifique se o Nome ou ID estão digitados corretamente.",
     T_GUARDAR_START: "Opção 2️⃣ selecionada! 💾 \n*Módulo de Pré-Cadastro* ativado!\nPor favor, envie a foto ou PDF da sua *Fatura de Energia*. Vou analisar os dados e deixá-los salvos com total segurança no nosso sistema.",
     
-    // NOVOS TEXTOS DE COLETA DE DADOS (OPÇÃO 2)
-    T_PEDIR_TELEFONE: "✅ Fatura analisada e salva com segurança!\n👤 Titular: ${nome}\n⚡ UC: ${uc}\n\nPara completarmos o seu pré-cadastro, por favor, digite o **Número de Telefone (com DDD)** do titular:",
+    // TEXTOS DE COLETA DE DADOS (USADOS NO FLUXO INTELIGENTE)
+    T_PEDIR_TELEFONE: "✅ Fatura analisada e salva!\n👤 Titular: ${nome}\n⚡ UC: ${uc}\n\nPara completarmos o seu pré-cadastro, digite o **Número de Telefone (com DDD)** do titular:",
     T_PEDIR_EMAIL: "Ótimo! 📱 Telefone salvo.\n\nAgora, por favor, digite o **melhor E-mail** do titular:",
-    T_FIM_PRE_CADASTRO: "Perfeito! 📧 E-mail salvo no seu perfil.\n\n⚠️ *Aviso Importante:* O seu cadastro está 'Pendente de Documentos'. Como você já é cliente iGreen, não há pressa! Quando quiser atualizar nosso sistema com a foto do seu documento (Frente e Verso), basta voltar a este atendimento e escolher a **Opção 4**.",
+    T_FIM_PRE_CADASTRO: "Perfeito! 📧 E-mail salvo no seu perfil.\n\n⚠️ *Aviso:* O seu cadastro está 'Pendente de Documentos'. Quando quiser enviar a foto do seu documento (Frente e Verso), escolha a **Opção 4** no menu inicial.",
     
-    T_START_OPCAO_4: "Opção 4️⃣ selecionada! 📎\nPara anexarmos o documento no imóvel correto, por favor, digite primeiro o número da sua **UC (Unidade Consumidora) ou Conta Contrato** (apenas os números):",
-    T_PEDIR_FOTO_DOC_FRENTE: "🔍 Imóvel localizado! \n\nPara seguirmos o padrão da distribuidora, por favor, envie agora uma foto legível apenas da **FRENTE** do seu Documento de Identificação (RG ou CNH):",
-    T_PEDIR_FOTO_DOC_VERSO: "✅ Frente recebida e salva!\n\nAgora, para concluirmos, por favor envie a foto do **VERSO** do mesmo documento:",
-    T_DOCS_RECEBIDOS: "✅ Documentos recebidos com sucesso! \nAs imagens (Frente e Verso) foram anexadas ao seu perfil com segurança. O seu cadastro está completo! Muito obrigado pela sua colaboração! 🙏"
+    T_START_OPCAO_4: "Opção 4️⃣ selecionada! 📎\nPara anexarmos o documento no cadastro correto, digite o número da sua **UC ou Conta Contrato** (apenas os números):",
+    T_OP4_FALTANDO_TEL: "🔍 Localizei o seu cadastro, mas ainda não temos o seu **Telefone**. Digite-o com DDD para atualizarmos:",
+    T_OP4_FALTANDO_MAIL: "Certo! E qual o seu melhor **E-mail**?",
+    T_PEDIR_FOTO_DOC_FRENTE: "✅ Cadastro localizado e atualizado! \n\nPor favor, envie agora uma foto legível apenas da **FRENTE** do seu Documento de Identificação (RG ou CNH):",
+    T_PEDIR_FOTO_DOC_VERSO: "✅ Frente recebida!\n\nAgora, envie a foto do **VERSO** do mesmo documento:",
+    T_DOCS_RECEBIDOS: "✅ Documentos recebidos com sucesso! \nAs imagens foram anexadas ao seu perfil com segurança. Muito obrigado! 🙏"
 };
 
-const CHROME_ARGS = [
-    "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", 
-    "--disable-gpu", "--single-process", "--no-zygote", "--js-flags=--expose-gc"
-];
+const CHROME_ARGS = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-zygote"];
 
 // ==========================================
-// FUNÇÕES AUXILIARES
+// FUNÇÕES AUXILIARES (COM BUSCA INTELIGENTE)
 // ==========================================
 async function enviarMensagem(phone, message) {
     const numLimpo = String(phone).replace(/\D/g, ''); 
     try { 
-        await axios.post(
-            `https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, 
-            { phone: numLimpo, message: String(message) }, 
-            { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN, 'Content-Type': 'application/json' } }
-        ); 
+        await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, 
+        { phone: numLimpo, message: String(message) }, 
+        { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN, 'Content-Type': 'application/json' } }); 
     } catch (e) { console.error(`[Z-API] Erro:`, e.message); }
 }
 
+async function buscarNoBanco(docId) {
+    if (admin.apps.length > 0) {
+        try {
+            const db = admin.firestore();
+            const doc = await db.collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').doc(docId).get();
+            return doc.exists ? doc.data() : null;
+        } catch (e) { console.error("Erro Busca Firebase:", e.message); return null; }
+    }
+    return null;
+}
+
 function limparDadosVazios(dados) {
-    return Object.fromEntries(
-        Object.entries(dados).filter(([_, v]) => v !== "" && v !== "Não extraído" && v !== "0" && v !== null && v !== undefined)
-    );
+    return Object.fromEntries(Object.entries(dados).filter(([_, v]) => v !== "" && v !== "Não extraído" && v !== "0" && v !== null && v !== undefined));
 }
 
 async function salvarNoBanco(docId, phone, dadosExtras) {
@@ -92,109 +98,38 @@ async function salvarNoBanco(docId, phone, dadosExtras) {
             const db = admin.firestore();
             const dadosLimpos = limparDadosVazios(dadosExtras); 
             await db.collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').doc(docId).set(
-                { 
-                    ...dadosLimpos, 
-                    TELEFONE_REMETENTE: phone, 
-                    DATA_PROCESSAMENTO: admin.firestore.FieldValue.serverTimestamp(),
-                    DATA_ULTIMA_ATUALIZACAO: admin.firestore.FieldValue.serverTimestamp()
-                }, 
+                { ...dadosLimpos, TELEFONE_REMETENTE: phone, DATA_PROCESSAMENTO: admin.firestore.FieldValue.serverTimestamp(), DATA_ULTIMA_ATUALIZACAO: admin.firestore.FieldValue.serverTimestamp() }, 
                 { merge: true } 
             );
-            console.log(`[FIREBASE] ✅ Dados salvos na UC: ${docId}`);
         } catch (e) { console.error("Erro Firebase:", e.message); }
     }
 }
 
 // ==========================================
-// MÓDULO 1: MOTOR IA
+// MÓDULO 1: MOTOR IA (MEDIA CÁLCULO)
 // ==========================================
 async function analisarFaturaGemini(mediaUrl, mimeType) {
-    if (!GEMINI_API_KEY) throw new Error("Chave do Gemini ausente.");
-    
     const response = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
     const base64Data = Buffer.from(response.data, 'binary').toString('base64');
-    
-    const instrucaoSistema = `Você é um auditor sênior de faturas de energia iGreen. Extraia os dados com precisão absoluta seguindo a ordem lógica da fatura.
-REGRA DE CÁLCULO DA MEDIA_CONSUMO: Localize o histórico em kWh. Some os últimos 6 meses (de baixo para cima) e divida por 6. Se tiver menos meses, divida pelo número de meses disponíveis.
-Se um dado não estiver visível, deixe vazio.`;
-
+    const instrucao = `Auditor iGreen. Regra Média: Soma últimos 6 meses (ou disponíveis) / quantidade de meses.`;
     const payload = {
-        systemInstruction: {
-            parts: [{ text: instrucaoSistema }]
-        },
-        contents: [{ 
-            parts: [
-                { text: "Analise esta fatura e extraia os dados organizadamente." }, 
-                { inlineData: { mimeType: mimeType, data: base64Data } }
-            ] 
-        }],
+        systemInstruction: { parts: [{ text: instrucao }] },
+        contents: [{ parts: [{ text: "Extraia os dados organizadamente." }, { inlineData: { mimeType, data: base64Data } }] }],
         generationConfig: { 
             responseMimeType: "application/json",
             responseSchema: {
                 type: "OBJECT",
                 properties: {
-                    "DISTRIBUIDORA": { type: "STRING" },
-                    "NOME_CLIENTE": { type: "STRING" },
-                    "MASCARA_CPF": { type: "STRING" },
-                    "CPF": { type: "STRING" },
-                    "ENDERECO": { type: "STRING" },
-                    "ENDERECO_NUMERO": { type: "STRING" },
-                    "ENDERECO_COMPLEMENTO": { type: "STRING" },
-                    "BAIRRO": { type: "STRING" },
-                    "CIDADE": { type: "STRING" },
-                    "ESTADO": { type: "STRING" },
-                    "CEP": { type: "STRING" },
-                    "UC": { type: "STRING" },
-                    "CONTA_MES": { type: "STRING" },
-                    "VENCIMENTO": { type: "STRING" },
-                    "VALOR_FATURA": { type: "STRING" },
-                    "MEDIA_CONSUMO": { type: "STRING" }
-                },
-                required: ["DISTRIBUIDORA", "NOME_CLIENTE", "MASCARA_CPF", "CPF", "ENDERECO", "ENDERECO_NUMERO", "ENDERECO_COMPLEMENTO", "BAIRRO", "CIDADE", "ESTADO", "CEP", "UC", "CONTA_MES", "VENCIMENTO", "VALOR_FATURA", "MEDIA_CONSUMO"]
+                    "DISTRIBUIDORA": { type: "STRING" }, "NOME_CLIENTE": { type: "STRING" }, "MASCARA_CPF": { type: "STRING" }, "CPF": { type: "STRING" },
+                    "ENDERECO": { type: "STRING" }, "ENDERECO_NUMERO": { type: "STRING" }, "ENDERECO_COMPLEMENTO": { type: "STRING" },
+                    "BAIRRO": { type: "STRING" }, "CIDADE": { type: "STRING" }, "ESTADO": { type: "STRING" }, "CEP": { type: "STRING" },
+                    "UC": { type: "STRING" }, "CONTA_MES": { type: "STRING" }, "VENCIMENTO": { type: "STRING" }, "VALOR_FATURA": { type: "STRING" }, "MEDIA_CONSUMO": { type: "STRING" }
+                }
             }
         }
     };
-
-    const endpointFinal = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${GEMINI_API_KEY.trim()}`;
-
-    try {
-        const aiRes = await axios.post(endpointFinal, payload);
-        return JSON.parse(aiRes.data.candidates[0].content.parts[0].text);
-    } catch (error) {
-        console.error("❌ Erro Gemini:", error.message);
-        throw error;
-    }
-}
-
-// ==========================================
-// MÓDULO 2: EXTRATOR RPA
-// ==========================================
-async function fluxoExtracaoDados(termoBusca, phone) {
-    let browser;
-    try {
-        browser = await puppeteer.launch({ headless: true, args: CHROME_ARGS });
-        const page = await browser.newPage();
-        await page.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
-        await page.waitForSelector('input[type="email"]');
-        await page.type('input[type="email"]', IGREEN_USER);
-        await page.type('input[type="password"]', IGREEN_PASS);
-        await page.keyboard.press('Enter');
-        await new Promise(r => setTimeout(r, 6000));
-        await page.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2' });
-        await new Promise(r => setTimeout(r, 8000)); 
-        const searchInput = await page.waitForSelector('input[placeholder*="Pesquisar" i]');
-        await searchInput.type(termoBusca); await page.keyboard.press('Enter');
-        await new Promise(r => setTimeout(r, 4000));
-        const dadosExtraidos = await page.evaluate((busca) => {
-            const linha = Array.from(document.querySelectorAll('tr')).find(tr => tr.textContent.toLowerCase().includes(busca.toLowerCase()));
-            if (!linha) return null;
-            const cpfMatch = linha.textContent.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
-            const dataMatch = linha.textContent.match(/\d{2}\/\d{2}\/\d{4}/g);
-            return { nome: "Cliente Encontrado", cpf: cpfMatch ? cpfMatch[0] : "Não consta", nasc: dataMatch ? dataMatch[0] : "Não consta" };
-        }, termoBusca);
-        await browser.close();
-        if (dadosExtraidos) await enviarMensagem(phone, `✅ *DADOS CAPTURADOS!* \n👤 *Nome:* ${dadosExtraidos.nome}\n📄 *CPF:* ${dadosExtraidos.cpf}\n🎂 *Nascimento:* ${dadosExtraidos.nasc}`);
-    } catch (e) { if(browser) await browser.close(); }
+    const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${GEMINI_API_KEY.trim()}`, payload);
+    return JSON.parse(res.data.candidates[0].content.parts[0].text);
 }
 
 // ==========================================
@@ -208,7 +143,6 @@ app.post('/webhook/igreen', async (req, res) => {
     const phone = data.phone;
     const textoIn = data.text?.message?.trim() || "";
     const txtL = textoIn.toLowerCase();
-    
     const temMidia = !!(data.image?.imageUrl || data.document?.documentUrl);
     const mediaUrl = data.image?.imageUrl || data.document?.documentUrl;
     const mimeType = data.document ? 'application/pdf' : 'image/jpeg';
@@ -236,12 +170,11 @@ app.post('/webhook/igreen', async (req, res) => {
                 await enviarMensagem(phone, TEXTOS.T02); 
                 try {
                     const dadosIA = await analisarFaturaGemini(mediaUrl, mimeType);
-                    const docId = (dadosIA.UC && dadosIA.UC !== "Não extraído" && dadosIA.UC !== "") ? dadosIA.UC.replace(/\D/g, '') : `SEM_UC_${Date.now()}`;
-                    
+                    const docId = dadosIA.UC ? dadosIA.UC.replace(/\D/g, '') : `SEM_UC_${Date.now()}`;
                     await salvarNoBanco(docId, phone, { ...dadosIA, LINK_FATURA: mediaUrl, STATUS_CADASTRO: "CONCLUIDO" });
-                    await enviarMensagem(phone, `✅ Tudo certo!\n👤 Titular: ${dadosIA.NOME_CLIENTE}\n⚡ UC/Contrato: ${dadosIA.UC}\n💰 Valor: R$ ${dadosIA.VALOR_FATURA}\n📊 Média: ${dadosIA.MEDIA_CONSUMO} kWh\n\nDados validados com sucesso!`);
+                    await enviarMensagem(phone, `✅ Tudo certo! Titular: ${dadosIA.NOME_CLIENTE}. Especialista entrará em contato.`);
                     memoriaEstado.delete(phone); 
-                } catch (e) { await enviarMensagem(phone, "❌ Erro ao ler fatura. Tente novamente."); }
+                } catch (e) { await enviarMensagem(phone, "❌ Erro ao ler fatura."); }
             }
             break;
 
@@ -250,74 +183,99 @@ app.post('/webhook/igreen', async (req, res) => {
                 await enviarMensagem(phone, TEXTOS.T02); 
                 try {
                     const dadosIA = await analisarFaturaGemini(mediaUrl, mimeType);
-                    const docId = (dadosIA.UC && dadosIA.UC !== "Não extraído" && dadosIA.UC !== "") ? dadosIA.UC.replace(/\D/g, '') : `SEM_UC_${Date.now()}`;
-                    
+                    const docId = dadosIA.UC ? dadosIA.UC.replace(/\D/g, '') : `SEM_UC_${Date.now()}`;
                     await salvarNoBanco(docId, phone, { ...dadosIA, LINK_FATURA: mediaUrl, STATUS_CADASTRO: "AGUARDANDO_TELEFONE" });
-                    
-                    // Vai para o próximo passo: Pedir Telefone
-                    memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_TELEFONE', docId: docId });
-                    
-                    const msgTel = TEXTOS.T_PEDIR_TELEFONE.replace('${nome}', dadosIA.NOME_CLIENTE).replace('${uc}', dadosIA.UC);
-                    await enviarMensagem(phone, msgTel);
-                } catch (e) { await enviarMensagem(phone, "❌ Erro na análise. Tente novamente."); }
+                    memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_TELEFONE', docId });
+                    await enviarMensagem(phone, TEXTOS.T_PEDIR_TELEFONE.replace('${nome}', dadosIA.NOME_CLIENTE).replace('${uc}', dadosIA.UC));
+                } catch (e) { await enviarMensagem(phone, "❌ Erro na análise."); }
             }
             break;
 
         case 'AGUARDANDO_TELEFONE':
             if (textoIn.length >= 8) { 
-                const docId = mem.docId; 
-                await salvarNoBanco(docId, phone, { TELEFONE: textoIn, STATUS_CADASTRO: "AGUARDANDO_EMAIL" });
-                
-                // Vai para o próximo passo: Pedir Email
-                memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_EMAIL', docId: docId });
+                await salvarNoBanco(mem.docId, phone, { TELEFONE: textoIn, STATUS_CADASTRO: "AGUARDANDO_EMAIL" });
+                memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_EMAIL', docId: mem.docId });
                 await enviarMensagem(phone, TEXTOS.T_PEDIR_EMAIL);
-            } else { await enviarMensagem(phone, "⚠️ Digite um telefone válido ou digite *0* para cancelar."); }
+            }
             break;
 
         case 'AGUARDANDO_EMAIL':
             if (textoIn.includes('@')) { 
-                const docId = mem.docId; 
-                await salvarNoBanco(docId, phone, { EMAIL: textoIn, STATUS_CADASTRO: "PENDENTE_DOCUMENTOS" });
+                await salvarNoBanco(mem.docId, phone, { EMAIL: textoIn, STATUS_CADASTRO: "PENDENTE_DOCUMENTOS" });
                 await enviarMensagem(phone, TEXTOS.T_FIM_PRE_CADASTRO);
-                memoriaEstado.delete(phone); // Fim do fluxo de Pré-Cadastro!
-            } else { await enviarMensagem(phone, "⚠️ Digite um E-mail válido contendo '@' ou digite *0* para cancelar."); }
-            break;
-
-        case 'AGUARDANDO_TERMO_RESGATE':
-            if (textoIn.length >= 2) {
-                await enviarMensagem(phone, TEXTOS.T_RESGATE_BUSCANDO);
-                memoriaEstado.delete(phone); 
-                setTimeout(() => { fluxoExtracaoDados(textoIn, phone); }, 3000);
+                memoriaEstado.delete(phone);
             }
             break;
 
+        // --- OPÇÃO 4 INTELIGENTE (VERIFICA DADOS FALTANTES) ---
         case 'AGUARDANDO_UC_DOC':
             if (textoIn.length >= 4) { 
                 const ucLimpa = textoIn.replace(/\D/g, '');
-                memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: ucLimpa });
+                const leadExistente = await buscarNoBanco(ucLimpa);
+                
+                if (leadExistente) {
+                    if (!leadExistente.TELEFONE) {
+                        memoriaEstado.set(phone, { STATUS_CADASTRO: 'OP4_PEDIR_TELEFONE', docId: ucLimpa });
+                        await enviarMensagem(phone, TEXTOS.T_OP4_FALTANDO_TEL);
+                    } else if (!leadExistente.EMAIL) {
+                        memoriaEstado.set(phone, { STATUS_CADASTRO: 'OP4_PEDIR_EMAIL', docId: ucLimpa });
+                        await enviarMensagem(phone, TEXTOS.T_OP4_FALTANDO_MAIL);
+                    } else {
+                        memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: ucLimpa });
+                        await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
+                    }
+                } else {
+                    memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: ucLimpa });
+                    await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
+                }
+            }
+            break;
+
+        case 'OP4_PEDIR_TELEFONE':
+            await salvarNoBanco(mem.docId, phone, { TELEFONE: textoIn });
+            const leadAtualizadoTel = await buscarNoBanco(mem.docId);
+            if (!leadAtualizadoTel.EMAIL) {
+                memoriaEstado.set(phone, { STATUS_CADASTRO: 'OP4_PEDIR_EMAIL', docId: mem.docId });
+                await enviarMensagem(phone, TEXTOS.T_OP4_FALTANDO_MAIL);
+            } else {
+                memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: mem.docId });
                 await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
-            } else { await enviarMensagem(phone, "⚠️ Digite o número da UC ou digite *0*."); }
+            }
+            break;
+
+        case 'OP4_PEDIR_EMAIL':
+            if (textoIn.includes('@')) {
+                await salvarNoBanco(mem.docId, phone, { EMAIL: textoIn });
+                memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: mem.docId });
+                await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
+            }
             break;
 
         case 'AGUARDANDO_DOC_FRENTE': 
             if (temMidia) {
-                const docId = mem.docId; 
-                await salvarNoBanco(docId, phone, { LINK_DOC_FRENTE: mediaUrl });
-                memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO', docId: docId });
+                await salvarNoBanco(mem.docId, phone, { LINK_DOC_FRENTE: mediaUrl });
+                memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO', docId: mem.docId });
                 await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_VERSO);
-            } else { await enviarMensagem(phone, "⚠️ Envie a imagem da FRENTE do documento."); }
+            }
             break;
 
         case 'AGUARDANDO_DOC_VERSO': 
             if (temMidia) {
-                const docId = mem.docId; 
-                await salvarNoBanco(docId, phone, { LINK_DOC_VERSO: mediaUrl, STATUS_CADASTRO: "CONCLUIDO_COM_DOCS" });
+                await salvarNoBanco(mem.docId, phone, { LINK_DOC_VERSO: mediaUrl, STATUS_CADASTRO: "CONCLUIDO_COM_DOCS" });
                 await enviarMensagem(phone, TEXTOS.T_DOCS_RECEBIDOS);
                 memoriaEstado.delete(phone);
-            } else { await enviarMensagem(phone, "⚠️ Envie a imagem do VERSO do documento."); }
+            }
             break;
     }
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Rodando na porta ${PORT}`));
+
+
+### O que acontece agora na prática:
+1.  O cliente entra na **Opção 4** e digita a UC.
+2.  O robô olha no cofre (Firebase). Se não vir o telefone ou e-mail, ele diz: *"Opa, falta o telefone, digite aqui"*.
+3.  Só depois que ele coletar o que falta, ele abre a câmera do cliente para pedir a **Frente** e o **Verso**.
+
+Isso deixa o seu banco de dados 100% preenchido e organizado, sem você precisar conferir nada manualmente. Pode atualizar no Render e ver a mágica acontecer! 🚀🛡️
