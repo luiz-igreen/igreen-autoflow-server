@@ -7,7 +7,7 @@ const app = express();
 app.use(express.json());
 
 // ==========================================
-// CONFIGURAÇÕES GERAIS E CHAVES (Render)
+// CONFIGURAÇÕES GERAIS E CHAVES
 // ==========================================
 const ZAPI_INSTANCE = process.env.ZAPI_INSTANCE;
 const ZAPI_TOKEN = process.env.ZAPI_TOKEN;
@@ -15,8 +15,8 @@ const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN;
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY; 
 
-const IGREEN_LOGIN_URL = "https://escritorio.igreenenergy.com.br/login"; 
-const IGREEN_MAPA_URL = "https://escritorio.igreenenergy.com.br/mapa-clientes";
+const IGREEN_LOGIN_URL = "[https://escritorio.igreenenergy.com.br/login](https://escritorio.igreenenergy.com.br/login)"; 
+const IGREEN_MAPA_URL = "[https://escritorio.igreenenergy.com.br/mapa-clientes](https://escritorio.igreenenergy.com.br/mapa-clientes)";
 
 const IGREEN_USER = process.env.IGREEN_USER;
 const IGREEN_PASS = process.env.IGREEN_PASS;
@@ -49,16 +49,13 @@ const TEXTOS = {
     T_RESGATE_BUSCANDO: "🔍 Aguarde um momento. Estou buscando as informações de forma segura no sistema...",
     T_RESGATE_FAIL: "⚠️ Não consegui localizar este cliente no sistema. Por favor, verifique se o Nome ou ID estão digitados corretamente.",
     T_GUARDAR_START: "Opção 2️⃣ selecionada! 💾 \n*Módulo de Pré-Cadastro* ativado!\nPor favor, envie a foto ou PDF da sua *Fatura de Energia*. Vou analisar os dados e deixá-los salvos com total segurança no nosso sistema.",
-    
-    // TEXTOS DE COLETA DE DADOS (USADOS NO FLUXO INTELIGENTE)
     T_PEDIR_TELEFONE: "✅ Fatura analisada e salva!\n👤 Titular: ${nome}\n⚡ UC: ${uc}\n\nPara completarmos o seu pré-cadastro, digite o **Número de Telefone (com DDD)** do titular:",
     T_PEDIR_EMAIL: "Ótimo! 📱 Telefone salvo.\n\nAgora, por favor, digite o **melhor E-mail** do titular:",
     T_FIM_PRE_CADASTRO: "Perfeito! 📧 E-mail salvo no seu perfil.\n\n⚠️ *Aviso:* O seu cadastro está 'Pendente de Documentos'. Quando quiser enviar a foto do seu documento (Frente e Verso), escolha a **Opção 4** no menu inicial.",
-    
     T_START_OPCAO_4: "Opção 4️⃣ selecionada! 📎\nPara anexarmos o documento no cadastro correto, digite o número da sua **UC ou Conta Contrato** (apenas os números):",
     T_OP4_FALTANDO_TEL: "🔍 Localizei o seu cadastro, mas ainda não temos o seu **Telefone**. Digite-o com DDD para atualizarmos:",
     T_OP4_FALTANDO_MAIL: "Certo! E qual o seu melhor **E-mail**?",
-    T_PEDIR_FOTO_DOC_FRENTE: "✅ Cadastro localizado e atualizado! \n\nPor favor, envie agora uma foto legível apenas da **FRENTE** do seu Documento de Identificação (RG ou CNH):",
+    T_PEDIR_FOTO_DOC_FRENTE: "✅ Cadastro atualizado e pronto! \n\nPor favor, envie agora uma foto legível apenas da **FRENTE** do seu Documento de Identificação (RG ou CNH):",
     T_PEDIR_FOTO_DOC_VERSO: "✅ Frente recebida!\n\nAgora, envie a foto do **VERSO** do mesmo documento:",
     T_DOCS_RECEBIDOS: "✅ Documentos recebidos com sucesso! \nAs imagens foram anexadas ao seu perfil com segurança. Muito obrigado! 🙏"
 };
@@ -66,7 +63,7 @@ const TEXTOS = {
 const CHROME_ARGS = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-zygote"];
 
 // ==========================================
-// FUNÇÕES AUXILIARES (COM BUSCA INTELIGENTE)
+// FUNÇÕES AUXILIARES
 // ==========================================
 async function enviarMensagem(phone, message) {
     const numLimpo = String(phone).replace(/\D/g, ''); 
@@ -106,7 +103,7 @@ async function salvarNoBanco(docId, phone, dadosExtras) {
 }
 
 // ==========================================
-// MÓDULO 1: MOTOR IA (MEDIA CÁLCULO)
+// MÓDULO 1: MOTOR IA
 // ==========================================
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     const response = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
@@ -165,7 +162,7 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 
     switch (mem.STATUS_CADASTRO) {
-        case 'AGUARDANDO_FATURA':
+        case 'AGUARDANDO_FATURA': {
             if (temMidia) {
                 await enviarMensagem(phone, TEXTOS.T02); 
                 try {
@@ -175,10 +172,13 @@ app.post('/webhook/igreen', async (req, res) => {
                     await enviarMensagem(phone, `✅ Tudo certo! Titular: ${dadosIA.NOME_CLIENTE}. Especialista entrará em contato.`);
                     memoriaEstado.delete(phone); 
                 } catch (e) { await enviarMensagem(phone, "❌ Erro ao ler fatura."); }
+            } else {
+                await enviarMensagem(phone, "⚠️ Aguardando foto/PDF da fatura.");
             }
             break;
+        }
 
-        case 'AGUARDANDO_FATURA_SOH_BANCO':
+        case 'AGUARDANDO_FATURA_SOH_BANCO': {
             if (temMidia) {
                 await enviarMensagem(phone, TEXTOS.T02); 
                 try {
@@ -188,27 +188,35 @@ app.post('/webhook/igreen', async (req, res) => {
                     memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_TELEFONE', docId });
                     await enviarMensagem(phone, TEXTOS.T_PEDIR_TELEFONE.replace('${nome}', dadosIA.NOME_CLIENTE).replace('${uc}', dadosIA.UC));
                 } catch (e) { await enviarMensagem(phone, "❌ Erro na análise."); }
+            } else {
+                await enviarMensagem(phone, "⚠️ Aguardando foto/PDF da fatura.");
             }
             break;
+        }
 
-        case 'AGUARDANDO_TELEFONE':
+        case 'AGUARDANDO_TELEFONE': {
             if (textoIn.length >= 8) { 
                 await salvarNoBanco(mem.docId, phone, { TELEFONE: textoIn, STATUS_CADASTRO: "AGUARDANDO_EMAIL" });
                 memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_EMAIL', docId: mem.docId });
                 await enviarMensagem(phone, TEXTOS.T_PEDIR_EMAIL);
+            } else {
+                await enviarMensagem(phone, "⚠️ Digite um telefone válido.");
             }
             break;
+        }
 
-        case 'AGUARDANDO_EMAIL':
+        case 'AGUARDANDO_EMAIL': {
             if (textoIn.includes('@')) { 
                 await salvarNoBanco(mem.docId, phone, { EMAIL: textoIn, STATUS_CADASTRO: "PENDENTE_DOCUMENTOS" });
                 await enviarMensagem(phone, TEXTOS.T_FIM_PRE_CADASTRO);
                 memoriaEstado.delete(phone);
+            } else {
+                await enviarMensagem(phone, "⚠️ Digite um e-mail válido.");
             }
             break;
+        }
 
-        // --- OPÇÃO 4 INTELIGENTE (VERIFICA DADOS FALTANTES) ---
-        case 'AGUARDANDO_UC_DOC':
+        case 'AGUARDANDO_UC_DOC': {
             if (textoIn.length >= 4) { 
                 const ucLimpa = textoIn.replace(/\D/g, '');
                 const leadExistente = await buscarNoBanco(ucLimpa);
@@ -228,54 +236,64 @@ app.post('/webhook/igreen', async (req, res) => {
                     memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: ucLimpa });
                     await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
                 }
-            }
-            break;
-
-        case 'OP4_PEDIR_TELEFONE':
-            await salvarNoBanco(mem.docId, phone, { TELEFONE: textoIn });
-            const leadAtualizadoTel = await buscarNoBanco(mem.docId);
-            if (!leadAtualizadoTel.EMAIL) {
-                memoriaEstado.set(phone, { STATUS_CADASTRO: 'OP4_PEDIR_EMAIL', docId: mem.docId });
-                await enviarMensagem(phone, TEXTOS.T_OP4_FALTANDO_MAIL);
             } else {
-                memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: mem.docId });
-                await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
+                await enviarMensagem(phone, "⚠️ Digite a UC corretamente.");
             }
             break;
+        }
 
-        case 'OP4_PEDIR_EMAIL':
+        case 'OP4_PEDIR_TELEFONE': {
+            if (textoIn.length >= 8) {
+                await salvarNoBanco(mem.docId, phone, { TELEFONE: textoIn });
+                const leadAtualizadoTel = await buscarNoBanco(mem.docId);
+                
+                if (leadAtualizadoTel && !leadAtualizadoTel.EMAIL) {
+                    memoriaEstado.set(phone, { STATUS_CADASTRO: 'OP4_PEDIR_EMAIL', docId: mem.docId });
+                    await enviarMensagem(phone, TEXTOS.T_OP4_FALTANDO_MAIL);
+                } else {
+                    memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: mem.docId });
+                    await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
+                }
+            } else {
+                await enviarMensagem(phone, "⚠️ Digite um telefone válido.");
+            }
+            break;
+        }
+
+        case 'OP4_PEDIR_EMAIL': {
             if (textoIn.includes('@')) {
                 await salvarNoBanco(mem.docId, phone, { EMAIL: textoIn });
                 memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: mem.docId });
                 await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
+            } else {
+                await enviarMensagem(phone, "⚠️ Digite um e-mail válido.");
             }
             break;
+        }
 
-        case 'AGUARDANDO_DOC_FRENTE': 
+        case 'AGUARDANDO_DOC_FRENTE': {
             if (temMidia) {
                 await salvarNoBanco(mem.docId, phone, { LINK_DOC_FRENTE: mediaUrl });
                 memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO', docId: mem.docId });
                 await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_VERSO);
+            } else {
+                await enviarMensagem(phone, "⚠️ Envie a foto da FRENTE.");
             }
             break;
+        }
 
-        case 'AGUARDANDO_DOC_VERSO': 
+        case 'AGUARDANDO_DOC_VERSO': {
             if (temMidia) {
                 await salvarNoBanco(mem.docId, phone, { LINK_DOC_VERSO: mediaUrl, STATUS_CADASTRO: "CONCLUIDO_COM_DOCS" });
                 await enviarMensagem(phone, TEXTOS.T_DOCS_RECEBIDOS);
                 memoriaEstado.delete(phone);
+            } else {
+                await enviarMensagem(phone, "⚠️ Envie a foto do VERSO.");
             }
             break;
+        }
     }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Rodando na porta ${PORT}`));
-
-
-### O que acontece agora na prática:
-1.  O cliente entra na **Opção 4** e digita a UC.
-2.  O robô olha no cofre (Firebase). Se não vir o telefone ou e-mail, ele diz: *"Opa, falta o telefone, digite aqui"*.
-3.  Só depois que ele coletar o que falta, ele abre a câmera do cliente para pedir a **Frente** e o **Verso**.
-
-Isso deixa o seu banco de dados 100% preenchido e organizado, sem você precisar conferir nada manualmente. Pode atualizar no Render e ver a mágica acontecer! 🚀🛡️
+app.listen(PORT, () => console.log(`Rodando na porta ${PORT}`));    
