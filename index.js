@@ -62,7 +62,7 @@ const CHROME_ARGS = [
 ];
 
 // ==========================================
-// FUNÇÕES AUXILIARES (COM FILTRO INTELIGENTE)
+// FUNÇÕES AUXILIARES
 // ==========================================
 async function enviarMensagem(phone, message) {
     const numLimpo = String(phone).replace(/\D/g, ''); 
@@ -87,16 +87,21 @@ async function salvarNoBanco(docId, phone, dadosExtras) {
             const db = admin.firestore();
             const dadosLimpos = limparDadosVazios(dadosExtras); 
             await db.collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').doc(docId).set(
-                { ...dadosLimpos, TELEFONE_REMETENTE: phone, DATA_ULTIMA_ATUALIZACAO: admin.firestore.FieldValue.serverTimestamp() }, 
+                { 
+                    ...dadosLimpos, 
+                    TELEFONE_REMETENTE: phone, 
+                    DATA_PROCESSAMENTO: admin.firestore.FieldValue.serverTimestamp(), // Corrigido para o Dashboard!
+                    DATA_ULTIMA_ATUALIZACAO: admin.firestore.FieldValue.serverTimestamp()
+                }, 
                 { merge: true } 
             );
-            console.log(`[FIREBASE] ✅ Dados salvos/atualizados na UC: ${docId}`);
+            console.log(`[FIREBASE] ✅ Dados salvos na UC: ${docId}`);
         } catch (e) { console.error("Erro Firebase:", e.message); }
     }
 }
 
 // ==========================================
-// MÓDULO 1: MOTOR IA COM REGRA DE CÁLCULO EXATA
+// MÓDULO 1: MOTOR IA (OCR AVANÇADO)
 // ==========================================
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     if (!GEMINI_API_KEY) throw new Error("Chave do Gemini ausente.");
@@ -104,10 +109,9 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
     const response = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
     const base64Data = Buffer.from(response.data, 'binary').toString('base64');
     
-    // AQUI INJETAMOS A REGRA MATEMÁTICA DOS 6 MESES
     const instrucaoSistema = `Você é um auditor sênior de faturas de energia iGreen. Extraia os dados com precisão absoluta. 
 REGRA DE CÁLCULO DA MEDIA_CONSUMO: Localize o histórico de consumo em kWh na fatura. Contando de baixo para cima (do mais recente para o mais antigo), pegue os últimos 6 meses registrados. Some o consumo (kWh) desses 6 meses e divida por 6. Se o cliente for novo e o histórico tiver menos de 6 meses (ex: apenas 3 meses), some os consumos disponíveis e divida pela exata quantidade de meses disponíveis. Retorne o valor numérico em kWh.
-Se um dado não estiver visível, deixe como string vazia.`;
+Se um dado não estiver visível ou estiver oculto por LGPD, coloque o que estiver escrito ou deixe vazio.`;
 
     const payload = {
         systemInstruction: {
@@ -115,7 +119,7 @@ Se um dado não estiver visível, deixe como string vazia.`;
         },
         contents: [{ 
             parts: [
-                { text: "Analise esta fatura e extraia os dados técnicos e de endereço aplicando as regras matemáticas solicitadas." }, 
+                { text: "Analise esta fatura e extraia todos os dados solicitados no JSON Schema, quebrando o endereço em partes." }, 
                 { inlineData: { mimeType: mimeType, data: base64Data } }
             ] 
         }],
@@ -125,18 +129,22 @@ Se um dado não estiver visível, deixe como string vazia.`;
                 type: "OBJECT",
                 properties: {
                     "NOME_CLIENTE": { type: "STRING" },
-                    "CPF": { type: "STRING" },
+                    "MASCARA_CPF": { type: "STRING", description: "O CPF exatamente como impresso na fatura, com os asteriscos da LGPD (Ex: ***.123.456-**)" },
+                    "CPF": { type: "STRING", description: "Apenas os números visíveis do CPF. Se estiver totalmente legível, coloque completo." },
                     "DISTRIBUIDORA": { type: "STRING" },
                     "UC": { type: "STRING", description: "Número da Unidade Consumidora ou Conta Contrato (apenas números)." },
-                    "MEDIA_CONSUMO": { type: "STRING", description: "Média proporcional dos últimos 6 meses em kWh, conforme a regra de cálculo." },
-                    "CEP": { type: "STRING" },
+                    "MEDIA_CONSUMO": { type: "STRING", description: "Média proporcional dos últimos 6 meses em kWh." },
                     "CONTA_MES": { type: "STRING", description: "Mês e ano de referência (Ex: 04/2026)" },
                     "VENCIMENTO": { type: "STRING", description: "Data de vencimento da fatura" },
-                    "ENDERECO": { type: "STRING", description: "Nome do Logradouro/Rua" },
+                    "CEP": { type: "STRING" },
+                    "ENDERECO": { type: "STRING", description: "Nome da Rua/Avenida/Logradouro" },
                     "ENDERECO_NUMERO": { type: "STRING", description: "Número do imóvel" },
+                    "COMPLEMENTO": { type: "STRING", description: "Complemento (Bloco, Apto, Casa, Quadra, etc)" },
+                    "BAIRRO": { type: "STRING", description: "Bairro" },
+                    "CIDADE": { type: "STRING", description: "Cidade" },
                     "ESTADO": { type: "STRING", description: "Sigla do Estado/UF (Ex: AL, MG, SP)" }
                 },
-                required: ["NOME_CLIENTE", "CPF", "DISTRIBUIDORA", "UC", "MEDIA_CONSUMO", "CEP", "CONTA_MES", "VENCIMENTO", "ENDERECO", "ENDERECO_NUMERO", "ESTADO"]
+                required: ["NOME_CLIENTE", "MASCARA_CPF", "CPF", "DISTRIBUIDORA", "UC", "MEDIA_CONSUMO", "CEP", "CONTA_MES", "VENCIMENTO", "ENDERECO", "ENDERECO_NUMERO", "COMPLEMENTO", "BAIRRO", "CIDADE", "ESTADO"]
             }
         }
     };
@@ -235,7 +243,7 @@ app.post('/webhook/igreen', async (req, res) => {
                     const docId = (dadosIA.UC && dadosIA.UC !== "Não extraído" && dadosIA.UC !== "") ? dadosIA.UC.replace(/\D/g, '') : `SEM_UC_${Date.now()}`;
                     
                     await salvarNoBanco(docId, phone, { ...dadosIA, LINK_FATURA: mediaUrl, STATUS_CADASTRO: "CONCLUIDO" });
-                    await enviarMensagem(phone, `✅ Tudo certo!\n👤 Titular: ${dadosIA.NOME_CLIENTE}\n⚡ UC/Contrato: ${dadosIA.UC}\n📊 Média de Consumo: ${dadosIA.MEDIA_CONSUMO} kWh\n\nOs seus dados foram validados e o especialista gerará o contrato em breve!`);
+                    await enviarMensagem(phone, `✅ Tudo certo!\n👤 Titular: ${dadosIA.NOME_CLIENTE}\n⚡ UC/Contrato: ${dadosIA.UC}\n📍 Bairro/Cidade: ${dadosIA.BAIRRO}, ${dadosIA.CIDADE}\n📊 Média Calculada: ${dadosIA.MEDIA_CONSUMO} kWh\n\nOs seus dados foram validados e o especialista gerará o contrato em breve!`);
                     memoriaEstado.delete(phone); 
                 } catch (e) { await enviarMensagem(phone, "❌ Erro ao ler fatura. Tente enviar uma foto mais nítida."); }
             }
@@ -298,4 +306,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Rodando na porta ${PORT}`));    
+app.listen(PORT, () => console.log(`Rodando na porta ${PORT}`));
