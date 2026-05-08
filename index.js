@@ -50,10 +50,11 @@ const TEXTOS = {
     T01: "Opção 1️⃣ selecionada! 🌿 \nPara prepararmos o seu desconto e o seu contrato, por favor, envie uma foto bem nítida (ou arquivo PDF) da sua conta de luz mais recente.",
     T02: "Recebemos o seu documento! 📄 A nossa assistente virtual está a analisar as informações neste exato momento. Só um instante...",
     
-    T_RESGATE_START: "Opção 3️⃣ selecionada! ⚡ \nPara resolvermos a devolutiva, o robô vai buscar os dados no seu escritório, baixar a fatura na Distribuidora e anexar.\n\nPor favor, digite o **Nome do Cliente (ou ID)** e o número da **UC** no final, separados por espaço.\n\n*(Exemplo: Robson Carlos da Silva 987654)*:",
-    T_RESGATE_BUSCANDO: "🔍 Iniciando a Automação Total...\n\n1️⃣ Buscando CPF e Nascimento no relatório da iGreen...\n2️⃣ Acessando a Distribuidora Local...\n3️⃣ Baixando fatura atualizada da UC...\n4️⃣ Retornando à iGreen para injetar o documento...\n\nIsso pode levar alguns segundos, aguarde...",
+    // TEXTO CORRIGIDO: Só pede ID ou Nome
+    T_RESGATE_START: "Opção 3️⃣ selecionada! ⚡ \nPara resolvermos a devolutiva, o robô vai buscar a UC, CPF e Nascimento no seu escritório, baixar a fatura na Distribuidora e anexar.\n\nPor favor, digite apenas o **Nome do Cliente ou ID**.\n\n*(Exemplo: 398172 ou Wellington Silva Nunes)*:",
+    T_RESGATE_BUSCANDO: "🔍 Iniciando a Automação Total...\n\n1️⃣ Buscando CPF, Nascimento e UC no relatório da iGreen...\n2️⃣ Acessando a Distribuidora Local...\n3️⃣ Baixando fatura atualizada da UC...\n4️⃣ Retornando à iGreen para injetar o documento...\n\nIsso pode levar alguns segundos, aguarde...",
     T_RESGATE_SUCESSO: "✅ Sucesso Absoluto! A fatura atualizada foi resgatada e anexada na aba de Devolutivas do escritório iGreen. A sua pendência foi resolvida!",
-    T_RESGATE_FAIL: "⚠️ Ocorreu um erro no processo. Verifique se o Nome/ID e a UC estão corretos e se o cliente possui os dados completos no sistema.",
+    T_RESGATE_FAIL: "⚠️ Ocorreu um erro no processo. Verifique se o Nome/ID está correto e se o cliente possui os dados completos no sistema (inclusive a Instalação na 8ª coluna).",
 
     T_GUARDAR_START: "Opção 2️⃣ selecionada! 💾 \n*Módulo de Pré-Cadastro* ativado!\nPor favor, envie a foto ou PDF da sua *Fatura de Energia*.",
     T_PEDIR_TELEFONE: "✅ Fatura analisada e salva!\n👤 Titular: ${nome}\n⚡ UC: ${uc}\n\nPara completarmos o seu pré-cadastro, digite o **Número de Telefone (com DDD)** do titular:",
@@ -144,20 +145,22 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
 // ==========================================
 // MÓDULO 2: EXTRATOR RPA TOTAL (IGREEN -> EQUATORIAL -> IGREEN)
 // ==========================================
-async function fluxoResgateDevolutiva(termoBuscaIgreen, uc, phone, cpfBanco = null, nascBanco = null, isAutomated = false) {
+// Atualizei a assinatura da função: removemos o "uc" obrigatório no início. Ele é capturado agora!
+async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, nascBanco = null, ucBanco = null, isAutomated = false) {
     let browser;
     const caminhoFaturaLocal = path.join('/tmp', `fatura_${Date.now()}.pdf`);
     let cpf = cpfBanco;
     let nascimento = nascBanco;
+    let uc = ucBanco;
 
     try {
         browser = await puppeteer.launch({ headless: true, args: CHROME_ARGS });
         const page = await browser.newPage();
 
         // ---------------------------------------------------------
-        // ETAPA 1: EXTRAIR CPF/NASCIMENTO NA IGREEN (Se não fornecido pelo CRON)
+        // ETAPA 1: EXTRAIR CPF, NASCIMENTO E UC (Instalação) NA IGREEN
         // ---------------------------------------------------------
-        if (!cpf || !nascimento) {
+        if (!cpf || !nascimento || !uc) {
             console.log(`[RPA] ETAPA 1: Buscando dados de ${termoBuscaIgreen} na iGreen...`);
             await page.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
             
@@ -182,18 +185,32 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, uc, phone, cpfBanco = nu
             const dadosExtraidos = await page.evaluate((busca) => {
                 const linha = Array.from(document.querySelectorAll('tr')).find(tr => tr.textContent.toLowerCase().includes(busca.toLowerCase()));
                 if (!linha) return null;
+                
                 const cpfMatch = linha.textContent.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
                 const dataMatch = linha.textContent.match(/\d{2}\/\d{2}\/\d{4}/g);
-                return { cpfExt: cpfMatch ? cpfMatch[0] : null, nascExt: dataMatch ? dataMatch[0] : null };
+                
+                // MÁGICA AQUI: Pega a 8ª coluna (índice 7) que contém o número de Instalação (UC)
+                const colunas = linha.querySelectorAll('td');
+                let ucExt = null;
+                if (colunas.length >= 8) {
+                    ucExt = colunas[7].textContent.replace(/\D/g, ''); // Limpa qualquer texto extra, deixando só os números
+                }
+
+                return { 
+                    cpfExt: cpfMatch ? cpfMatch[0] : null, 
+                    nascExt: dataMatch ? dataMatch[0] : null,
+                    ucExt: ucExt
+                };
             }, termoBuscaIgreen);
 
-            if (!dadosExtraidos || !dadosExtraidos.cpfExt || !dadosExtraidos.nascExt) {
-                throw new Error("Não foi possível localizar o CPF ou Nascimento no relatório da iGreen.");
+            if (!dadosExtraidos || !dadosExtraidos.cpfExt || !dadosExtraidos.nascExt || !dadosExtraidos.ucExt) {
+                throw new Error("Não foi possível localizar o CPF, Nascimento ou UC na tabela da iGreen.");
             }
 
             cpf = dadosExtraidos.cpfExt.replace(/\D/g, '');
             nascimento = dadosExtraidos.nascExt;
-            console.log(`[RPA] Sucesso na Etapa 1! CPF: ${cpf} | Nasc: ${nascimento}`);
+            uc = dadosExtraidos.ucExt;
+            console.log(`[RPA] Sucesso na Etapa 1! CPF: ${cpf} | Nasc: ${nascimento} | UC: ${uc}`);
         }
 
         // INTERCEPTADOR DE PDF (Prepara para a Etapa 2)
@@ -265,7 +282,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, uc, phone, cpfBanco = nu
         // ETAPA 3: INJEÇÃO NA DEVOLUTIVA DA IGREEN
         // ---------------------------------------------------------
         console.log(`[RPA] ETAPA 3: Injetando na iGreen...`);
-        // Como já estamos logados no mesmo navegador, apenas voltamos para a tela inicial
         await page.goto("https://escritorio.igreenenergy.com.br", { waitUntil: 'networkidle2' });
         await new Promise(r => setTimeout(r, 4000));
 
@@ -344,8 +360,7 @@ function iniciarMotorRecorrente() {
                     
                     if (diasPassados >= 15) {
                         console.log(`🔄 [CRON] 15 dias atingidos. RPA automático para UC: ${lead.UC}`);
-                        // No CRON, o robô já manda o CPF e Nasc, então ele PULA a Etapa 1 e vai direto pra Equatorial!
-                        fluxoResgateDevolutiva(lead.NOME_CLIENTE, lead.UC, lead.TELEFONE_REMETENTE, lead.CPF, lead.DATA_NASCIMENTO, true);
+                        fluxoResgateDevolutiva(lead.NOME_CLIENTE, lead.TELEFONE_REMETENTE, lead.CPF, lead.DATA_NASCIMENTO, lead.UC, true);
                         await salvarNoBanco(doc.id, lead.TELEFONE_REMETENTE, { STATUS_CADASTRO: 'PENDENTE_MEDIA' }); 
                     }
                 });
@@ -435,18 +450,15 @@ app.post('/webhook/igreen', async (req, res) => {
         }
 
         case 'AGUARDANDO_DADOS_DEVOLUTIVA': {
-            // Inteligência para separar o Nome da UC no final
-            const partes = textoIn.split(' ').filter(v => v.trim() !== '');
-            if (partes.length >= 2) {
-                const uc = partes.pop().replace(/\D/g, ''); // O último bloco é a UC
-                const termoBusca = partes.join(' '); // O resto é o Nome ou ID
-                
+            // Agora aceita TUDO que for digitado como o termo de busca (Nome ou ID livremente)
+            if (textoIn.length >= 3) {
                 await enviarMensagem(phone, TEXTOS.T_RESGATE_BUSCANDO);
                 memoriaEstado.delete(phone); 
                 
-                setTimeout(() => { fluxoResgateDevolutiva(termoBusca, uc, phone, null, null, false); }, 2000);
+                // Passa o texto inteiro e deixa o robô se virar com a Etapa 1
+                setTimeout(() => { fluxoResgateDevolutiva(textoIn, phone, null, null, null, false); }, 2000);
             } else {
-                await enviarMensagem(phone, "⚠️ Formato inválido. Digite o Nome (ou ID) e a UC no final.\nEx: Robson Carlos 987654");
+                await enviarMensagem(phone, "⚠️ Digite o Nome ou ID corretamente (mínimo de 3 caracteres).");
             }
             break;
         }
