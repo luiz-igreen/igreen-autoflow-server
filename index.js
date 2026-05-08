@@ -154,7 +154,11 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
     let uc = ucBanco;
 
     try {
-        browser = await puppeteer.launch({ headless: true, args: CHROME_ARGS });
+        browser = await puppeteer.launch({ 
+            headless: true, 
+            args: CHROME_ARGS,
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() 
+        });
         const page = await browser.newPage();
 
         // ---------------------------------------------------------
@@ -533,4 +537,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log(`Rodando na porta ${PORT}`));    
