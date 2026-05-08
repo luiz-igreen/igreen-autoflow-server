@@ -52,8 +52,9 @@ const TEXTOS = {
     T_PEDIR_NASCIMENTO: "✅ Fatura analisada e salva com segurança!\n👤 Titular: ${nome}\n⚡ Unidade Consumidora: ${uc}\n💰 Valor: R$ ${valor}\n\nPara facilitar emissões de *Segunda Via* no futuro, por favor, digite a sua **Data de Nascimento** (Ex: 15/08/1985):",
     T_FIM_PRE_CADASTRO: "Obrigado! 📅 Data de nascimento salva no seu perfil.\n\n⚠️ *Aviso Importante:* O seu cadastro está 'Pendente de Documentos'. Como você já é cliente iGreen, não há pressa! Quando quiser atualizar nosso sistema com a foto do seu documento (RG ou CNH), basta voltar a este atendimento e escolher a **Opção 4**.",
     T_START_OPCAO_4: "Opção 4️⃣ selecionada! 📎\nPara anexarmos o documento no imóvel correto, por favor, digite primeiro o número da sua **UC (Unidade Consumidora) ou Conta Contrato** (apenas os números):",
-    T_PEDIR_FOTO_DOC: "🔍 Imóvel localizado e pronto para atualização! \n\nAgora, por favor, envie a **foto legível do seu Documento de Identificação (RG ou CNH)**:",
-    T_DOCS_RECEBIDOS: "✅ Documento recebido com sucesso! \nO arquivo foi anexado ao seu perfil com segurança para futuras necessidades. Muito obrigado pela sua colaboração! 🙏"
+    T_PEDIR_FOTO_DOC_FRENTE: "🔍 Imóvel localizado! \n\nPara seguirmos o padrão da distribuidora, por favor, envie agora uma foto legível apenas da **FRENTE** do seu Documento de Identificação (RG ou CNH):",
+    T_PEDIR_FOTO_DOC_VERSO: "✅ Frente recebida e salva!\n\nAgora, para concluirmos, por favor envie a foto do **VERSO** do mesmo documento:",
+    T_DOCS_RECEBIDOS: "✅ Documentos recebidos com sucesso! \nAs imagens (Frente e Verso) foram anexadas ao seu perfil com segurança. O seu cadastro está completo! Muito obrigado pela sua colaboração! 🙏"
 };
 
 const CHROME_ARGS = [
@@ -128,13 +129,10 @@ Se um dado não estiver visível, deixe vazio.`;
             responseSchema: {
                 type: "OBJECT",
                 properties: {
-                    // ORDEM LÓGICA DA FATURA
                     "DISTRIBUIDORA": { type: "STRING" },
                     "NOME_CLIENTE": { type: "STRING" },
                     "MASCARA_CPF": { type: "STRING", description: "CPF com asteriscos da LGPD" },
                     "CPF": { type: "STRING", description: "Números visíveis do CPF" },
-                    
-                    // ENDEREÇO COMPLETO
                     "ENDERECO": { type: "STRING" },
                     "ENDERECO_NUMERO": { type: "STRING" },
                     "ENDERECO_COMPLEMENTO": { type: "STRING", description: "Bloco, Apto, Casa, Quadra, etc" },
@@ -142,8 +140,6 @@ Se um dado não estiver visível, deixe vazio.`;
                     "CIDADE": { type: "STRING" },
                     "ESTADO": { type: "STRING", description: "Sigla UF" },
                     "CEP": { type: "STRING" },
-
-                    // DADOS TÉCNICOS E VALORES
                     "UC": { type: "STRING", description: "Número da UC ou Conta Contrato" },
                     "CONTA_MES": { type: "STRING", description: "Mês/Ano referência" },
                     "VENCIMENTO": { type: "STRING" },
@@ -278,20 +274,38 @@ app.post('/webhook/igreen', async (req, res) => {
             }
             break;
 
+        // --- FLUXO DA OPÇÃO 4 EM 2 PASSOS (FRENTE E VERSO) ---
         case 'AGUARDANDO_UC_DOC':
             if (textoIn.length >= 4) { 
                 const ucLimpa = textoIn.replace(/\D/g, '');
-                memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOCUMENTOS_AVULSOS', docId: ucLimpa });
-                await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC);
+                memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: ucLimpa });
+                await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
             } else { await enviarMensagem(phone, "⚠️ Digite o número da UC ou digite *0*."); }
             break;
 
-        case 'AGUARDANDO_DOCUMENTOS_AVULSOS': 
+        case 'AGUARDANDO_DOC_FRENTE': 
             if (temMidia) {
                 const docId = mem.docId; 
-                await salvarNoBanco(docId, phone, { LINK_DOCUMENTO_ID: mediaUrl, STATUS_CADASTRO: "CONCLUIDO_COM_DOCS" });
+                // Salva a frente com a nomenclatura exata que o seu Dashboard HTML exige
+                await salvarNoBanco(docId, phone, { LINK_DOC_FRENTE: mediaUrl });
+                
+                // Muda o status para pedir o verso
+                memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO', docId: docId });
+                await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_VERSO);
+            } else {
+                await enviarMensagem(phone, "⚠️ Por favor, envie a imagem da FRENTE do documento ou digite *0* para cancelar.");
+            }
+            break;
+
+        case 'AGUARDANDO_DOC_VERSO': 
+            if (temMidia) {
+                const docId = mem.docId; 
+                // Salva o verso e muda o status para Concluído
+                await salvarNoBanco(docId, phone, { LINK_DOC_VERSO: mediaUrl, STATUS_CADASTRO: "CONCLUIDO_COM_DOCS" });
                 await enviarMensagem(phone, TEXTOS.T_DOCS_RECEBIDOS);
-                memoriaEstado.delete(phone);
+                memoriaEstado.delete(phone); // Fim do fluxo!
+            } else {
+                await enviarMensagem(phone, "⚠️ Por favor, envie a imagem do VERSO do documento ou digite *0* para cancelar.");
             }
             break;
     }
