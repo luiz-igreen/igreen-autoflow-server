@@ -1,8 +1,7 @@
 import express from 'express';
 import axios from 'axios';
 import admin from 'firebase-admin';
-import puppeteer from 'puppeteer-core';
-import chromium from '@sparticuz/chromium';
+import puppeteer from 'puppeteer';
 import fs from 'fs';
 import path from 'path';
 
@@ -69,6 +68,12 @@ const TEXTOS = {
     T_DOCS_RECEBIDOS: "✅ Documentos recebidos com sucesso! \nAs imagens foram anexadas ao seu perfil com segurança. Muito obrigado! 🙏"
 };
 
+const CHROME_ARGS = [
+    "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", 
+    "--disable-gpu", "--no-zygote", 
+    "--user-agent=Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.162 Mobile Safari/537.36"
+];
+
 // ==========================================
 // FUNÇÕES AUXILIARES
 // ==========================================
@@ -110,7 +115,7 @@ async function salvarNoBanco(docId, phone, dadosExtras) {
 }
 
 // ==========================================
-// MÓDULO 1: MOTOR IA (Atualizado com Fallback e Endpoint v1)
+// MÓDULO 1: MOTOR IA 
 // ==========================================
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     const models = ['gemini-1.5-flash', 'gemini-1.5-pro'];
@@ -175,19 +180,12 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
     let uc = ucBanco;
 
     try {
-        console.log("[RPA] Iniciando o motor Sparticuz Chromium...");
         browser = await puppeteer.launch({ 
-            args: chromium.args,
-            defaultViewport: chromium.defaultViewport,
-            executablePath: await chromium.executablePath(),
-            headless: chromium.headless,
-            ignoreHTTPSErrors: true
+            headless: true, 
+            args: CHROME_ARGS
         });
         const page = await browser.newPage();
 
-        // ---------------------------------------------------------
-        // ETAPA 1: EXTRAIR CPF, NASCIMENTO E UC (Instalação) NA IGREEN
-        // ---------------------------------------------------------
         if (!cpf || !nascimento || !uc) {
             console.log(`[RPA] ETAPA 1: Buscando dados de ${termoBuscaIgreen} na iGreen...`);
             await page.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
@@ -240,7 +238,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             console.log(`[RPA] Sucesso na Etapa 1! CPF: ${cpf} | Nasc: ${nascimento} | UC: ${uc}`);
         }
 
-        // INTERCEPTADOR DE PDF
         page.on('response', async (response) => {
             const contentType = response.headers()['content-type'];
             if (contentType && contentType.includes('application/pdf')) {
@@ -251,9 +248,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             }
         });
 
-        // ---------------------------------------------------------
-        // ETAPA 2: BAIXAR FATURA NA EQUATORIAL AL
-        // ---------------------------------------------------------
         console.log(`[RPA] ETAPA 2: Acessando Equatorial AL...`);
         await page.goto(EQUATORIAL_AL_URL, { waitUntil: 'networkidle2', timeout: 60000 });
 
@@ -305,9 +299,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         await new Promise(r => setTimeout(r, 8000)); 
         if (!fs.existsSync(caminhoFaturaLocal)) throw new Error("Falha ao capturar o PDF na Equatorial.");
 
-        // ---------------------------------------------------------
-        // ETAPA 3: INJEÇÃO NA DEVOLUTIVA DA IGREEN
-        // ---------------------------------------------------------
         console.log(`[RPA] ETAPA 3: Injetando na iGreen...`);
         await page.goto("https://escritorio.igreenenergy.com.br", { waitUntil: 'networkidle2' });
         await new Promise(r => setTimeout(r, 4000));
@@ -558,4 +549,26 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Rodando na porta ${PORT}`));    
+
+// ==========================================
+// HEALTH CHECK: TESTA O CHROME ANTES DE LIGAR
+// ==========================================
+async function validateBrowser() {
+    try {
+        console.log("⏳ Iniciando Health Check do Navegador...");
+        const browser = await puppeteer.launch({
+            headless: true,
+            args: CHROME_ARGS
+        });
+        await browser.close();
+        console.log('✔ Browser health check passed! Chrome está pronto para a Opção 3.');
+        return true;
+    } catch (error) {
+        console.error('❌ Browser initialization failed:', error.message);
+        process.exit(1); 
+    }
+}
+
+validateBrowser().then(() => {
+    app.listen(PORT, () => console.log(`🚀 Motor RPA validado e rodando na porta ${PORT}`));
+});
