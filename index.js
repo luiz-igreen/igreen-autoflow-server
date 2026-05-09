@@ -50,7 +50,6 @@ const TEXTOS = {
     T01: "Opção 1️⃣ selecionada! 🌿 \nPara prepararmos o seu desconto e o seu contrato, por favor, envie uma foto bem nítida (ou arquivo PDF) da sua conta de luz mais recente.",
     T02: "Recebemos o seu documento! 📄 A nossa assistente virtual está a analisar as informações neste exato momento. Só um instante...",
     
-    // TEXTO CORRIGIDO: Só pede ID ou Nome
     T_RESGATE_START: "Opção 3️⃣ selecionada! ⚡ \nPara resolvermos a devolutiva, o robô vai buscar a UC, CPF e Nascimento no seu escritório, baixar a fatura na Distribuidora e anexar.\n\nPor favor, digite apenas o **Nome do Cliente ou ID**.\n\n*(Exemplo: 398172 ou Wellington Silva Nunes)*:",
     T_RESGATE_BUSCANDO: "🔍 Iniciando a Automação Total...\n\n1️⃣ Buscando CPF, Nascimento e UC no relatório da iGreen...\n2️⃣ Acessando a Distribuidora Local...\n3️⃣ Baixando fatura atualizada da UC...\n4️⃣ Retornando à iGreen para injetar o documento...\n\nIsso pode levar alguns segundos, aguarde...",
     T_RESGATE_SUCESSO: "✅ Sucesso Absoluto! A fatura atualizada foi resgatada e anexada na aba de Devolutivas do escritório iGreen. A sua pendência foi resolvida!",
@@ -116,36 +115,63 @@ async function salvarNoBanco(docId, phone, dadosExtras) {
 }
 
 // ==========================================
-// MÓDULO 1: MOTOR IA
+// MÓDULO 1: MOTOR IA (Atualizado com Fallback e Endpoint v1)
 // ==========================================
 async function analisarFaturaGemini(mediaUrl, mimeType) {
-    const response = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
-    const base64Data = Buffer.from(response.data, 'binary').toString('base64');
-    const instrucao = `Auditor iGreen. Regra Média: Soma últimos 6 meses (ou disponíveis) / quantidade de meses.`;
-    const payload = {
-        systemInstruction: { parts: [{ text: instrucao }] },
-        contents: [{ parts: [{ text: "Extraia os dados organizadamente." }, { inlineData: { mimeType, data: base64Data } }] }],
-        generationConfig: { 
-            responseMimeType: "application/json",
-            responseSchema: {
-                type: "OBJECT",
-                properties: {
-                    "DISTRIBUIDORA": { type: "STRING" }, "NOME_CLIENTE": { type: "STRING" }, "MASCARA_CPF": { type: "STRING" }, "CPF": { type: "STRING" },
-                    "ENDERECO": { type: "STRING" }, "ENDERECO_NUMERO": { type: "STRING" }, "ENDERECO_COMPLEMENTO": { type: "STRING" },
-                    "BAIRRO": { type: "STRING" }, "CIDADE": { type: "STRING" }, "ESTADO": { type: "STRING" }, "CEP": { type: "STRING" },
-                    "UC": { type: "STRING" }, "CONTA_MES": { type: "STRING" }, "VENCIMENTO": { type: "STRING" }, "VALOR_FATURA": { type: "STRING" }, "MEDIA_CONSUMO": { type: "STRING" }, "DATA_NASCIMENTO": { type: "STRING" }
+    const models = ['gemini-1.5-flash', 'gemini-1.5-pro'];
+    let lastError;
+
+    for (const model of models) {
+        try {
+            console.log(`[Gemini RPA] Tentando processar fatura com modelo: ${model}`);
+            
+            const response = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
+            const base64Data = Buffer.from(response.data, 'binary').toString('base64');
+
+            const url = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${GEMINI_API_KEY.trim()}`;
+            const instrucao = `Auditor iGreen. Regra Média: Soma últimos 6 meses (ou disponíveis) / quantidade de meses.`;
+
+            const payload = {
+                systemInstruction: { parts: [{ text: instrucao }] },
+                contents: [{ 
+                    parts: [
+                        { text: "Extraia os dados organizadamente conforme o schema solicitado." }, 
+                        { inlineData: { mimeType, data: base64Data } }
+                    ] 
+                }],
+                generationConfig: { 
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: "OBJECT",
+                        properties: {
+                            "DISTRIBUIDORA": { type: "STRING" }, "NOME_CLIENTE": { type: "STRING" }, "MASCARA_CPF": { type: "STRING" }, "CPF": { type: "STRING" },
+                            "ENDERECO": { type: "STRING" }, "ENDERECO_NUMERO": { type: "STRING" }, "ENDERECO_COMPLEMENTO": { type: "STRING" },
+                            "BAIRRO": { type: "STRING" }, "CIDADE": { type: "STRING" }, "ESTADO": { type: "STRING" }, "CEP": { type: "STRING" },
+                            "UC": { type: "STRING" }, "CONTA_MES": { type: "STRING" }, "VENCIMENTO": { type: "STRING" }, "VALOR_FATURA": { type: "STRING" }, "MEDIA_CONSUMO": { type: "STRING" }, "DATA_NASCIMENTO": { type: "STRING" }
+                        }
+                    }
                 }
+            };
+
+            const res = await axios.post(url, payload);
+            
+            if (res.data.candidates && res.data.candidates[0].content) {
+                console.log(`[Gemini RPA] Sucesso com o modelo ${model}`);
+                return JSON.parse(res.data.candidates[0].content.parts[0].text);
             }
+
+        } catch (e) {
+            lastError = e;
+            console.error(`[Gemini RPA] Erro com o modelo ${model}:`, e.response?.data || e.message);
         }
-    };
-    const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${GEMINI_API_KEY.trim()}`, payload);
-    return JSON.parse(res.data.candidates[0].content.parts[0].text);
+    }
+
+    throw new Error(`[Gemini RPA] Falha total em todos os modelos. Último erro: ${lastError.message}`);
 }
 
 // ==========================================
 // MÓDULO 2: EXTRATOR RPA TOTAL (IGREEN -> EQUATORIAL -> IGREEN)
 // ==========================================
-// Atualizei a assinatura da função: removemos o "uc" obrigatório no início. Ele é capturado agora!
 async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, nascBanco = null, ucBanco = null, isAutomated = false) {
     let browser;
     const caminhoFaturaLocal = path.join('/tmp', `fatura_${Date.now()}.pdf`);
@@ -193,11 +219,10 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 const cpfMatch = linha.textContent.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
                 const dataMatch = linha.textContent.match(/\d{2}\/\d{2}\/\d{4}/g);
                 
-                // MÁGICA AQUI: Pega a 8ª coluna (índice 7) que contém o número de Instalação (UC)
                 const colunas = linha.querySelectorAll('td');
                 let ucExt = null;
                 if (colunas.length >= 8) {
-                    ucExt = colunas[7].textContent.replace(/\D/g, ''); // Limpa qualquer texto extra, deixando só os números
+                    ucExt = colunas[7].textContent.replace(/\D/g, '');
                 }
 
                 return { 
@@ -217,7 +242,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             console.log(`[RPA] Sucesso na Etapa 1! CPF: ${cpf} | Nasc: ${nascimento} | UC: ${uc}`);
         }
 
-        // INTERCEPTADOR DE PDF (Prepara para a Etapa 2)
+        // INTERCEPTADOR DE PDF
         page.on('response', async (response) => {
             const contentType = response.headers()['content-type'];
             if (contentType && contentType.includes('application/pdf')) {
@@ -454,12 +479,10 @@ app.post('/webhook/igreen', async (req, res) => {
         }
 
         case 'AGUARDANDO_DADOS_DEVOLUTIVA': {
-            // Agora aceita TUDO que for digitado como o termo de busca (Nome ou ID livremente)
             if (textoIn.length >= 3) {
                 await enviarMensagem(phone, TEXTOS.T_RESGATE_BUSCANDO);
                 memoriaEstado.delete(phone); 
                 
-                // Passa o texto inteiro e deixa o robô se virar com a Etapa 1
                 setTimeout(() => { fluxoResgateDevolutiva(textoIn, phone, null, null, null, false); }, 2000);
             } else {
                 await enviarMensagem(phone, "⚠️ Digite o Nome ou ID corretamente (mínimo de 3 caracteres).");
@@ -537,4 +560,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Rodando na porta ${PORT}`));    
+app.listen(PORT, () => console.log(`Rodando na porta ${PORT}`));
