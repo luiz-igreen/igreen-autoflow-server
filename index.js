@@ -1,5 +1,4 @@
-CÓDIGO FONTE NOVA VERSAO: MAIS NAO FUNCIONOU:
-
+import express from 'express';
 import axios from 'axios';
 import admin from 'firebase-admin';
 import puppeteer from 'puppeteer';
