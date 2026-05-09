@@ -1,7 +1,8 @@
 import express from 'express';
 import axios from 'axios';
 import admin from 'firebase-admin';
-import puppeteer from 'puppeteer';
+import puppeteer from 'puppeteer-core';
+import chromium from '@sparticuz/chromium';
 import fs from 'fs';
 import path from 'path';
 
@@ -67,12 +68,6 @@ const TEXTOS = {
     T_PEDIR_FOTO_DOC_VERSO: "✅ Frente recebida!\n\nAgora, envie a foto do **VERSO** do mesmo documento:",
     T_DOCS_RECEBIDOS: "✅ Documentos recebidos com sucesso! \nAs imagens foram anexadas ao seu perfil com segurança. Muito obrigado! 🙏"
 };
-
-const CHROME_ARGS = [
-    "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", 
-    "--disable-gpu", "--no-zygote", 
-    "--user-agent=Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.162 Mobile Safari/537.36"
-];
 
 // ==========================================
 // FUNÇÕES AUXILIARES
@@ -180,9 +175,13 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
     let uc = ucBanco;
 
     try {
+        console.log("[RPA] Iniciando o motor Sparticuz Chromium...");
         browser = await puppeteer.launch({ 
-            headless: true, 
-            args: CHROME_ARGS
+            args: chromium.args,
+            defaultViewport: chromium.defaultViewport,
+            executablePath: await chromium.executablePath(),
+            headless: chromium.headless,
+            ignoreHTTPSErrors: true
         });
         const page = await browser.newPage();
 
@@ -559,4 +558,4 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log(`Rodando na porta ${PORT}`));    
