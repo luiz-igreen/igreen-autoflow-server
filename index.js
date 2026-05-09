@@ -1,3 +1,5 @@
+CÓDIGO FONTE NOVA VERSAO: MAIS NAO FUNCIONOU:
+
 import express from 'express';
 import axios from 'axios';
 import admin from 'firebase-admin';
@@ -115,30 +117,58 @@ async function salvarNoBanco(docId, phone, dadosExtras) {
 }
 
 // ==========================================
-// MÓDULO 1: MOTOR IA (Original)
+// MÓDULO 1: MOTOR IA (Atualizado com Fallback e Endpoint v1)
 // ==========================================
 async function analisarFaturaGemini(mediaUrl, mimeType) {
-    const response = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
-    const base64Data = Buffer.from(response.data, 'binary').toString('base64');
-    const instrucao = `Auditor iGreen. Regra Média: Soma últimos 6 meses (ou disponíveis) / quantidade de meses.`;
-    const payload = {
-        systemInstruction: { parts: [{ text: instrucao }] },
-        contents: [{ parts: [{ text: "Extraia os dados organizadamente." }, { inlineData: { mimeType, data: base64Data } }] }],
-        generationConfig: { 
-            responseMimeType: "application/json",
-            responseSchema: {
-                type: "OBJECT",
-                properties: {
-                    "DISTRIBUIDORA": { type: "STRING" }, "NOME_CLIENTE": { type: "STRING" }, "MASCARA_CPF": { type: "STRING" }, "CPF": { type: "STRING" },
-                    "ENDERECO": { type: "STRING" }, "ENDERECO_NUMERO": { type: "STRING" }, "ENDERECO_COMPLEMENTO": { type: "STRING" },
-                    "BAIRRO": { type: "STRING" }, "CIDADE": { type: "STRING" }, "ESTADO": { type: "STRING" }, "CEP": { type: "STRING" },
-                    "UC": { type: "STRING" }, "CONTA_MES": { type: "STRING" }, "VENCIMENTO": { type: "STRING" }, "VALOR_FATURA": { type: "STRING" }, "MEDIA_CONSUMO": { type: "STRING" }, "DATA_NASCIMENTO": { type: "STRING" }
+    const models = ['gemini-1.5-flash', 'gemini-1.5-pro'];
+    let lastError;
+
+    for (const model of models) {
+        try {
+            console.log(`[Gemini RPA] Tentando processar fatura com modelo: ${model}`);
+            
+            const response = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
+            const base64Data = Buffer.from(response.data, 'binary').toString('base64');
+
+            const url = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${GEMINI_API_KEY.trim()}`;
+            const instrucao = `Auditor iGreen. Regra Média: Soma últimos 6 meses (ou disponíveis) / quantidade de meses.`;
+
+            const payload = {
+                systemInstruction: { parts: [{ text: instrucao }] },
+                contents: [{ 
+                    parts: [
+                        { text: "Extraia os dados organizadamente conforme o schema solicitado." }, 
+                        { inlineData: { mimeType, data: base64Data } }
+                    ] 
+                }],
+                generationConfig: { 
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: "OBJECT",
+                        properties: {
+                            "DISTRIBUIDORA": { type: "STRING" }, "NOME_CLIENTE": { type: "STRING" }, "MASCARA_CPF": { type: "STRING" }, "CPF": { type: "STRING" },
+                            "ENDERECO": { type: "STRING" }, "ENDERECO_NUMERO": { type: "STRING" }, "ENDERECO_COMPLEMENTO": { type: "STRING" },
+                            "BAIRRO": { type: "STRING" }, "CIDADE": { type: "STRING" }, "ESTADO": { type: "STRING" }, "CEP": { type: "STRING" },
+                            "UC": { type: "STRING" }, "CONTA_MES": { type: "STRING" }, "VENCIMENTO": { type: "STRING" }, "VALOR_FATURA": { type: "STRING" }, "MEDIA_CONSUMO": { type: "STRING" }, "DATA_NASCIMENTO": { type: "STRING" }
+                        }
+                    }
                 }
+            };
+
+            const res = await axios.post(url, payload);
+            
+            if (res.data.candidates && res.data.candidates[0].content) {
+                console.log(`[Gemini RPA] Sucesso com o modelo ${model}`);
+                return JSON.parse(res.data.candidates[0].content.parts[0].text);
             }
+
+        } catch (e) {
+            lastError = e;
+            console.error(`[Gemini RPA] Erro com o modelo ${model}:`, e.response?.data || e.message);
         }
-    };
-    const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${GEMINI_API_KEY.trim()}`, payload);
-    return JSON.parse(res.data.candidates[0].content.parts[0].text);
+    }
+
+    throw new Error(`[Gemini RPA] Falha total em todos os modelos. Último erro: ${lastError.message}`);
 }
 
 // ==========================================
@@ -194,7 +224,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 const colunas = linha.querySelectorAll('td');
                 let ucExt = null;
                 if (colunas.length >= 8) {
-                    ucExt = colunas[7].textContent.replace(/\D/g, ''); 
+                    ucExt = colunas[7].textContent.replace(/\D/g, '');
                 }
 
                 return { 
