@@ -462,4 +462,101 @@ app.post('/webhook/igreen', async (req, res) => {
         case 'AGUARDANDO_TELEFONE': {
             if (textoIn.length >= 8) { 
                 await salvarNoBanco(mem.docId, phone, { TELEFONE: textoIn, STATUS_CADASTRO: "AGUARDANDO_EMAIL" });
-                memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_EMAIL', docId: mem.doc
+                memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_EMAIL', docId: mem.docId });
+                await enviarMensagem(phone, TEXTOS.T_PEDIR_EMAIL);
+            } else { await enviarMensagem(phone, "⚠️ Digite um telefone válido."); }
+            break;
+        }
+
+        case 'AGUARDANDO_EMAIL': {
+            if (textoIn.includes('@')) { 
+                await salvarNoBanco(mem.docId, phone, { EMAIL: textoIn, STATUS_CADASTRO: "PENDENTE_DOCUMENTOS" });
+                await enviarMensagem(phone, TEXTOS.T_FIM_PRE_CADASTRO);
+                memoriaEstado.delete(phone);
+            } else { await enviarMensagem(phone, "⚠️ Digite um e-mail válido."); }
+            break;
+        }
+
+        case 'AGUARDANDO_DADOS_DEVOLUTIVA': {
+            if (textoIn.length >= 3) {
+                await enviarMensagem(phone, TEXTOS.T_RESGATE_BUSCANDO);
+                memoriaEstado.delete(phone); 
+                
+                setTimeout(() => { fluxoResgateDevolutiva(textoIn, phone, null, null, null, false); }, 2000);
+            } else {
+                await enviarMensagem(phone, "⚠️ Digite o Nome ou ID corretamente (mínimo de 3 caracteres).");
+            }
+            break;
+        }
+
+        case 'AGUARDANDO_UC_DOC': {
+            if (textoIn.length >= 4) { 
+                const ucLimpa = textoIn.replace(/\D/g, '');
+                const leadExistente = await buscarNoBanco(ucLimpa);
+                
+                if (leadExistente) {
+                    if (!leadExistente.TELEFONE) {
+                        memoriaEstado.set(phone, { STATUS_CADASTRO: 'OP4_PEDIR_TELEFONE', docId: ucLimpa });
+                        await enviarMensagem(phone, TEXTOS.T_OP4_FALTANDO_TEL);
+                    } else if (!leadExistente.EMAIL) {
+                        memoriaEstado.set(phone, { STATUS_CADASTRO: 'OP4_PEDIR_EMAIL', docId: ucLimpa });
+                        await enviarMensagem(phone, TEXTOS.T_OP4_FALTANDO_MAIL);
+                    } else {
+                        memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: ucLimpa });
+                        await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
+                    }
+                } else {
+                    memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: ucLimpa });
+                    await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
+                }
+            } else { await enviarMensagem(phone, "⚠️ Digite a UC corretamente."); }
+            break;
+        }
+
+        case 'OP4_PEDIR_TELEFONE': {
+            if (textoIn.length >= 8) {
+                await salvarNoBanco(mem.docId, phone, { TELEFONE: textoIn });
+                const leadAtualizadoTel = await buscarNoBanco(mem.docId);
+                
+                if (leadAtualizadoTel && !leadAtualizadoTel.EMAIL) {
+                    memoriaEstado.set(phone, { STATUS_CADASTRO: 'OP4_PEDIR_EMAIL', docId: mem.docId });
+                    await enviarMensagem(phone, TEXTOS.T_OP4_FALTANDO_MAIL);
+                } else {
+                    memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: mem.docId });
+                    await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
+                }
+            } else { await enviarMensagem(phone, "⚠️ Digite um telefone válido."); }
+            break;
+        }
+
+        case 'OP4_PEDIR_EMAIL': {
+            if (textoIn.includes('@')) {
+                await salvarNoBanco(mem.docId, phone, { EMAIL: textoIn });
+                memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: mem.docId });
+                await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
+            } else { await enviarMensagem(phone, "⚠️ Digite um e-mail válido."); }
+            break;
+        }
+
+        case 'AGUARDANDO_DOC_FRENTE': {
+            if (temMidia) {
+                await salvarNoBanco(mem.docId, phone, { LINK_DOC_FRENTE: mediaUrl });
+                memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO', docId: mem.docId });
+                await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_VERSO);
+            } else { await enviarMensagem(phone, "⚠️ Envie a foto da FRENTE."); }
+            break;
+        }
+
+        case 'AGUARDANDO_DOC_VERSO': {
+            if (temMidia) {
+                await salvarNoBanco(mem.docId, phone, { LINK_DOC_VERSO: mediaUrl, STATUS_CADASTRO: "CONCLUIDO_COM_DOCS" });
+                await enviarMensagem(phone, TEXTOS.T_DOCS_RECEBIDOS);
+                memoriaEstado.delete(phone);
+            } else { await enviarMensagem(phone, "⚠️ Envie a foto do VERSO."); }
+            break;
+        }
+    }
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Rodando na porta ${PORT}`));
