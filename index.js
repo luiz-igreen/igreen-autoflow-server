@@ -71,7 +71,9 @@ const TEXTOS = {
 const CHROME_ARGS = [
     "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", 
     "--disable-gpu", "--no-zygote", 
-    "--user-agent=Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.162 Mobile Safari/537.36"
+    "--disable-blink-features=AutomationControlled",
+    "--window-size=1920,1080",
+    "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
 ];
 
 // ==========================================
@@ -158,6 +160,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() 
         });
         const page = await browser.newPage();
+        await page.setViewport({ width: 1920, height: 1080 });
 
         if (!cpf || !nascimento || !uc) {
             console.log(`[RPA] ETAPA 1: Buscando dados de ${termoBuscaIgreen} na iGreen...`);
@@ -169,14 +172,21 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             await page.type('input[type="email"]', IGREEN_USER);
             await page.type('input[type="password"]', IGREEN_PASS);
             await page.keyboard.press('Enter');
-            await new Promise(r => setTimeout(r, 6000));
+            console.log(`[RPA] Login inserido. Aguardando entrada...`);
+            await new Promise(r => setTimeout(r, 8000));
 
             try { await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
 
             await page.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2' });
-            await new Promise(r => setTimeout(r, 6000));
+            await new Promise(r => setTimeout(r, 8000));
 
-            const searchInput = await page.waitForSelector('input[placeholder*="Pesquisar" i]');
+            const urlAtual = page.url();
+            console.log(`[RPA] URL após tentativa de login: ${urlAtual}`);
+            if (urlAtual.includes('login') || urlAtual.includes('entrar')) {
+                throw new Error("O site da iGreen recusou o login. Senha incorreta ou bloqueio anti-robô detectado.");
+            }
+
+            const searchInput = await page.waitForSelector('input[placeholder*="Pesquisar" i]', { timeout: 15000 });
             await searchInput.type(termoBuscaIgreen); 
             await page.keyboard.press('Enter');
             await new Promise(r => setTimeout(r, 4000));
