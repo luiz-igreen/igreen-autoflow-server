@@ -115,58 +115,30 @@ async function salvarNoBanco(docId, phone, dadosExtras) {
 }
 
 // ==========================================
-// MÓDULO 1: MOTOR IA 
+// MÓDULO 1: MOTOR IA
 // ==========================================
 async function analisarFaturaGemini(mediaUrl, mimeType) {
-    const models = ['gemini-1.5-flash', 'gemini-1.5-pro'];
-    let lastError;
-
-    for (const model of models) {
-        try {
-            console.log(`[Gemini RPA] Tentando processar fatura com modelo: ${model}`);
-            
-            const response = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
-            const base64Data = Buffer.from(response.data, 'binary').toString('base64');
-
-            const url = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${GEMINI_API_KEY.trim()}`;
-            const instrucao = `Auditor iGreen. Regra Média: Soma últimos 6 meses (ou disponíveis) / quantidade de meses.`;
-
-            const payload = {
-                systemInstruction: { parts: [{ text: instrucao }] },
-                contents: [{ 
-                    parts: [
-                        { text: "Extraia os dados organizadamente conforme o schema solicitado." }, 
-                        { inlineData: { mimeType, data: base64Data } }
-                    ] 
-                }],
-                generationConfig: { 
-                    responseMimeType: "application/json",
-                    responseSchema: {
-                        type: "OBJECT",
-                        properties: {
-                            "DISTRIBUIDORA": { type: "STRING" }, "NOME_CLIENTE": { type: "STRING" }, "MASCARA_CPF": { type: "STRING" }, "CPF": { type: "STRING" },
-                            "ENDERECO": { type: "STRING" }, "ENDERECO_NUMERO": { type: "STRING" }, "ENDERECO_COMPLEMENTO": { type: "STRING" },
-                            "BAIRRO": { type: "STRING" }, "CIDADE": { type: "STRING" }, "ESTADO": { type: "STRING" }, "CEP": { type: "STRING" },
-                            "UC": { type: "STRING" }, "CONTA_MES": { type: "STRING" }, "VENCIMENTO": { type: "STRING" }, "VALOR_FATURA": { type: "STRING" }, "MEDIA_CONSUMO": { type: "STRING" }, "DATA_NASCIMENTO": { type: "STRING" }
-                        }
-                    }
+    const response = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
+    const base64Data = Buffer.from(response.data, 'binary').toString('base64');
+    const instrucao = `Auditor iGreen. Regra Média: Soma últimos 6 meses (ou disponíveis) / quantidade de meses.`;
+    const payload = {
+        systemInstruction: { parts: [{ text: instrucao }] },
+        contents: [{ parts: [{ text: "Extraia os dados organizadamente." }, { inlineData: { mimeType, data: base64Data } }] }],
+        generationConfig: { 
+            responseMimeType: "application/json",
+            responseSchema: {
+                type: "OBJECT",
+                properties: {
+                    "DISTRIBUIDORA": { type: "STRING" }, "NOME_CLIENTE": { type: "STRING" }, "MASCARA_CPF": { type: "STRING" }, "CPF": { type: "STRING" },
+                    "ENDERECO": { type: "STRING" }, "ENDERECO_NUMERO": { type: "STRING" }, "ENDERECO_COMPLEMENTO": { type: "STRING" },
+                    "BAIRRO": { type: "STRING" }, "CIDADE": { type: "STRING" }, "ESTADO": { type: "STRING" }, "CEP": { type: "STRING" },
+                    "UC": { type: "STRING" }, "CONTA_MES": { type: "STRING" }, "VENCIMENTO": { type: "STRING" }, "VALOR_FATURA": { type: "STRING" }, "MEDIA_CONSUMO": { type: "STRING" }, "DATA_NASCIMENTO": { type: "STRING" }
                 }
-            };
-
-            const res = await axios.post(url, payload);
-            
-            if (res.data.candidates && res.data.candidates[0].content) {
-                console.log(`[Gemini RPA] Sucesso com o modelo ${model}`);
-                return JSON.parse(res.data.candidates[0].content.parts[0].text);
             }
-
-        } catch (e) {
-            lastError = e;
-            console.error(`[Gemini RPA] Erro com o modelo ${model}:`, e.response?.data || e.message);
         }
-    }
-
-    throw new Error(`[Gemini RPA] Falha total em todos os modelos. Último erro: ${lastError.message}`);
+    };
+    const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY.trim()}`, payload);
+    return JSON.parse(res.data.candidates[0].content.parts[0].text);
 }
 
 // ==========================================
@@ -182,7 +154,8 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
     try {
         browser = await puppeteer.launch({ 
             headless: true, 
-            args: CHROME_ARGS
+            args: CHROME_ARGS,
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() 
         });
         const page = await browser.newPage();
 
@@ -218,7 +191,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 const colunas = linha.querySelectorAll('td');
                 let ucExt = null;
                 if (colunas.length >= 8) {
-                    ucExt = colunas[7].textContent.replace(/\D/g, '');
+                    ucExt = colunas[7].textContent.replace(/\D/g, ''); 
                 }
 
                 return { 
@@ -548,20 +521,21 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 });
 
-const PORT = process.env.PORT || 3000;
+// ==========================================
+// HEALTH CHECK E INICIALIZAÇÃO
+// ==========================================
+const PORT = process.env.PORT || 10000;
 
-// ==========================================
-// HEALTH CHECK: TESTA O CHROME ANTES DE LIGAR
-// ==========================================
 async function validateBrowser() {
     try {
-        console.log("⏳ Iniciando Health Check do Navegador...");
+        console.log("⏳ Iniciando Health Check do Navegador (Modo Docker)...");
         const browser = await puppeteer.launch({
             headless: true,
-            args: CHROME_ARGS
+            args: CHROME_ARGS,
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath()
         });
         await browser.close();
-        console.log('✔ Browser health check passed! Chrome está pronto para a Opção 3.');
+        console.log('✔ Browser health check passed! O contentor Docker está perfeito.');
         return true;
     } catch (error) {
         console.error('❌ Browser initialization failed:', error.message);
@@ -569,6 +543,10 @@ async function validateBrowser() {
     }
 }
 
+// ROTA DE SEGURANÇA PARA O RENDER: Isto impede que o servidor seja desligado por inatividade
+app.get('/', (req, res) => res.status(200).send('Robô iGreen Online e Blindado!'));
+
 validateBrowser().then(() => {
-    app.listen(PORT, () => console.log(`🚀 Motor RPA validado e rodando na porta ${PORT}`));
+    // Escutando no IP 0.0.0.0 (Obrigatório em ambiente Docker/Render)
+    app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
 });
