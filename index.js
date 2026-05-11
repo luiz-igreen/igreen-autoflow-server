@@ -236,28 +236,70 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             await page.keyboard.press('Enter');
             await new Promise(r => setTimeout(r, 4000));
 
+            // NOVO MÉTODO: Busca dinâmica pelos NOMES das colunas (Sugerido pelo Mestre Luiz Jorge)
             const dadosExtraidos = await page.evaluate((busca) => {
-                const linha = Array.from(document.querySelectorAll('tr')).find(tr => tr.textContent.toLowerCase().includes(busca.toLowerCase()));
-                if (!linha) return null;
+                const cabecalhos = Array.from(document.querySelectorAll('th'));
+                let idxDocumento = -1;
+                let idxNascimento = -1;
+                let idxInstalacao = -1;
+
+                // Mapeia onde está cada coluna pelo NOME do cabeçalho
+                cabecalhos.forEach((th, index) => {
+                    const nomeColuna = th.textContent.trim().toLowerCase();
+                    if (nomeColuna === 'documento' || nomeColuna.includes('documento')) idxDocumento = index;
+                    if (nomeColuna.includes('nascimento') || nomeColuna === 'data nascimento') idxNascimento = index;
+                    if (nomeColuna.includes('instalação') || nomeColuna.includes('instalacao')) idxInstalacao = index;
+                });
+
+                // Procura a linha do cliente
+                const linhas = Array.from(document.querySelectorAll('tbody tr, tr'));
+                const linhasDados = linhas.filter(tr => !tr.querySelector('th')); // Ignora o cabeçalho
+                const linhaExata = linhasDados.find(tr => tr.textContent.toLowerCase().includes(busca.toLowerCase()));
                 
-                const cpfMatch = linha.textContent.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
-                const dataMatch = linha.textContent.match(/\d{2}\/\d{2}\/\d{4}/g);
+                if (!linhaExata) return null;
+
+                const colunas = linhaExata.querySelectorAll('td');
                 
-                const colunas = linha.querySelectorAll('td');
+                let cpfExt = null;
+                let nascExt = null;
                 let ucExt = null;
-                if (colunas.length >= 8) {
-                    ucExt = colunas[7].textContent.replace(/\D/g, ''); 
+
+                // 1. Extrair Documento Exato (Coluna Documento)
+                if (idxDocumento !== -1 && colunas[idxDocumento]) {
+                    cpfExt = colunas[idxDocumento].textContent.trim();
+                } else {
+                    // Fallback de segurança caso a coluna mude de nome radicalmente
+                    const cpfMatch = linhaExata.textContent.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
+                    if (cpfMatch) cpfExt = cpfMatch[0];
                 }
 
-                return { 
-                    cpfExt: cpfMatch ? cpfMatch[0] : null, 
-                    nascExt: dataMatch ? dataMatch[0] : null,
-                    ucExt: ucExt
-                };
+                // 2. Extrair Nascimento Exato (Coluna Data Nascimento)
+                if (idxNascimento !== -1 && colunas[idxNascimento]) {
+                    nascExt = colunas[idxNascimento].textContent.trim();
+                    const nMatch = nascExt.match(/\d{2}\/\d{2}\/\d{4}/);
+                    if (nMatch) nascExt = nMatch[0];
+                }
+
+                // 3. Extrair Instalação Exata (Coluna Instalação / UC)
+                if (idxInstalacao !== -1 && colunas[idxInstalacao]) {
+                    ucExt = colunas[idxInstalacao].textContent.replace(/\D/g, '');
+                } else if (colunas.length >= 8) {
+                    ucExt = colunas[7].textContent.replace(/\D/g, ''); // Fallback
+                }
+
+                return { cpfExt, nascExt, ucExt };
             }, termoBuscaIgreen);
 
-            if (!dadosExtraidos || !dadosExtraidos.cpfExt || !dadosExtraidos.nascExt || !dadosExtraidos.ucExt) {
-                throw new Error("Não foi possível localizar o CPF, Nascimento ou UC na tabela da iGreen.");
+            if (!dadosExtraidos) {
+                throw new Error(`Não foi possível localizar o cliente "${termoBuscaIgreen}" na tabela.`);
+            }
+
+            if (!dadosExtraidos.cpfExt || !dadosExtraidos.nascExt || !dadosExtraidos.ucExt) {
+                const falhas = [];
+                if (!dadosExtraidos.cpfExt) falhas.push("Documento (CPF/CNPJ)");
+                if (!dadosExtraidos.nascExt) falhas.push("Data Nascimento");
+                if (!dadosExtraidos.ucExt) falhas.push("Instalação (UC)");
+                throw new Error(`Dados incompletos na tabela: Faltando [${falhas.join(', ')}]. O cliente pode não ter esta informação preenchida na iGreen.`);
             }
 
             cpf = dadosExtraidos.cpfExt.replace(/\D/g, '');
@@ -600,4 +642,4 @@ app.get('/', (req, res) => res.status(200).send('Robô iGreen Online e Blindado!
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});    
+});
