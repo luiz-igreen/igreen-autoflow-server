@@ -247,20 +247,16 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             await new Promise(r => setTimeout(r, 2000));
 
             // ==========================================
-            // EXTRATOR BLINDADO (Com bloqueio de datas de Cadastro 2026)
+            // EXTRATOR BLINDADO V2 (Anti-Deslizamento de Colunas)
             // ==========================================
             const dadosExtraidos = await page.evaluate((busca) => {
                 const buscaLimpa = busca.toLowerCase().trim();
 
                 const cabecalhosNodos = Array.from(document.querySelectorAll('th, [role="columnheader"], div[class*="header"], .MuiDataGrid-columnHeaderTitle'));
-                let idxDocumento = -1;
-                let idxNascimento = -1;
                 let idxInstalacao = -1;
 
                 cabecalhosNodos.forEach((nodo, index) => {
                     const txt = nodo.textContent.trim().toLowerCase();
-                    if (txt === 'documento' || txt.includes('documento')) idxDocumento = index;
-                    if (txt === 'data nascimento' || txt.includes('nascimento')) idxNascimento = index;
                     if (txt === 'instalação' || txt.includes('instalacao')) idxInstalacao = index;
                 });
 
@@ -273,58 +269,65 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     return { falhouBusca: true, debugVisao: `Linha exata não encontrada. Tela atual: ${txtTela}` };
                 }
 
-                let colunas = Array.from(linhaExata.querySelectorAll('td, [role="cell"], div[class*="MuiDataGrid-cell"], div[class*="rt-td"]'));
-                if (colunas.length === 0) colunas = Array.from(linhaExata.children);
-
+                const textoLinha = linhaExata.textContent;
+                
                 let cpfExt = null;
                 let nascExt = null;
                 let ucExt = null;
 
-                // Tenta puxar pela posição exata da coluna
-                if (idxDocumento !== -1 && colunas[idxDocumento]) cpfExt = colunas[idxDocumento].textContent.trim();
-                if (idxNascimento !== -1 && colunas[idxNascimento]) nascExt = colunas[idxNascimento].textContent.trim();
-                if (idxInstalacao !== -1 && colunas[idxInstalacao]) ucExt = colunas[idxInstalacao].textContent.replace(/\D/g, '');
-
-                const textoLinha = linhaExata.textContent;
-                
-                // Limpeza e Validação CPF
-                if (cpfExt) {
-                    cpfExt = cpfExt.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|\d{11}|\d{14}/)?.[0] || cpfExt;
-                } else {
-                    const cpfMatch = textoLinha.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
-                    if (cpfMatch) cpfExt = cpfMatch[0];
+                // 1. CPF: 100% Regex (Impossível trocar com a Data de Cadastro)
+                const cpfMatch = textoLinha.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
+                if (cpfMatch) {
+                    cpfExt = cpfMatch[0];
                 }
 
-                // BALA DE PRATA 2: Lógica "Viajante do Tempo" (Ignora Data Cadastro e ativa Fallback de Segurança)
-                let anoExtraido = nascExt ? parseInt(nascExt.split('/')[2]) : 9999;
-                
-                if (!nascExt || isNaN(anoExtraido) || anoExtraido > 2015) {
-                    const todasDatas = textoLinha.match(/\d{2}\/\d{2}\/\d{4}/g);
-                    if (todasDatas && todasDatas.length > 0) {
-                        // Encontra matematicamente a data mais antiga da linha
-                        let menorAnoVal = parseInt(todasDatas[0].split('/')[2]);
-                        let menorAnoData = todasDatas[0];
-                        for (let d of todasDatas) {
-                            let a = parseInt(d.split('/')[2]);
-                            if (a < menorAnoVal) { menorAnoVal = a; menorAnoData = d; }
-                        }
-                        
-                        // Só aceita se for uma data de nascimento plausível (< 2015)
-                        if (menorAnoVal < 2015) {
-                            nascExt = menorAnoData;
-                        } else {
-                            nascExt = null; // Rejeita Data de Cadastro/Futura
-                        }
-                    } else {
-                        nascExt = null;
+                // 2. NASCIMENTO: A Mágica do "Viajante do Tempo" que já funcionou antes
+                const todasDatas = textoLinha.match(/\d{2}\/\d{2}\/\d{4}/g);
+                if (todasDatas && todasDatas.length > 0) {
+                    let menorAnoVal = 9999;
+                    let menorAnoData = null;
+                    for (let d of todasDatas) {
+                        let a = parseInt(d.split('/')[2], 10);
+                        if (a < menorAnoVal) { menorAnoVal = a; menorAnoData = d; }
+                    }
+                    if (menorAnoVal < 2015) {
+                        nascExt = menorAnoData;
                     }
                 }
 
-                // Limpeza e Validação UC (Evita conflito com o tamanho do CPF)
-                if (!ucExt || ucExt.length < 5) {
-                    let txtSemCpf = textoLinha;
-                    if (cpfExt) txtSemCpf = txtSemCpf.replace(cpfExt.replace(/\D/g, ''), '');
-                    const ucMatch = txtSemCpf.match(/\b\d{6,10}\b/);
+                // 3. INSTALAÇÃO (UC): Inteligência de Deslizamento de Colunas
+                let colunas = Array.from(linhaExata.querySelectorAll('td, [role="cell"], div[class*="MuiDataGrid-cell"], div[class*="rt-td"]'));
+                if (colunas.length === 0) colunas = Array.from(linhaExata.children);
+
+                let ucCandidatos = [];
+                if (idxInstalacao !== -1) {
+                    // Pega a coluna exata, a anterior e a posterior (caso haja colunas invisíveis a bagunçar o índice)
+                    if (colunas[idxInstalacao]) ucCandidatos.push(colunas[idxInstalacao].textContent.trim());
+                    if (colunas[idxInstalacao - 1]) ucCandidatos.push(colunas[idxInstalacao - 1].textContent.trim());
+                    if (colunas[idxInstalacao + 1]) ucCandidatos.push(colunas[idxInstalacao + 1].textContent.trim());
+                }
+
+                const cpfLimpo = cpfExt ? cpfExt.replace(/\D/g, '') : "N/A";
+                
+                for (let val of ucCandidatos) {
+                    if (!val) continue;
+                    // Se a caixa tiver uma data (ex: 20/02/2026), rejeita logo para não trocar com Instalação
+                    if (val.match(/\d{2}\/\d{2}\/\d{4}/)) continue; 
+                    
+                    const limpo = val.replace(/\D/g, '');
+                    // UC Válida: tem que ter de 6 a 12 números E NÃO PODE SER O CPF
+                    if (limpo.length >= 6 && limpo.length <= 12 && limpo !== cpfLimpo) {
+                        ucExt = limpo;
+                        break;
+                    }
+                }
+
+                // Se a UC ainda falhar, pega varrendo a linha por um bloco de 7 a 12 números (Ignorando Celular e CPF)
+                if (!ucExt) {
+                    let txtSemLixo = textoLinha;
+                    if (cpfExt) txtSemLixo = txtSemLixo.replace(cpfExt, ''); // remove o cpf
+                    txtSemLixo = txtSemLixo.replace(/\(\d{2}\)\s*\d{4,5}-\d{4}/g, ''); // remove celular
+                    const ucMatch = txtSemLixo.match(/\b\d{7,12}\b/);
                     if (ucMatch) ucExt = ucMatch[0];
                 }
 
@@ -703,4 +706,4 @@ app.get('/', (req, res) => res.status(200).send('Robô iGreen Online e Blindado!
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});    
+});
