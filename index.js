@@ -53,7 +53,7 @@ const TEXTOS = {
     T_RESGATE_START: "Opção 3️⃣ selecionada! ⚡ \nPara resolvermos a devolutiva, a nossa equipe vai buscar os seus dados no escritório, baixar a fatura atualizada na Distribuidora e anexar.\n\nPor favor, digite apenas o **Nome do Cliente ou ID**.\n\n*(Exemplo: 398172 ou Wellington Silva Nunes)*:",
     T_RESGATE_BUSCANDO: "🔍 Iniciando a verificação em nosso sistema...\n\n1️⃣ Buscando CPF e Nascimento no relatório da iGreen...\n2️⃣ Acessando a Distribuidora Local...\n3️⃣ Baixando fatura atualizada e identificando a UC correta...\n4️⃣ Retornando à iGreen para anexar o documento...\n\nIsso pode levar alguns segundos, por favor, aguarde...",
     T_RESGATE_SUCESSO: "✅ Sucesso Absoluto! A fatura atualizada foi resgatada e anexada na aba de Devolutivas do escritório iGreen. A sua pendência foi resolvida!",
-    T_RESGATE_FAIL: "⚠️ Ocorreu um erro no processo.\n\nO nosso time não encontrou a linha do cliente, ou este cliente não existe em nosso cadastro.\n\nPor favor, verifique se o Nome ou ID digitado está correto e tente novamente.",
+    T_RESGATE_FAIL: "⚠️ Ocorreu um erro no processo.\n\nO nosso time não encontrou a linha do cliente, ou o site da distribuidora está temporariamente indisponível.\n\nPor favor, verifique se o Nome ou ID digitado está correto e tente novamente.",
 
     T_GUARDAR_START: "Opção 2️⃣ selecionada! 💾 \n*Módulo de Pré-Cadastro* ativado!\nPor favor, envie a foto ou PDF da sua *Fatura de Energia*.",
     T_PEDIR_TELEFONE: "✅ Fatura analisada e salva!\n👤 Titular: ${nome}\n⚡ UC: ${uc}\n\nPara completarmos o seu pré-cadastro, digite o **Número de Telefone (com DDD)** do titular:",
@@ -141,7 +141,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             Object.defineProperty(navigator, 'webdriver', { get: () => false });
         });
         
-        // Ecrã UltraWide de 5000px.
         await page.setViewport({ width: 5000, height: 1080 });
 
         if (!cpf || !nascimento) {
@@ -192,7 +191,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             } catch (e) {}
             await new Promise(r => setTimeout(r, 2000));
 
-            // EXTRATOR SIMPLIFICADO: Ignora completamente a UC. Pega apenas CPF e Nascimento!
             const dadosExtraidos = await page.evaluate((busca) => {
                 const buscaLimpa = busca.toLowerCase().trim();
                 const possiveisLinhas = Array.from(document.querySelectorAll('tr, [role="row"], .MuiDataGrid-row'));
@@ -207,11 +205,9 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 
                 let cpfExt = null; let nascExt = null;
 
-                // Regex super preciso para CPF
                 const cpfMatch = textoLinha.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
                 if (cpfMatch) cpfExt = cpfMatch[0];
 
-                // Regex para Nascimento (A data mais antiga da linha)
                 const todasDatas = textoLinha.match(/\d{2}\/\d{2}\/\d{4}/g);
                 if (todasDatas && todasDatas.length > 0) {
                     let menorAno = 9999;
@@ -234,11 +230,23 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             console.log(`[RPA] iGreen lida com sucesso! CPF: ${cpf} | Nasc: ${nascimento}`);
         }
 
+        // ===============================================
+        // INTERCEPTADOR DE DOWNLOAD DE PDF BLINDADO
+        // ===============================================
         page.on('response', async (response) => {
-            const contentType = response.headers()['content-type'];
-            if (contentType && contentType.includes('application/pdf')) {
-                const buffer = await response.buffer();
-                fs.writeFileSync(caminhoFaturaLocal, buffer);
+            try {
+                const contentType = response.headers()['content-type'];
+                const contentDisposition = response.headers()['content-disposition'];
+                
+                // Algumas distribuidoras mandam como octet-stream mas o nome do ficheiro termina em .pdf
+                if ((contentType && contentType.includes('application/pdf')) || 
+                    (contentDisposition && contentDisposition.includes('.pdf'))) {
+                    const buffer = await response.buffer();
+                    fs.writeFileSync(caminhoFaturaLocal, buffer);
+                    console.log(`[RPA] Ficheiro PDF interceptado e gravado com sucesso!`);
+                }
+            } catch(err) {
+                // Silenciar erros de buffers falhados por causa de navegação
             }
         });
 
@@ -268,28 +276,23 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         console.log(`[RPA] Equatorial: Aguardando painel carregar...`);
         await new Promise(r => setTimeout(r, 8000));
 
-        // INTELIGÊNCIA EQUATORIAL: Clicar na UC que aparecer na tela
         console.log(`[RPA] Equatorial: Procurando a UC na tela para selecionar...`);
         const ucIdentificada = await page.evaluate(() => {
-            // Remove popups internos da Equatorial se houver
             const btnFechar = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase() === 'FECHAR' || el.textContent.toUpperCase() === 'X');
             if(btnFechar) btnFechar.click(); 
 
-            // Procura elementos que parecem ser o botão da Conta Contrato (UC)
             const elementos = Array.from(document.querySelectorAll('span, div, p, a, li, option, td, h3, h4'));
             const elemUc = elementos.find(el => {
                 const txt = el.textContent.trim();
-                // Ignora textos que tenham datas ou pontuação de CPF
                 if (txt.includes('/') || txt.includes('-') || txt.includes('.')) return false;
                 const soNumeros = txt.replace(/\D/g, '');
-                // Contas de energia costumam ter entre 8 e 12 dígitos, e o texto deve ser só o número
                 return soNumeros.length >= 8 && soNumeros.length <= 15 && txt === soNumeros;
             });
 
             if (elemUc) {
                 const numeroUc = elemUc.textContent.trim();
                 elemUc.click();
-                return numeroUc; // Retorna o número que ele clicou
+                return numeroUc; 
             }
             return null;
         });
@@ -297,8 +300,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         if (ucIdentificada) {
             console.log(`[RPA] Equatorial: A UC [${ucIdentificada}] apareceu na tela e foi clicada!`);
             ucExtraidaEquatorial = ucIdentificada;
-            
-            // Grava a UC no banco de dados para atualizar o cadastro automaticamente!
             await salvarNoBanco(cpf, phone, { UC_ATUALIZADA_EQUATORIAL: ucIdentificada, UC: ucIdentificada });
         } else {
             console.log(`[RPA] Equatorial: Nenhuma lista de UCs encontrada. O cliente deve ter apenas 1 imóvel e entrou direto.`);
@@ -322,14 +323,32 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
         console.log(`[RPA] Equatorial: Solicitando VER FATURA (Download PDF)...`);
         await page.evaluate(() => {
-            const btnVerFatura = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase().includes('VER FATURA') || el.textContent.toUpperCase().includes('IMPRIMIR') || el.textContent.toUpperCase().includes('DOWNLOAD'));
+            const botoes = Array.from(document.querySelectorAll('button, a, span'));
+            // Procura o botão VER FATURA garantindo que ele não está escondido (display: none)
+            const btnVerFatura = botoes.find(el => {
+                const txt = el.textContent.toUpperCase();
+                return (txt.includes('VER FATURA') || txt.includes('IMPRIMIR') || txt.includes('DOWNLOAD')) && el.offsetParent !== null;
+            });
             if(btnVerFatura) btnVerFatura.click();
         });
         
-        console.log(`[RPA] Equatorial: Aguardando captura do PDF na rede (8s)...`);
-        await new Promise(r => setTimeout(r, 8000)); 
+        // ===============================================
+        // O "RADAR DE PDF" INTELIGENTE (Até 20 segundos)
+        // ===============================================
+        console.log(`[RPA] Equatorial: Aguardando captura do PDF na rede (Radar de até 20s)...`);
+        let pdfCapturado = false;
+        for (let i = 0; i < 20; i++) {
+            await new Promise(r => setTimeout(r, 1000)); // Espera 1 segundo e verifica
+            if (fs.existsSync(caminhoFaturaLocal)) {
+                pdfCapturado = true;
+                console.log(`[RPA] Sucesso! PDF gerado e capturado no segundo ${i + 1}.`);
+                break;
+            }
+        }
         
-        if (!fs.existsSync(caminhoFaturaLocal)) throw new Error("Falha ao capturar o PDF na Equatorial. O site pode estar lento ou a fatura indisponível.");
+        if (!pdfCapturado) {
+            throw new Error("Falha ao capturar o PDF na Equatorial. O site demorou mais de 20 segundos a gerar o documento.");
+        }
 
         console.log(`[RPA] ETAPA 3: Injetando a Fatura na iGreen...`);
         await page.goto("https://escritorio.igreenenergy.com.br", { waitUntil: 'networkidle2' });
@@ -350,7 +369,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         await page.keyboard.press('Backspace');
         await new Promise(r => setTimeout(r, 500));
         
-        // Na iGreen usamos SEMPRE o CPF para procurar, nunca falha.
         await searchDevolutiva.type(cpf, { delay: 100 });
         await new Promise(r => setTimeout(r, 500));
         await page.keyboard.press('Enter');
@@ -622,4 +640,4 @@ app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindad
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});
+});    
