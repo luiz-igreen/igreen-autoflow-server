@@ -199,9 +199,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             ]);
 
             const urlAtualLogin = page.url();
-            console.log(`[RPA] URL após tentativa de login: ${urlAtualLogin}`);
             if (urlAtualLogin.includes('login') || urlAtualLogin.includes('entrar')) {
-                const pageTitle = await page.title();
                 throw new Error("O site da iGreen recusou o login. Verifique a senha ou pode ser bloqueio anti-robô.");
             }
 
@@ -240,61 +238,84 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     { timeout: 12000 },
                     termoBuscaIgreen
                 );
-                console.log(`[RPA] O cliente ${termoBuscaIgreen} apareceu na tela!`);
+                console.log(`[RPA] O cliente apareceu na tela! Procedendo à extração...`);
             } catch (e) {
-                console.log(`[RPA] Aviso: O texto não apareceu após 12s. Validando...`);
+                console.log(`[RPA] Aviso: O texto não apareceu após 12s. O cliente pode não existir.`);
             }
             
             await new Promise(r => setTimeout(r, 2000));
 
-            // NOVO MÉTODO TRANSPARENTE E SEM FILTROS CEGOS
+            // ==========================================
+            // O NOVO EXTRATOR UNIVERSAL DE GRIDS (O SEU MÉTODO DE COLUNAS)
+            // ==========================================
             const dadosExtraidos = await page.evaluate((busca) => {
-                const cabecalhos = Array.from(document.querySelectorAll('th'));
+                const buscaLimpa = busca.toLowerCase().trim();
+
+                // 1. Procurar os cabeçalhos de forma universal (th ou divs de grid)
+                const cabecalhosNodos = Array.from(document.querySelectorAll('th, [role="columnheader"], div[class*="header"], .MuiDataGrid-columnHeaderTitle'));
                 let idxDocumento = -1;
                 let idxNascimento = -1;
                 let idxInstalacao = -1;
 
-                cabecalhos.forEach((th, index) => {
-                    const nomeColuna = th.textContent.trim().toLowerCase();
-                    if (nomeColuna === 'documento' || nomeColuna.includes('documento')) idxDocumento = index;
-                    if (nomeColuna.includes('nascimento') || nomeColuna === 'data nascimento') idxNascimento = index;
-                    if (nomeColuna.includes('instalação') || nomeColuna.includes('instalacao')) idxInstalacao = index;
+                cabecalhosNodos.forEach((nodo, index) => {
+                    const txt = nodo.textContent.trim().toLowerCase();
+                    if (txt === 'documento' || txt.includes('documento')) idxDocumento = index;
+                    if (txt === 'data nascimento' || txt.includes('nascimento')) idxNascimento = index;
+                    if (txt === 'instalação' || txt.includes('instalacao')) idxInstalacao = index;
                 });
 
-                // A SOLUÇÃO: Pegar todas as linhas que contenham texto, sem ignorar as que têm TH escondido.
-                const todasAsLinhas = Array.from(document.querySelectorAll('tr'));
-                const linhasComDados = todasAsLinhas.filter(tr => tr.textContent.trim().length > 10);
+                // 2. Encontrar a linha (Universal para Tabelas e React Grids)
+                const possiveisLinhas = Array.from(document.querySelectorAll('tr, [role="row"], div[class*="MuiDataGrid-row"], div[class*="rt-tr"]'));
                 
-                const linhaExata = linhasComDados.find(tr => tr.textContent.toLowerCase().includes(busca.toLowerCase()));
+                // Pega só as linhas que têm algum conteúdo de verdade
+                const linhasComDados = possiveisLinhas.filter(l => l.textContent.trim().length > 15);
+                
+                // Procura a linha que contém o ID do cliente
+                const linhaExata = linhasComDados.find(linha => linha.textContent.toLowerCase().includes(buscaLimpa));
                 
                 if (!linhaExata) {
-                    const textoVisivel = document.body.innerText.substring(0, 400).replace(/\n/g, ' ');
-                    return { falhouBusca: true, debugVisao: `Robô não achou a linha exata. Texto na tela: ${textoVisivel}...` };
+                    const txtTela = document.body.innerText.substring(0, 1000).replace(/\n/g, ' || ');
+                    return { falhouBusca: true, debugVisao: `O grid não usou TR nem Role Row. Visão Parcial: ${txtTela}` };
                 }
 
-                // Extração bruta (pegando todas as colunas da linha encontrada)
-                const colunas = linhaExata.querySelectorAll('td, th'); 
-                
+                // 3. Pegar as caixas/colunas dessa linha
+                let colunas = Array.from(linhaExata.querySelectorAll('td, [role="cell"], div[class*="MuiDataGrid-cell"], div[class*="rt-td"]'));
+                if (colunas.length === 0) {
+                    colunas = Array.from(linhaExata.children); // Fallback para divs simples
+                }
+
                 let cpfExt = null;
                 let nascExt = null;
                 let ucExt = null;
 
-                // 1. Tenta extrair pela posição exata do cabeçalho
+                // MÉTODO A: O Seu Método Cirúrgico Pelos Índices dos Nomes
                 if (idxDocumento !== -1 && colunas[idxDocumento]) cpfExt = colunas[idxDocumento].textContent.trim();
                 if (idxNascimento !== -1 && colunas[idxNascimento]) nascExt = colunas[idxNascimento].textContent.trim();
                 if (idxInstalacao !== -1 && colunas[idxInstalacao]) ucExt = colunas[idxInstalacao].textContent.replace(/\D/g, '');
 
-                // 2. Fallbacks de Extração (Varredura de segurança via Expressões Regulares)
-                if (!cpfExt) {
-                    const cpfMatch = linhaExata.textContent.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
+                // MÉTODO B: Fallback de Inteligência Artificial (Caso a ordem das colunas falhe)
+                const textoCompletoLinha = linhaExata.textContent;
+                
+                if (!cpfExt || cpfExt.length < 11) {
+                    const cpfMatch = textoCompletoLinha.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
                     if (cpfMatch) cpfExt = cpfMatch[0];
                 }
-                if (!nascExt) {
-                    const nMatch = linhaExata.textContent.match(/\d{2}\/\d{2}\/\d{4}/);
-                    if (nMatch) nascExt = nMatch[0];
+                
+                if (!nascExt || nascExt.length < 8) {
+                    const datasMatch = textoCompletoLinha.match(/\d{2}\/\d{2}\/\d{4}/g);
+                    if (datasMatch && datasMatch.length > 0) {
+                        // Truque de Ouro: A Data de Nascimento é sempre o ano mais antigo da linha!
+                        nascExt = datasMatch.reduce((maisAntiga, atual) => {
+                            const anoAtual = parseInt(atual.split('/')[2], 10);
+                            const anoMaisAntiga = parseInt(maisAntiga.split('/')[2], 10);
+                            return anoAtual < anoMaisAntiga ? atual : maisAntiga;
+                        });
+                    }
                 }
-                if (!ucExt && colunas.length >= 8) {
-                    ucExt = colunas[7].textContent.replace(/\D/g, ''); 
+
+                if (!ucExt || ucExt.length < 5) {
+                    const numerosGrandes = textoCompletoLinha.match(/\b\d{8,12}\b/g);
+                    if (numerosGrandes) ucExt = numerosGrandes[0];
                 }
 
                 return { cpfExt, nascExt, ucExt };
@@ -302,25 +323,17 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
             if (dadosExtraidos && dadosExtraidos.falhouBusca) {
                 console.log(`[RPA] 🔎 RAIO-X DA TABELA: ${dadosExtraidos.debugVisao}`);
-                throw new Error(`Não encontrou o ID ${termoBuscaIgreen} nas linhas. Log interno: ${dadosExtraidos.debugVisao}`);
+                throw new Error(`O robô viu o cliente na tela, mas a estrutura do Grid é impenetrável.`);
             }
 
-            if (!dadosExtraidos) {
-                throw new Error(`Não foi possível localizar o cliente na tabela (Falha na extração de dados).`);
-            }
-
-            if (!dadosExtraidos.cpfExt || !dadosExtraidos.nascExt || !dadosExtraidos.ucExt) {
-                const falhas = [];
-                if (!dadosExtraidos.cpfExt) falhas.push("Documento (CPF/CNPJ)");
-                if (!dadosExtraidos.nascExt) falhas.push("Data Nascimento");
-                if (!dadosExtraidos.ucExt) falhas.push("Instalação (UC)");
-                throw new Error(`Dados incompletos na tabela: Faltando [${falhas.join(', ')}]. O cliente pode não ter esta informação preenchida na iGreen.`);
+            if (!dadosExtraidos || !dadosExtraidos.cpfExt || !dadosExtraidos.nascExt || !dadosExtraidos.ucExt) {
+                throw new Error(`Dados incompletos na tabela. O cliente pode não ter Data de Nascimento ou Documento preenchidos.`);
             }
 
             cpf = dadosExtraidos.cpfExt.replace(/\D/g, '');
             nascimento = dadosExtraidos.nascExt;
             uc = dadosExtraidos.ucExt;
-            console.log(`[RPA] Sucesso na Etapa 1! CPF: ${cpf} | Nasc: ${nascimento} | UC: ${uc}`);
+            console.log(`[RPA] Sucesso Máximo na Etapa 1! CPF: ${cpf} | Nasc: ${nascimento} | UC: ${uc}`);
         }
 
         page.on('response', async (response) => {
@@ -417,8 +430,9 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         
         await new Promise(r => setTimeout(r, 2000));
 
+        // Aplicação do Grid Universal também nas Devolutivas
         await page.evaluate((alvoUc) => { 
-            const linhas = Array.from(document.querySelectorAll('tr')); 
+            const linhas = Array.from(document.querySelectorAll('tr, [role="row"], div[class*="MuiDataGrid-row"], div[class*="rt-tr"]')); 
             const linhaExata = linhas.find(row => row.textContent.includes(alvoUc)); 
             if(linhaExata) {
                 const btnTresPontinhos = Array.from(linhaExata.querySelectorAll('button, div')).find(el => el.textContent.trim() === '...'); 
