@@ -120,42 +120,14 @@ async function salvarNoBanco(docId, phone, dadosExtras) {
 }
 
 // ==========================================
-// MÓDULO 1: MOTOR IA
-// ==========================================
-async function analisarFaturaGemini(mediaUrl, mimeType) {
-    const response = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
-    const base64Data = Buffer.from(response.data, 'binary').toString('base64');
-    const instrucao = `Auditor iGreen. Regra Média: Soma últimos 6 meses (ou disponíveis) / quantidade de meses.`;
-    const payload = {
-        systemInstruction: { parts: [{ text: instrucao }] },
-        contents: [{ parts: [{ text: "Extraia os dados organizadamente." }, { inlineData: { mimeType, data: base64Data } }] }],
-        generationConfig: { 
-            responseMimeType: "application/json",
-            responseSchema: {
-                type: "OBJECT",
-                properties: {
-                    "DISTRIBUIDORA": { type: "STRING" }, "NOME_CLIENTE": { type: "STRING" }, "MASCARA_CPF": { type: "STRING" }, "CPF": { type: "STRING" },
-                    "ENDERECO": { type: "STRING" }, "ENDERECO_NUMERO": { type: "STRING" }, "ENDERECO_COMPLEMENTO": { type: "STRING" },
-                    "BAIRRO": { type: "STRING" }, "CIDADE": { type: "STRING" }, "ESTADO": { type: "STRING" }, "CEP": { type: "STRING" },
-                    "UC": { type: "STRING" }, "CONTA_MES": { type: "STRING" }, "VENCIMENTO": { type: "STRING" }, "VALOR_FATURA": { type: "STRING" }, "MEDIA_CONSUMO": { type: "STRING" }, "DATA_NASCIMENTO": { type: "STRING" }
-                }
-            }
-        }
-    };
-    const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY.trim()}`, payload);
-    return JSON.parse(res.data.candidates[0].content.parts[0].text);
-}
-
-// ==========================================
 // MÓDULO 2: EXTRATOR RPA TOTAL (IGREEN -> EQUATORIAL -> IGREEN)
 // ==========================================
-async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, nascBanco = null, ucBanco = null, isAutomated = false) {
+async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, nascBanco = null, isAutomated = false) {
     let browser;
     const caminhoFaturaLocal = path.join('/tmp', `fatura_${Date.now()}.pdf`);
     let cpf = cpfBanco;
     let nascimento = nascBanco;
-    let uc = ucBanco; // UC Antiga (da iGreen)
-    let docIdMemoria = null;
+    let ucExtraidaEquatorial = null; 
 
     try {
         browser = await puppeteer.launch({ 
@@ -169,6 +141,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             Object.defineProperty(navigator, 'webdriver', { get: () => false });
         });
         
+        // Ecrã UltraWide de 5000px.
         await page.setViewport({ width: 5000, height: 1080 });
 
         if (!cpf || !nascimento) {
@@ -219,6 +192,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             } catch (e) {}
             await new Promise(r => setTimeout(r, 2000));
 
+            // EXTRATOR SIMPLIFICADO: Ignora completamente a UC. Pega apenas CPF e Nascimento!
             const dadosExtraidos = await page.evaluate((busca) => {
                 const buscaLimpa = busca.toLowerCase().trim();
                 const possiveisLinhas = Array.from(document.querySelectorAll('tr, [role="row"], .MuiDataGrid-row'));
@@ -231,11 +205,13 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 if (colunas.length === 0) colunas = Array.from(linhaExata.children);
                 const textoLinha = colunas.map(c => c.textContent.trim()).join('   ');
                 
-                let cpfExt = null; let nascExt = null; let ucExt = null;
+                let cpfExt = null; let nascExt = null;
 
+                // Regex super preciso para CPF
                 const cpfMatch = textoLinha.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
                 if (cpfMatch) cpfExt = cpfMatch[0];
 
+                // Regex para Nascimento (A data mais antiga da linha)
                 const todasDatas = textoLinha.match(/\d{2}\/\d{2}\/\d{4}/g);
                 if (todasDatas && todasDatas.length > 0) {
                     let menorAno = 9999;
@@ -246,29 +222,16 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     if (menorAno > 2015) nascExt = null; 
                 }
 
-                // Extrai a UC Antiga apenas por referência, não será essencial para a Equatorial
-                const primeiroNumero = textoLinha.match(/^\s*(\d+)/);
-                const codigoCliente = primeiroNumero ? primeiroNumero[1] : null;
-                let textoSemLixo = textoLinha.replace(/\(\d{2}\)\s*\d{4,5}-\d{4}/g, ' ').replace(/\d{2}\/\d{2}\/\d{4}/g, ' ');
-                if (cpfExt) textoSemLixo = textoSemLixo.replace(cpfExt, ' '); 
-
-                const numerosRestantes = textoSemLixo.match(/\b\d+\b/g) || [];
-                for (let num of numerosRestantes) {
-                    if (num.length >= 5 && num.length <= 15 && num !== codigoCliente) { ucExt = num; break; }
-                }
-
                 if (cpfExt) cpfExt = cpfExt.replace(/\D/g, '');
-                return { cpfExt, nascExt, ucExt };
+                return { cpfExt, nascExt };
             }, termoBuscaIgreen);
 
             if (dadosExtraidos && dadosExtraidos.falhouBusca) throw new Error(`O nosso time não encontrou a linha do cliente.`);
-            if (!dadosExtraidos || !dadosExtraidos.cpfExt || !dadosExtraidos.nascExt) throw new Error(`Faltam dados essenciais (CPF/Nascimento) na iGreen.`);
+            if (!dadosExtraidos || !dadosExtraidos.cpfExt || !dadosExtraidos.nascExt) throw new Error(`Faltam dados essenciais (CPF ou Data de Nascimento) na iGreen.`);
 
             cpf = dadosExtraidos.cpfExt;
             nascimento = dadosExtraidos.nascExt;
-            uc = dadosExtraidos.ucExt; // Pode ser a velha, vamos ignorar na Equatorial
-            docIdMemoria = uc; // Guarda a velha como ID para atualizar o banco depois
-            console.log(`[RPA] iGreen lida! CPF: ${cpf} | Nasc: ${nascimento} | UC Antiga: ${uc}`);
+            console.log(`[RPA] iGreen lida com sucesso! CPF: ${cpf} | Nasc: ${nascimento}`);
         }
 
         page.on('response', async (response) => {
@@ -279,7 +242,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             }
         });
 
-        console.log(`[RPA] ETAPA 2: Acessando Equatorial AL (A Fonte da Verdade)...`);
+        console.log(`[RPA] ETAPA 2: Acessando Equatorial AL...`);
         await page.goto(EQUATORIAL_AL_URL, { waitUntil: 'networkidle2', timeout: 60000 });
 
         try {
@@ -291,7 +254,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             await new Promise(r => setTimeout(r, 2000));
         } catch(e) {}
 
-        // LOGIN APENAS COM CPF E NASCIMENTO (Ignora a UC velha)
+        console.log(`[RPA] Equatorial: Inserindo CPF e Nascimento para Login...`);
         await page.evaluate((cpfBusca, nascBusca) => {
             const inputs = document.querySelectorAll('input');
             inputs.forEach(input => {
@@ -301,67 +264,74 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             const btnEntrar = Array.from(document.querySelectorAll('button')).find(b => b.textContent.toUpperCase().includes('ENTRAR'));
             if(btnEntrar) btnEntrar.click();
         }, cpf, nascimento);
+        
+        console.log(`[RPA] Equatorial: Aguardando painel carregar...`);
         await new Promise(r => setTimeout(r, 8000));
 
-        // INTELIGÊNCIA EQUATORIAL: Auto-Update da UC
-        const novaUcEquatorial = await page.evaluate((ucVelha) => {
-            const btnSair = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase().includes('SAIR'));
-            if(btnSair) btnSair.click(); 
+        // INTELIGÊNCIA EQUATORIAL: Clicar na UC que aparecer na tela
+        console.log(`[RPA] Equatorial: Procurando a UC na tela para selecionar...`);
+        const ucIdentificada = await page.evaluate(() => {
+            // Remove popups internos da Equatorial se houver
+            const btnFechar = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase() === 'FECHAR' || el.textContent.toUpperCase() === 'X');
+            if(btnFechar) btnFechar.click(); 
 
-            // Procura todos os números que parecem ser uma "Conta Contrato" (10 a 12 dígitos) na tela
-            const elementos = Array.from(document.querySelectorAll('span, div, p, a, li, option'));
-            const possiveisUcs = elementos.filter(el => {
-                const txt = el.textContent.trim().replace(/\D/g, '');
-                return txt.length >= 8 && txt.length <= 15;
+            // Procura elementos que parecem ser o botão da Conta Contrato (UC)
+            const elementos = Array.from(document.querySelectorAll('span, div, p, a, li, option, td, h3, h4'));
+            const elemUc = elementos.find(el => {
+                const txt = el.textContent.trim();
+                // Ignora textos que tenham datas ou pontuação de CPF
+                if (txt.includes('/') || txt.includes('-') || txt.includes('.')) return false;
+                const soNumeros = txt.replace(/\D/g, '');
+                // Contas de energia costumam ter entre 8 e 12 dígitos, e o texto deve ser só o número
+                return soNumeros.length >= 8 && soNumeros.length <= 15 && txt === soNumeros;
             });
 
-            // Se achou a velha, ótimo, clica nela
-            const elemVelho = possiveisUcs.find(el => el.textContent.includes(ucVelha));
-            if (elemVelho) { elemVelho.click(); return ucVelha; }
-
-            // Se não achou a velha, clica na primeira UC nova que a Equatorial mostrar (Caso de 1 imóvel)
-            if (possiveisUcs.length > 0) {
-                const escolhida = possiveisUcs[0];
-                const ucNova = escolhida.textContent.trim().replace(/\D/g, '');
-                escolhida.click();
-                return ucNova;
+            if (elemUc) {
+                const numeroUc = elemUc.textContent.trim();
+                elemUc.click();
+                return numeroUc; // Retorna o número que ele clicou
             }
             return null;
-        }, uc);
-
-        await new Promise(r => setTimeout(r, 3000));
-
-        if (novaUcEquatorial && novaUcEquatorial !== uc) {
-            console.log(`[RPA] 🔄 UC Atualizada! Equatorial informou a UC verdadeira: ${novaUcEquatorial} (iGreen tinha a velha: ${uc})`);
-            uc = novaUcEquatorial; // O robô passa a usar a nova
-            
-            // Atualiza o nosso banco de dados em silêncio!
-            if (docIdMemoria) {
-                await salvarNoBanco(docIdMemoria, phone, { UC_ATUALIZADA_EQUATORIAL: novaUcEquatorial, UC: novaUcEquatorial });
-            }
-        }
-
-        await page.evaluate(() => {
-            const btn2via = Array.from(document.querySelectorAll('span, a, div, button')).find(el => el.textContent.toLowerCase().includes('segunda via'));
-            if(btn2via) btn2via.click();
         });
+
+        if (ucIdentificada) {
+            console.log(`[RPA] Equatorial: A UC [${ucIdentificada}] apareceu na tela e foi clicada!`);
+            ucExtraidaEquatorial = ucIdentificada;
+            
+            // Grava a UC no banco de dados para atualizar o cadastro automaticamente!
+            await salvarNoBanco(cpf, phone, { UC_ATUALIZADA_EQUATORIAL: ucIdentificada, UC: ucIdentificada });
+        } else {
+            console.log(`[RPA] Equatorial: Nenhuma lista de UCs encontrada. O cliente deve ter apenas 1 imóvel e entrou direto.`);
+        }
+        
         await new Promise(r => setTimeout(r, 4000));
 
+        console.log(`[RPA] Equatorial: Acessando Segunda Via...`);
         await page.evaluate(() => {
-            const valorFatura = Array.from(document.querySelectorAll('span, td, div')).find(el => el.textContent.includes('R$'));
-            if(valorFatura) valorFatura.click();
+            const btn2via = Array.from(document.querySelectorAll('span, a, div, button')).find(el => el.textContent.toLowerCase().includes('segunda via') || el.textContent.toLowerCase().includes('faturas'));
+            if(btn2via) btn2via.click();
+        });
+        await new Promise(r => setTimeout(r, 5000));
+
+        console.log(`[RPA] Equatorial: Clicando na fatura mais recente (Ícone R$ ou Baixar)...`);
+        await page.evaluate(() => {
+            const btnBaixar = Array.from(document.querySelectorAll('span, td, div, button, a')).find(el => el.textContent.includes('R$') || el.textContent.toLowerCase().includes('baixar'));
+            if(btnBaixar) btnBaixar.click();
         });
         await new Promise(r => setTimeout(r, 2000));
 
+        console.log(`[RPA] Equatorial: Solicitando VER FATURA (Download PDF)...`);
         await page.evaluate(() => {
-            const btnVerFatura = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase().includes('VER FATURA'));
+            const btnVerFatura = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase().includes('VER FATURA') || el.textContent.toUpperCase().includes('IMPRIMIR') || el.textContent.toUpperCase().includes('DOWNLOAD'));
             if(btnVerFatura) btnVerFatura.click();
         });
         
+        console.log(`[RPA] Equatorial: Aguardando captura do PDF na rede (8s)...`);
         await new Promise(r => setTimeout(r, 8000)); 
-        if (!fs.existsSync(caminhoFaturaLocal)) throw new Error("Falha ao capturar o PDF na Equatorial.");
+        
+        if (!fs.existsSync(caminhoFaturaLocal)) throw new Error("Falha ao capturar o PDF na Equatorial. O site pode estar lento ou a fatura indisponível.");
 
-        console.log(`[RPA] ETAPA 3: Injetando na iGreen...`);
+        console.log(`[RPA] ETAPA 3: Injetando a Fatura na iGreen...`);
         await page.goto("https://escritorio.igreenenergy.com.br", { waitUntil: 'networkidle2' });
         await new Promise(r => setTimeout(r, 4000));
 
@@ -380,7 +350,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         await page.keyboard.press('Backspace');
         await new Promise(r => setTimeout(r, 500));
         
-        // A Injeção continua a usar o CPF para pesquisar na iGreen, não a UC, garantindo que não falha!
+        // Na iGreen usamos SEMPRE o CPF para procurar, nunca falha.
         await searchDevolutiva.type(cpf, { delay: 100 });
         await new Promise(r => setTimeout(r, 500));
         await page.keyboard.press('Enter');
@@ -388,11 +358,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         console.log(`[RPA] ENTER pressionado na Devolutiva. Aguardando a tabela filtrar...`);
         
         try {
-            await page.waitForFunction(
-                (busca) => document.body.innerText.includes(busca),
-                { timeout: 10000 },
-                cpf
-            );
+            await page.waitForFunction((busca) => document.body.innerText.includes(busca), { timeout: 10000 }, cpf);
         } catch (e) {}
         
         await new Promise(r => setTimeout(r, 2000));
@@ -459,7 +425,7 @@ function iniciarMotorRecorrente() {
                     const diasPassados = Math.floor((new Date() - ultimaVerificacao) / (1000 * 60 * 60 * 24));
                     
                     if (diasPassados >= 15) {
-                        fluxoResgateDevolutiva(lead.NOME_CLIENTE, lead.TELEFONE_REMETENTE, lead.CPF, lead.DATA_NASCIMENTO, lead.UC, true);
+                        fluxoResgateDevolutiva(lead.NOME_CLIENTE, lead.TELEFONE_REMETENTE, lead.CPF, lead.DATA_NASCIMENTO, true);
                         await salvarNoBanco(doc.id, lead.TELEFONE_REMETENTE, { STATUS_CADASTRO: 'PENDENTE_MEDIA' }); 
                     }
                 });
@@ -553,7 +519,7 @@ app.post('/webhook/igreen', async (req, res) => {
                 await enviarMensagem(phone, TEXTOS.T_RESGATE_BUSCANDO);
                 memoriaEstado.delete(phone); 
                 
-                setTimeout(() => { fluxoResgateDevolutiva(textoIn, phone, null, null, null, false); }, 2000);
+                setTimeout(() => { fluxoResgateDevolutiva(textoIn, phone, null, null, false); }, 2000);
             } else {
                 await enviarMensagem(phone, "⚠️ Digite o Nome ou ID corretamente (mínimo de 3 caracteres).");
             }
