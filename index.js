@@ -53,7 +53,7 @@ const TEXTOS = {
     T_RESGATE_START: "Opção 3️⃣ selecionada! ⚡ \nPara resolvermos a devolutiva, o robô vai buscar a UC, CPF e Nascimento no seu escritório, baixar a fatura na Distribuidora e anexar.\n\nPor favor, digite apenas o **Nome do Cliente ou ID**.\n\n*(Exemplo: 398172 ou Wellington Silva Nunes)*:",
     T_RESGATE_BUSCANDO: "🔍 Iniciando a Automação Total...\n\n1️⃣ Buscando CPF, Nascimento e UC no relatório da iGreen...\n2️⃣ Acessando a Distribuidora Local...\n3️⃣ Baixando fatura atualizada da UC...\n4️⃣ Retornando à iGreen para injetar o documento...\n\nIsso pode levar alguns segundos, aguarde...",
     T_RESGATE_SUCESSO: "✅ Sucesso Absoluto! A fatura atualizada foi resgatada e anexada na aba de Devolutivas do escritório iGreen. A sua pendência foi resolvida!",
-    T_RESGATE_FAIL: "⚠️ Ocorreu um erro no processo. Verifique se o Nome/ID está correto e se o cliente possui os dados completos no sistema (inclusive a Instalação na 8ª coluna).",
+    T_RESGATE_FAIL: "⚠️ Ocorreu um erro no processo. O robô pode ter sido bloqueado pelo site da iGreen temporariamente ou os dados não foram encontrados. Tentaremos novamente mais tarde.",
 
     T_GUARDAR_START: "Opção 2️⃣ selecionada! 💾 \n*Módulo de Pré-Cadastro* ativado!\nPor favor, envie a foto ou PDF da sua *Fatura de Energia*.",
     T_PEDIR_TELEFONE: "✅ Fatura analisada e salva!\n👤 Titular: ${nome}\n⚡ UC: ${uc}\n\nPara completarmos o seu pré-cadastro, digite o **Número de Telefone (com DDD)** do titular:",
@@ -69,8 +69,11 @@ const TEXTOS = {
 };
 
 const CHROME_ARGS = [
-    "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", 
-    "--disable-gpu", "--no-zygote", 
+    "--no-sandbox", 
+    "--disable-setuid-sandbox", 
+    "--disable-dev-shm-usage", 
+    "--disable-gpu", 
+    "--no-zygote", 
     "--disable-blink-features=AutomationControlled",
     "--window-size=1920,1080",
     "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
@@ -164,29 +167,52 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
         if (!cpf || !nascimento || !uc) {
             console.log(`[RPA] ETAPA 1: Buscando dados de ${termoBuscaIgreen} na iGreen...`);
-            await page.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
             
+            await page.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+            console.log(`[RPA] Página de login carregada.`);
+            
+            // Tenta fechar popups de "Começar"
             try { await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Começar')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
             
             await page.waitForSelector('input[type="email"]');
             await page.type('input[type="email"]', IGREEN_USER);
             await page.type('input[type="password"]', IGREEN_PASS);
             await page.keyboard.press('Enter');
-            console.log(`[RPA] Login inserido. Aguardando entrada...`);
-            await new Promise(r => setTimeout(r, 8000));
+            console.log(`[RPA] Credenciais inseridas. Aguardando entrada...`);
+            
+            // Espera a navegação ou 10 segundos
+            await Promise.race([
+                page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }),
+                new Promise(resolve => setTimeout(resolve, 10000))
+            ]);
 
-            try { await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
-
-            await page.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2' });
-            await new Promise(r => setTimeout(r, 8000));
-
-            const urlAtual = page.url();
-            console.log(`[RPA] URL após tentativa de login: ${urlAtual}`);
-            if (urlAtual.includes('login') || urlAtual.includes('entrar')) {
-                throw new Error("O site da iGreen recusou o login. Senha incorreta ou bloqueio anti-robô detectado.");
+            const urlAtualLogin = page.url();
+            console.log(`[RPA] URL após tentativa de login: ${urlAtualLogin}`);
+            if (urlAtualLogin.includes('login') || urlAtualLogin.includes('entrar')) {
+                const pageTitle = await page.title();
+                console.log(`[RPA] ERRO: Preso na tela de Login. Título: ${pageTitle}`);
+                throw new Error("O site da iGreen recusou o login. Pode ser bloqueio anti-robô.");
             }
 
-            const searchInput = await page.waitForSelector('input[placeholder*="Pesquisar" i]', { timeout: 15000 });
+            // Tenta fechar popups de "Agora não"
+            try { await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
+
+            console.log(`[RPA] Navegando para a página do mapa...`);
+            await page.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+            await new Promise(r => setTimeout(r, 5000)); // Tempo extra para o site carregar os scripts
+
+            console.log(`[RPA] Procurando a barra de pesquisa...`);
+            
+            let searchInput;
+            try {
+                searchInput = await page.waitForSelector('input[placeholder*="Pesquisar" i]', { timeout: 15000 });
+            } catch (erroSeletor) {
+                console.log(`[RPA] ❌ ERRO CRÍTICO: Não encontrou a barra de pesquisa.`);
+                console.log(`[RPA] URL atual: ${page.url()}`);
+                console.log(`[RPA] Título da página: ${await page.title()}`);
+                throw new Error("Página carregou, mas a barra de pesquisa não existe.");
+            }
+
             await searchInput.type(termoBuscaIgreen); 
             await page.keyboard.press('Enter');
             await new Promise(r => setTimeout(r, 4000));
@@ -221,13 +247,12 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             console.log(`[RPA] Sucesso na Etapa 1! CPF: ${cpf} | Nasc: ${nascimento} | UC: ${uc}`);
         }
 
+        // Restante do código Equatorial e Injeção (Mantido sem alterações bruscas)
         page.on('response', async (response) => {
             const contentType = response.headers()['content-type'];
             if (contentType && contentType.includes('application/pdf')) {
-                console.log("[RPA] ✅ PDF Detectado na rede! Capturando buffer...");
                 const buffer = await response.buffer();
                 fs.writeFileSync(caminhoFaturaLocal, buffer);
-                console.log("[RPA] 📄 Arquivo PDF gravado com sucesso no servidor.");
             }
         });
 
@@ -335,7 +360,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         if(!isAutomated) await enviarMensagem(phone, TEXTOS.T_RESGATE_SUCESSO);
         
     } catch (e) { 
-        console.error("Erro RPA Devolutivas:", e);
+        console.error("Erro RPA Devolutivas:", e.message);
         if(browser) await browser.close(); 
         if(fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
         if(!isAutomated) await enviarMensagem(phone, TEXTOS.T_RESGATE_FAIL);
@@ -347,7 +372,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 // ==========================================
 function iniciarMotorRecorrente() {
     setInterval(async () => {
-        console.log("⏳ [CRON] Iniciando varredura diária...");
         if (admin.apps.length > 0) {
             try {
                 const db = admin.firestore();
@@ -360,7 +384,6 @@ function iniciarMotorRecorrente() {
                     const diasPassados = Math.floor((new Date() - ultimaVerificacao) / (1000 * 60 * 60 * 24));
                     
                     if (diasPassados >= 15) {
-                        console.log(`🔄 [CRON] 15 dias atingidos. RPA automático para UC: ${lead.UC}`);
                         fluxoResgateDevolutiva(lead.NOME_CLIENTE, lead.TELEFONE_REMETENTE, lead.CPF, lead.DATA_NASCIMENTO, lead.UC, true);
                         await salvarNoBanco(doc.id, lead.TELEFONE_REMETENTE, { STATUS_CADASTRO: 'PENDENTE_MEDIA' }); 
                     }
@@ -553,10 +576,9 @@ async function validateBrowser() {
     }
 }
 
-// ROTA DE SEGURANÇA PARA O RENDER: Isto impede que o servidor seja desligado por inatividade
+// ROTA DE SEGURANÇA PARA O RENDER
 app.get('/', (req, res) => res.status(200).send('Robô iGreen Online e Blindado!'));
 
 validateBrowser().then(() => {
-    // Escutando no IP 0.0.0.0 (Obrigatório em ambiente Docker/Render)
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
 });
