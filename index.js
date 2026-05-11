@@ -1,9 +1,13 @@
 import express from 'express';
 import axios from 'axios';
 import admin from 'firebase-admin';
-import puppeteer from 'puppeteer';
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import fs from 'fs';
 import path from 'path';
+
+// Ativar a Capa de Invisibilidade (Anti-Imperva WAF)
+puppeteer.use(StealthPlugin());
 
 const app = express();
 app.use(express.json());
@@ -53,7 +57,7 @@ const TEXTOS = {
     T_RESGATE_START: "Opção 3️⃣ selecionada! ⚡ \nPara resolvermos a devolutiva, a nossa equipe vai buscar os seus dados no escritório, baixar a fatura atualizada na Distribuidora e anexar.\n\nPor favor, digite apenas o **Nome do Cliente ou ID**.\n\n*(Exemplo: 398172 ou Wellington Silva Nunes)*:",
     T_RESGATE_BUSCANDO: "🔍 Iniciando a verificação em nosso sistema...\n\n1️⃣ Buscando CPF e Nascimento no relatório da iGreen...\n2️⃣ Acessando a Distribuidora Local...\n3️⃣ Baixando fatura atualizada e identificando a UC correta...\n4️⃣ Retornando à iGreen para anexar o documento...\n\nIsso pode levar alguns segundos, por favor, aguarde...",
     T_RESGATE_SUCESSO: "✅ Sucesso Absoluto! A fatura atualizada foi resgatada e anexada na aba de Devolutivas do escritório iGreen. A sua pendência foi resolvida!",
-    T_RESGATE_FAIL: "⚠️ Ocorreu um erro no processo.\n\nO nosso time não encontrou a linha do cliente, ou o site da distribuidora está temporariamente indisponível.\n\nPor favor, verifique se o Nome ou ID digitado está correto e tente novamente.",
+    T_RESGATE_FAIL: "⚠️ Ocorreu um erro no processo.\n\nO nosso time não encontrou a linha do cliente, ou o site da distribuidora bloqueou o acesso temporariamente por segurança.\n\nPor favor, verifique se o Nome ou ID digitado está correto e tente novamente mais tarde.",
 
     T_GUARDAR_START: "Opção 2️⃣ selecionada! 💾 \n*Módulo de Pré-Cadastro* ativado!\nPor favor, envie a foto ou PDF da sua *Fatura de Energia*.",
     T_PEDIR_TELEFONE: "✅ Fatura analisada e salva!\n👤 Titular: ${nome}\n⚡ UC: ${uc}\n\nPara completarmos o seu pré-cadastro, digite o **Número de Telefone (com DDD)** do titular:",
@@ -75,8 +79,7 @@ const CHROME_ARGS = [
     "--disable-gpu", 
     "--no-zygote", 
     "--disable-blink-features=AutomationControlled",
-    "--window-size=1920,1080",
-    "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+    "--window-size=1920,1080"
 ];
 
 // ==========================================
@@ -137,11 +140,12 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         });
         const page = await browser.newPage();
         
-        await page.evaluateOnNewDocument(() => {
-            Object.defineProperty(navigator, 'webdriver', { get: () => false });
+        // Anti-Detecção Extra
+        await page.setExtraHTTPHeaders({
+            'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7'
         });
         
-        await page.setViewport({ width: 5000, height: 1080 });
+        await page.setViewport({ width: 1920, height: 1080 });
 
         if (!cpf || !nascimento) {
             console.log(`[RPA] ETAPA 1: Buscando CPF e Nascimento de ${termoBuscaIgreen} na iGreen...`);
@@ -238,8 +242,9 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 const contentType = response.headers()['content-type'];
                 const contentDisposition = response.headers()['content-disposition'];
                 
-                if ((contentType && contentType.includes('application/pdf')) || 
-                    (contentDisposition && contentDisposition.includes('.pdf'))) {
+                // Evita capturar bloqueios do Imperva (Error 16 que é HTML)
+                if (response.status() === 200 && ((contentType && contentType.includes('application/pdf')) || 
+                    (contentDisposition && contentDisposition.includes('.pdf')))) {
                     const buffer = await response.buffer();
                     fs.writeFileSync(caminhoFaturaLocal, buffer);
                     console.log(`[RPA] 🎯 ALVO ABATIDO! PDF interceptado e gravado com sucesso!`);
@@ -258,7 +263,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             }
         });
 
-        console.log(`[RPA] ETAPA 2: Acessando Equatorial AL...`);
+        console.log(`[RPA] ETAPA 2: Acessando Equatorial AL (Invisível ao Imperva)...`);
         await page.goto(EQUATORIAL_AL_URL, { waitUntil: 'networkidle2', timeout: 60000 });
 
         try {
@@ -282,7 +287,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         }, cpf, nascimento);
         
         console.log(`[RPA] Equatorial: Aguardando painel carregar...`);
-        await new Promise(r => setTimeout(r, 8000));
+        await new Promise(r => setTimeout(r, 10000)); // Tempo extra para o Imperva analisar a nossa "capa"
 
         console.log(`[RPA] Equatorial: Procurando a UC na tela para selecionar...`);
         const ucIdentificada = await page.evaluate(() => {
@@ -342,9 +347,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             }
         });
         
-        // ===============================================
-        // A MÁGICA: DUPLA CAPTURA E PROVA VISUAL
-        // ===============================================
         console.log(`[RPA] Equatorial: Aguardando fatura na rede (10s)...`);
         let pdfCapturado = false;
         
@@ -358,17 +360,19 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         }
         
         if (!pdfCapturado) {
-            console.log(`[RPA] O arquivo não foi baixado automaticamente. Ativando o Superpoder: Gerador de PDF de Tela!`);
+            console.log(`[RPA] O arquivo não foi baixado. Ativando o Gerador de PDF de Tela...`);
             await new Promise(r => setTimeout(r, 5000)); 
             
             const pages = await browser.pages();
             const paginaFatura = pages[pages.length - 1];
             
-            await paginaFatura.pdf({ 
-                path: caminhoFaturaLocal, 
-                format: 'A4', 
-                printBackground: true 
-            });
+            // Verifica se fomos bloqueados pelo Imperva antes de gerar o PDF
+            const bodyText = await paginaFatura.evaluate(() => document.body.innerText);
+            if (bodyText.includes("Access denied") || bodyText.includes("Error 16") || bodyText.includes("imperva")) {
+                 throw new Error("O Firewall da Equatorial (Imperva) bloqueou o acesso do robô à fatura.");
+            }
+            
+            await paginaFatura.pdf({ path: caminhoFaturaLocal, format: 'A4', printBackground: true });
             
             if (fs.existsSync(caminhoFaturaLocal)) {
                 pdfCapturado = true;
@@ -376,9 +380,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             }
         }
 
-        if (!pdfCapturado) {
-            throw new Error("Falha ao gerar o PDF. O site não baixou o ficheiro nem conseguiu renderizar a tela.");
-        }
+        if (!pdfCapturado) throw new Error("Falha ao gerar o PDF. O site não baixou o ficheiro nem conseguiu renderizar a tela.");
 
         // ==============================================================
         // O COMPROMISSO DO MESTRE: DISPONIBILIZAR O PDF PARA VOCÊ VER!
@@ -391,12 +393,10 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             console.log(`[RPA] Veja com os seus próprios olhos acessando o link abaixo:`);
             console.log(`👉 https://igreen-autoflow-server-2.onrender.com/ultima-fatura 👈`);
             console.log(`======================================================\n`);
-        } catch (e) {
-            console.log(`[RPA] Aviso: O PDF foi gerado mas não consegui criar o link de prova.`);
-        }
+        } catch (e) {}
 
         // ===============================================
-        // ETAPA 3: INJEÇÃO NA IGREEN (FORÇA BRUTA EXTREMA)
+        // ETAPA 3: INJEÇÃO NA IGREEN (FORÇA BRUTA INVISÍVEL)
         // ===============================================
         console.log(`[RPA] ETAPA 3: Injetando a Fatura na iGreen...`);
         
@@ -409,12 +409,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         try { await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não') || el.textContent.includes('Fechar')); if(btn) btn.click(); }); } catch(e){}
 
         console.log(`[RPA] Procurando a barra de Buscar nas Devolutivas...`);
-        let searchDevolutiva;
-        try {
-            searchDevolutiva = await page.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
-        } catch (e) {
-            throw new Error(`Falha ao regressar ao Mapa de Clientes. O site pode estar lento.`);
-        }
+        let searchDevolutiva = await page.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
         
         await searchDevolutiva.click();
         await new Promise(r => setTimeout(r, 500));
@@ -428,14 +423,11 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         
         console.log(`[RPA] ENTER pressionado na Devolutiva. Aguardando a tabela filtrar...`);
         
-        try {
-            await page.waitForFunction((busca) => document.body.innerText.includes(busca), { timeout: 10000 }, cpf);
-        } catch (e) {}
-        
+        try { await page.waitForFunction((busca) => document.body.innerText.includes(busca), { timeout: 10000 }, cpf); } catch (e) {}
         await new Promise(r => setTimeout(r, 2000));
 
         await page.evaluate((cpfBusca) => { 
-            const linhas = Array.from(document.querySelectorAll('tr, [role="row"], div[class*="MuiDataGrid-row"], div[class*="rt-tr"]')); 
+            const linhas = Array.from(document.querySelectorAll('tr, [role="row"], div[class*="MuiDataGrid-row"]')); 
             const linhaExata = linhas.find(row => row.textContent.replace(/\D/g, '').includes(cpfBusca)); 
             if(linhaExata) {
                 const btnTresPontinhos = Array.from(linhaExata.querySelectorAll('button, div')).find(el => el.textContent.trim() === '...'); 
@@ -447,9 +439,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('span, li, div')).find(el => el.textContent.includes('Devolutivas')); if(btn) btn.click(); });
         await new Promise(r => setTimeout(r, 3000));
 
-        // -------------------------------------------------------------
-        // A SOLUÇÃO ABSOLUTA DE CLIQUE DE UPLOAD
-        // -------------------------------------------------------------
         console.log(`[RPA] Navegando pelos popups de Devolutiva...`);
         
         for (let clique = 0; clique < 3; clique++) {
@@ -465,37 +454,21 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             await new Promise(r => setTimeout(r, 3000));
         }
 
-        console.log(`[RPA] Forçando a abertura do canal de Upload...`);
+        console.log(`[RPA] INJEÇÃO DIRETA NO CÓDIGO HTML...`);
         
-        // Tenta injetar via OS-Level File Dialog (Inquebrável)
-        try {
-            const [fileChooser] = await Promise.all([
-                page.waitForFileChooser({ timeout: 20000 }), // Espera 20s para a iGreen reagir!
-                page.evaluate(() => { 
-                    // 1. Tenta clicar num input invisível
-                    const inputs = document.querySelectorAll('input[type="file"]');
-                    if (inputs.length > 0) { inputs[0].click(); return; }
-                    
-                    // 2. Tenta clicar em textos óbvios
-                    const botoes = Array.from(document.querySelectorAll('button, span, div, label, p'));
-                    const btnUpload = botoes.find(el => {
-                        const txt = el.textContent.toLowerCase();
-                        return (txt.includes('selecionar') || txt.includes('anexar') || txt.includes('arquivo') || txt.includes('upload')) && el.offsetParent !== null;
-                    });
-                    if (btnUpload) { btnUpload.click(); return; }
-                    
-                    // 3. Extrema força bruta: Clica no exato centro da tela (onde o modal de upload sempre abre)
-                    const x = window.innerWidth / 2;
-                    const y = window.innerHeight / 2;
-                    const elMeio = document.elementFromPoint(x, y);
-                    if (elMeio) elMeio.click();
-                })
-            ]);
-            await fileChooser.accept([caminhoFaturaLocal]);
-            console.log(`[RPA] 📎 Ficheiro anexado com SUCESSO ABSOLUTO! (Caixa do Sistema ativada)`);
-        } catch (erroVisual) {
-            console.log(`[RPA] ⚠️ O site bloqueou o clique de anexo. O formulário pode estar corrompido ou demorou mais de 20s.`);
-            throw new Error("Falha ao abrir a caixa de anexo na iGreen.");
+        // Em vez de clicar, injeta o ficheiro no input invisível imediatamente!
+        const inputUploads = await page.$$('input[type="file"]');
+        if (inputUploads.length > 0) {
+            console.log(`[RPA] ${inputUploads.length} inputs encontrados. Injetando PDF...`);
+            for (let input of inputUploads) {
+                try {
+                    await input.uploadFile(caminhoFaturaLocal);
+                    await page.evaluate((el) => el.dispatchEvent(new Event('change', { bubbles: true })), input);
+                } catch(e){}
+            }
+            console.log(`[RPA] PDF Injetado com SUCESSO ABSOLUTO sem abrir janelas!`);
+        } else {
+             throw new Error("O formulário de anexo da iGreen está bloqueado ou invisível.");
         }
         
         await new Promise(r => setTimeout(r, 3000));
