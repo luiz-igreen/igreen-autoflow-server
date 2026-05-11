@@ -168,7 +168,8 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             Object.defineProperty(navigator, 'webdriver', { get: () => false });
         });
         
-        await page.setViewport({ width: 1920, height: 1080 });
+        // BALA DE PRATA 1: Ecrã UltraWide de 5000px. Obriga TODAS as colunas a serem renderizadas de uma vez.
+        await page.setViewport({ width: 5000, height: 1080 });
 
         if (!cpf || !nascimento || !uc) {
             console.log(`[RPA] ETAPA 1: Buscando dados de ${termoBuscaIgreen} na iGreen...`);
@@ -240,18 +241,17 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 );
                 console.log(`[RPA] O cliente apareceu na tela! Procedendo à extração...`);
             } catch (e) {
-                console.log(`[RPA] Aviso: O texto não apareceu após 12s. O cliente pode não existir.`);
+                console.log(`[RPA] Aviso: O texto não apareceu após 12s. Validando...`);
             }
             
             await new Promise(r => setTimeout(r, 2000));
 
             // ==========================================
-            // O NOVO EXTRATOR UNIVERSAL DE GRIDS (O SEU MÉTODO DE COLUNAS)
+            // EXTRATOR BLINDADO (Com bloqueio de datas de Cadastro 2026)
             // ==========================================
             const dadosExtraidos = await page.evaluate((busca) => {
                 const buscaLimpa = busca.toLowerCase().trim();
 
-                // 1. Procurar os cabeçalhos de forma universal (th ou divs de grid)
                 const cabecalhosNodos = Array.from(document.querySelectorAll('th, [role="columnheader"], div[class*="header"], .MuiDataGrid-columnHeaderTitle'));
                 let idxDocumento = -1;
                 let idxNascimento = -1;
@@ -264,58 +264,68 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     if (txt === 'instalação' || txt.includes('instalacao')) idxInstalacao = index;
                 });
 
-                // 2. Encontrar a linha (Universal para Tabelas e React Grids)
                 const possiveisLinhas = Array.from(document.querySelectorAll('tr, [role="row"], div[class*="MuiDataGrid-row"], div[class*="rt-tr"]'));
-                
-                // Pega só as linhas que têm algum conteúdo de verdade
                 const linhasComDados = possiveisLinhas.filter(l => l.textContent.trim().length > 15);
-                
-                // Procura a linha que contém o ID do cliente
                 const linhaExata = linhasComDados.find(linha => linha.textContent.toLowerCase().includes(buscaLimpa));
                 
                 if (!linhaExata) {
                     const txtTela = document.body.innerText.substring(0, 1000).replace(/\n/g, ' || ');
-                    return { falhouBusca: true, debugVisao: `O grid não usou TR nem Role Row. Visão Parcial: ${txtTela}` };
+                    return { falhouBusca: true, debugVisao: `Linha exata não encontrada. Tela atual: ${txtTela}` };
                 }
 
-                // 3. Pegar as caixas/colunas dessa linha
                 let colunas = Array.from(linhaExata.querySelectorAll('td, [role="cell"], div[class*="MuiDataGrid-cell"], div[class*="rt-td"]'));
-                if (colunas.length === 0) {
-                    colunas = Array.from(linhaExata.children); // Fallback para divs simples
-                }
+                if (colunas.length === 0) colunas = Array.from(linhaExata.children);
 
                 let cpfExt = null;
                 let nascExt = null;
                 let ucExt = null;
 
-                // MÉTODO A: O Seu Método Cirúrgico Pelos Índices dos Nomes
+                // Tenta puxar pela posição exata da coluna
                 if (idxDocumento !== -1 && colunas[idxDocumento]) cpfExt = colunas[idxDocumento].textContent.trim();
                 if (idxNascimento !== -1 && colunas[idxNascimento]) nascExt = colunas[idxNascimento].textContent.trim();
                 if (idxInstalacao !== -1 && colunas[idxInstalacao]) ucExt = colunas[idxInstalacao].textContent.replace(/\D/g, '');
 
-                // MÉTODO B: Fallback de Inteligência Artificial (Caso a ordem das colunas falhe)
-                const textoCompletoLinha = linhaExata.textContent;
+                const textoLinha = linhaExata.textContent;
                 
-                if (!cpfExt || cpfExt.length < 11) {
-                    const cpfMatch = textoCompletoLinha.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
+                // Limpeza e Validação CPF
+                if (cpfExt) {
+                    cpfExt = cpfExt.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|\d{11}|\d{14}/)?.[0] || cpfExt;
+                } else {
+                    const cpfMatch = textoLinha.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
                     if (cpfMatch) cpfExt = cpfMatch[0];
                 }
+
+                // BALA DE PRATA 2: Lógica "Viajante do Tempo" (Ignora Data Cadastro e ativa Fallback de Segurança)
+                let anoExtraido = nascExt ? parseInt(nascExt.split('/')[2]) : 9999;
                 
-                if (!nascExt || nascExt.length < 8) {
-                    const datasMatch = textoCompletoLinha.match(/\d{2}\/\d{2}\/\d{4}/g);
-                    if (datasMatch && datasMatch.length > 0) {
-                        // Truque de Ouro: A Data de Nascimento é sempre o ano mais antigo da linha!
-                        nascExt = datasMatch.reduce((maisAntiga, atual) => {
-                            const anoAtual = parseInt(atual.split('/')[2], 10);
-                            const anoMaisAntiga = parseInt(maisAntiga.split('/')[2], 10);
-                            return anoAtual < anoMaisAntiga ? atual : maisAntiga;
-                        });
+                if (!nascExt || isNaN(anoExtraido) || anoExtraido > 2015) {
+                    const todasDatas = textoLinha.match(/\d{2}\/\d{2}\/\d{4}/g);
+                    if (todasDatas && todasDatas.length > 0) {
+                        // Encontra matematicamente a data mais antiga da linha
+                        let menorAnoVal = parseInt(todasDatas[0].split('/')[2]);
+                        let menorAnoData = todasDatas[0];
+                        for (let d of todasDatas) {
+                            let a = parseInt(d.split('/')[2]);
+                            if (a < menorAnoVal) { menorAnoVal = a; menorAnoData = d; }
+                        }
+                        
+                        // Só aceita se for uma data de nascimento plausível (< 2015)
+                        if (menorAnoVal < 2015) {
+                            nascExt = menorAnoData;
+                        } else {
+                            nascExt = null; // Rejeita Data de Cadastro/Futura
+                        }
+                    } else {
+                        nascExt = null;
                     }
                 }
 
+                // Limpeza e Validação UC (Evita conflito com o tamanho do CPF)
                 if (!ucExt || ucExt.length < 5) {
-                    const numerosGrandes = textoCompletoLinha.match(/\b\d{8,12}\b/g);
-                    if (numerosGrandes) ucExt = numerosGrandes[0];
+                    let txtSemCpf = textoLinha;
+                    if (cpfExt) txtSemCpf = txtSemCpf.replace(cpfExt.replace(/\D/g, ''), '');
+                    const ucMatch = txtSemCpf.match(/\b\d{6,10}\b/);
+                    if (ucMatch) ucExt = ucMatch[0];
                 }
 
                 return { cpfExt, nascExt, ucExt };
@@ -323,11 +333,15 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
             if (dadosExtraidos && dadosExtraidos.falhouBusca) {
                 console.log(`[RPA] 🔎 RAIO-X DA TABELA: ${dadosExtraidos.debugVisao}`);
-                throw new Error(`O robô viu o cliente na tela, mas a estrutura do Grid é impenetrável.`);
+                throw new Error(`Falha ao mapear a tabela. O robô não encontrou a linha do cliente.`);
             }
 
             if (!dadosExtraidos || !dadosExtraidos.cpfExt || !dadosExtraidos.nascExt || !dadosExtraidos.ucExt) {
-                throw new Error(`Dados incompletos na tabela. O cliente pode não ter Data de Nascimento ou Documento preenchidos.`);
+                const falhas = [];
+                if (!dadosExtraidos?.cpfExt) falhas.push("Documento (CPF)");
+                if (!dadosExtraidos?.nascExt) falhas.push("Data Nascimento (Apenas Data de Cadastro detectada na tela)");
+                if (!dadosExtraidos?.ucExt) falhas.push("Instalação (UC)");
+                throw new Error(`Dados incompletos na linha extraída: Faltando [${falhas.join(', ')}].`);
             }
 
             cpf = dadosExtraidos.cpfExt.replace(/\D/g, '');
@@ -430,7 +444,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         
         await new Promise(r => setTimeout(r, 2000));
 
-        // Aplicação do Grid Universal também nas Devolutivas
         await page.evaluate((alvoUc) => { 
             const linhas = Array.from(document.querySelectorAll('tr, [role="row"], div[class*="MuiDataGrid-row"], div[class*="rt-tr"]')); 
             const linhaExata = linhas.find(row => row.textContent.includes(alvoUc)); 
@@ -690,4 +703,4 @@ app.get('/', (req, res) => res.status(200).send('Robô iGreen Online e Blindado!
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});
+});    
