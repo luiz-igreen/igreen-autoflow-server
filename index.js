@@ -435,8 +435,10 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         // Clica no "Realizar ação" para abrir o modal de upload
         console.log(`[RPA] Clicando no botão 'Realizar ação'...`);
         await page.evaluate(() => { 
-            const botoes = Array.from(document.querySelectorAll('button, span, div, a'));
-            const btn = botoes.find(el => el.textContent.includes('Realizar ação')); 
+            const botoes = Array.from(document.querySelectorAll('button, span, a'));
+            const botoesAcao = botoes.filter(el => el.textContent.includes('Realizar ação'));
+            // Procura o botão que está realmente visível na tela e clica
+            const btn = botoesAcao.find(b => b.offsetParent !== null) || botoesAcao[0]; 
             if(btn) {
                 btn.scrollIntoView({behavior: 'smooth', block: 'center'});
                 btn.click(); 
@@ -446,30 +448,36 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         console.log(`[RPA] Aguardando a janela de anexo abrir...`);
         await new Promise(r => setTimeout(r, 4000));
 
-        // AQUI ESTÁ A SOLUÇÃO NINJA EVOLUÍDA: Radar de Espera
-        console.log(`[RPA] Procurando o canal de Injeção de PDF...`);
+        // AQUI ESTÁ A SOLUÇÃO NINJA EVOLUÍDA: Injeção Múltipla Absoluta
+        console.log(`[RPA] Procurando canais de Injeção de PDF...`);
         
-        let inputFicheiro = null;
-        try {
-            // A janela da iGreen demora a renderizar, o robô espera até 8 segundos pelo input
-            inputFicheiro = await page.waitForSelector('input[type="file"]', { timeout: 8000 });
-        } catch(e) {}
+        // Dá tempo ao site para carregar a caixinha invisível
+        await page.waitForFunction(() => document.querySelectorAll('input[type="file"]').length > 0, { timeout: 10000 }).catch(() => {});
 
-        if (inputFicheiro) {
-            console.log(`[RPA] Input invisível detetado no DOM! Injetando o PDF diretamente...`);
-            await inputFicheiro.uploadFile(caminhoFaturaLocal);
+        // Captura TODOS os inputs escondidos na página (o verdadeiro e os fantasmas)
+        const inputsFicheiro = await page.$$('input[type="file"]');
+        
+        if (inputsFicheiro.length > 0) {
+            console.log(`[RPA] Encontrados ${inputsFicheiro.length} canais de upload no sistema. Injetando a fatura em todos...`);
             
-            // Força o sistema do site a perceber que o ficheiro foi alterado (gatilho de segurança)
+            // Injeta o PDF em todos eles. Não há como falhar!
+            for (let input of inputsFicheiro) {
+                try {
+                    await input.uploadFile(caminhoFaturaLocal);
+                } catch(e) {}
+            }
+            
+            // Força o site da iGreen a perceber que recebeu o arquivo
             await page.evaluate(() => {
-                const hiddenInput = document.querySelector('input[type="file"]');
-                if(hiddenInput) {
-                    hiddenInput.dispatchEvent(new Event('change', { bubbles: true }));
-                }
+                const hiddenInputs = document.querySelectorAll('input[type="file"]');
+                hiddenInputs.forEach(input => {
+                    try { input.dispatchEvent(new Event('change', { bubbles: true })); } catch(e) {}
+                });
             });
-            console.log(`[RPA] 📎 Ficheiro anexado com sucesso via Injeção Direta!`);
+            console.log(`[RPA] 📎 Ficheiro anexado com sucesso via Injeção Múltipla!`);
             
         } else {
-            console.log(`[RPA] Input direto não apareceu. Tentando clique forçado na zona de Upload...`);
+            console.log(`[RPA] Input direto não encontrado. Tentando clique forçado na zona de Upload...`);
             const [fileChooser] = await Promise.all([
                 page.waitForFileChooser({ timeout: 15000 }),
                 page.evaluate(() => { 
@@ -482,7 +490,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     if (btnUpload) {
                         btnUpload.click(); 
                     } else {
-                        // Tática de sobrevivência: Clica na última etiqueta da página (costuma ser a de anexo)
+                        // Clica no último label visível (tática de emergência)
                         const labels = document.querySelectorAll('label');
                         if(labels.length > 0) labels[labels.length - 1].click(); 
                     }
