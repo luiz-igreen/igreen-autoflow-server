@@ -303,4 +303,4 @@ process.on('SIGINT', async () => {
 startServer();
 
 // Exporta para testes (se necessário)
-module.exports = { app, stateManager, analisarFaturaGemini, fluxoResgateDevolutiva };  
+module.exports = { app, stateManager, analisarFaturaGemini, fluxoResgateDevolutiva };
