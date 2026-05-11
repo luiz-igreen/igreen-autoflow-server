@@ -220,14 +220,16 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             await page.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
             await new Promise(r => setTimeout(r, 5000)); // Tempo extra para o site carregar os scripts
 
-            console.log(`[RPA] Procurando a barra de pesquisa...`);
+            console.log(`[RPA] Procurando a barra de Buscar...`);
+            
+
             
             let searchInput;
             try {
                 // CORREÇÃO: Focado 100% na palavra 'Buscar' (Exatamente como está no site)
                 searchInput = await page.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
             } catch (erroSeletor) {
-                console.log(`[RPA] ❌ ERRO CRÍTICO: Não encontrou a barra de pesquisa.`);
+                console.log(`[RPA] ❌ ERRO CRÍTICO: Não encontrou a barra de Buscar.`);
                 console.log(`[RPA] URL atual: ${page.url()}`);
                 console.log(`[RPA] Título da página: ${await page.title()}`);
                 throw new Error("Página carregou, mas a barra de Buscar não existe.");
@@ -243,7 +245,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             console.log(`[RPA] ENTER pressionado. Aguardando a tabela filtrar...`);
             await new Promise(r => setTimeout(r, 8000)); // Tempo dobrado para garantir que a linha aparece
 
-            // NOVO MÉTODO: Busca dinâmica pelos NOMES das colunas (Sugerido pelo Mestre Luiz Jorge)
+            // NOVO MÉTODO: Busca dinâmica com RAIO-X
             const dadosExtraidos = await page.evaluate((busca) => {
                 const cabecalhos = Array.from(document.querySelectorAll('th'));
                 let idxDocumento = -1;
@@ -258,12 +260,15 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     if (nomeColuna.includes('instalação') || nomeColuna.includes('instalacao')) idxInstalacao = index;
                 });
 
-                // Procura a linha do cliente
-                const linhas = Array.from(document.querySelectorAll('tbody tr, tr'));
-                const linhasDados = linhas.filter(tr => !tr.querySelector('th')); // Ignora o cabeçalho
+                // Procura a linha do cliente apenas no corpo (tbody) para evitar falsos positivos
+                const linhasDados = Array.from(document.querySelectorAll('tbody tr')).filter(tr => tr.textContent.trim().length > 10);
                 const linhaExata = linhasDados.find(tr => tr.textContent.toLowerCase().includes(busca.toLowerCase()));
                 
-                if (!linhaExata) return null;
+                if (!linhaExata) {
+                    // RAIO-X: Captura o que o robô está realmente a ver para o log
+                    const visaoRobo = linhasDados.slice(0, 3).map(tr => tr.textContent.replace(/\s+/g, ' ').trim()).join(" || ");
+                    return { falhouBusca: true, debugVisao: visaoRobo || "A tabela está totalmente vazia (nenhuma linha carregou)." };
+                }
 
                 const colunas = linhaExata.querySelectorAll('td');
                 
@@ -296,6 +301,11 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
                 return { cpfExt, nascExt, ucExt };
             }, termoBuscaIgreen);
+
+            if (dadosExtraidos && dadosExtraidos.falhouBusca) {
+                console.log(`[RPA] 🔎 RAIO-X DA TABELA: O que o robô está vendo agora -> ${dadosExtraidos.debugVisao}`);
+                throw new Error(`Não encontrou o ID ${termoBuscaIgreen}. O robô viu: ${dadosExtraidos.debugVisao}`);
+            }
 
             if (!dadosExtraidos) {
                 throw new Error(`Não foi possível localizar o cliente "${termoBuscaIgreen}" na tabela.`);
@@ -385,6 +395,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('span, div, p')).find(el => el.textContent.trim() === 'Green'); if(btn) btn.click(); });
         await new Promise(r => setTimeout(r, 4000));
 
+        console.log(`[RPA] Procurando a barra de Buscar nas Devolutivas...`);
         // CORREÇÃO: Focado 100% na palavra 'Buscar' também na tela de Injeção
         const searchDevolutiva = await page.waitForSelector('input[placeholder*="Buscar"]');
         await searchDevolutiva.click();
@@ -655,4 +666,4 @@ app.get('/', (req, res) => res.status(200).send('Robô iGreen Online e Blindado!
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});    
+});
