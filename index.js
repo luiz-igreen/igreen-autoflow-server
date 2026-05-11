@@ -231,22 +231,30 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         }
 
         // ===============================================
-        // INTERCEPTADOR DE DOWNLOAD DE PDF BLINDADO
+        // INTERCEPTADOR DE DOWNLOAD GLOBAL
         // ===============================================
-        page.on('response', async (response) => {
+        const escutarPDF = async (response) => {
             try {
                 const contentType = response.headers()['content-type'];
                 const contentDisposition = response.headers()['content-disposition'];
                 
-                // Algumas distribuidoras mandam como octet-stream mas o nome do ficheiro termina em .pdf
                 if ((contentType && contentType.includes('application/pdf')) || 
                     (contentDisposition && contentDisposition.includes('.pdf'))) {
                     const buffer = await response.buffer();
                     fs.writeFileSync(caminhoFaturaLocal, buffer);
-                    console.log(`[RPA] Ficheiro PDF interceptado e gravado com sucesso!`);
+                    console.log(`[RPA] 🎯 ALVO ABATIDO! PDF interceptado e gravado com sucesso!`);
                 }
-            } catch(err) {
-                // Silenciar erros de buffers falhados por causa de navegação
+            } catch(err) {}
+        };
+
+        page.on('response', escutarPDF);
+
+        browser.on('targetcreated', async (target) => {
+            if (target.type() === 'page') {
+                try {
+                    const novaAba = await target.page();
+                    novaAba.on('response', escutarPDF);
+                } catch (e) {}
             }
         });
 
@@ -321,33 +329,62 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         });
         await new Promise(r => setTimeout(r, 2000));
 
-        console.log(`[RPA] Equatorial: Solicitando VER FATURA (Download PDF)...`);
+        console.log(`[RPA] Equatorial: Solicitando VER FATURA...`);
         await page.evaluate(() => {
             const botoes = Array.from(document.querySelectorAll('button, a, span'));
-            // Procura o botão VER FATURA garantindo que ele não está escondido (display: none)
             const btnVerFatura = botoes.find(el => {
                 const txt = el.textContent.toUpperCase();
                 return (txt.includes('VER FATURA') || txt.includes('IMPRIMIR') || txt.includes('DOWNLOAD')) && el.offsetParent !== null;
             });
-            if(btnVerFatura) btnVerFatura.click();
+            if(btnVerFatura) {
+                // Remove target blank para tentar abrir na mesma tela
+                if (btnVerFatura.tagName === 'A') btnVerFatura.removeAttribute('target');
+                btnVerFatura.click();
+            }
         });
         
         // ===============================================
-        // O "RADAR DE PDF" INTELIGENTE (Até 20 segundos)
+        // A MÁGICA: DUPLA CAPTURA (Download ou Tela->PDF)
         // ===============================================
-        console.log(`[RPA] Equatorial: Aguardando captura do PDF na rede (Radar de até 20s)...`);
+        console.log(`[RPA] Equatorial: Aguardando fatura na rede (10s)...`);
         let pdfCapturado = false;
-        for (let i = 0; i < 20; i++) {
-            await new Promise(r => setTimeout(r, 1000)); // Espera 1 segundo e verifica
+        
+        // 1. Tenta apanhar o ficheiro por download normal (10 segs)
+        for (let i = 0; i < 10; i++) {
+            await new Promise(r => setTimeout(r, 1000)); 
             if (fs.existsSync(caminhoFaturaLocal)) {
                 pdfCapturado = true;
-                console.log(`[RPA] Sucesso! PDF gerado e capturado no segundo ${i + 1}.`);
+                console.log(`[RPA] Sucesso! PDF interceptado na rede.`);
                 break;
             }
         }
         
+        // 2. Se não baixou, ativamos o Superpoder de Imprimir a Tela!
         if (!pdfCapturado) {
-            throw new Error("Falha ao capturar o PDF na Equatorial. O site demorou mais de 20 segundos a gerar o documento.");
+            console.log(`[RPA] O arquivo não foi baixado automaticamente. Ativando o Superpoder: Gerador de PDF de Tela!`);
+            
+            // Dá tempo à fatura para renderizar completamente no ecrã
+            await new Promise(r => setTimeout(r, 5000)); 
+            
+            // Pega em todas as páginas abertas no navegador e foca na última (caso a fatura tenha aberto noutra aba)
+            const pages = await browser.pages();
+            const paginaFatura = pages[pages.length - 1];
+            
+            // "Imprime" o ecrã atual diretamente para um ficheiro PDF real!
+            await paginaFatura.pdf({ 
+                path: caminhoFaturaLocal, 
+                format: 'A4', 
+                printBackground: true 
+            });
+            
+            if (fs.existsSync(caminhoFaturaLocal)) {
+                pdfCapturado = true;
+                console.log(`[RPA] 🖨️ Sucesso! A tela aberta foi perfeitamente convertida em PDF.`);
+            }
+        }
+
+        if (!pdfCapturado) {
+            throw new Error("Falha ao gerar o PDF. O site não baixou o ficheiro nem conseguiu renderizar a tela.");
         }
 
         console.log(`[RPA] ETAPA 3: Injetando a Fatura na iGreen...`);
