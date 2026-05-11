@@ -381,19 +381,16 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         }
 
         // ===============================================
-        // ETAPA 3: REGRESSO DIRETO AO MAPA (CORREÇÃO DE NAVEGAÇÃO)
+        // ETAPA 3: INJEÇÃO NA IGREEN (AGORA COM BYPASS)
         // ===============================================
         console.log(`[RPA] ETAPA 3: Injetando a Fatura na iGreen...`);
         
-        // Traz a aba original para a frente para evitar congelamentos do Chrome
         await page.bringToFront();
         
-        // Navega diretamente para o mapa de clientes, sem clicar em menus frágeis
         console.log(`[RPA] Retornando diretamente ao Mapa de Clientes da iGreen...`);
         await page.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 60000 });
         await new Promise(r => setTimeout(r, 6000));
 
-        // Tenta fechar algum popup de "Agora Não" que possa aparecer
         try { await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não') || el.textContent.includes('Fechar')); if(btn) btn.click(); }); } catch(e){}
 
         console.log(`[RPA] Procurando a barra de Buscar nas Devolutivas...`);
@@ -401,8 +398,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         try {
             searchDevolutiva = await page.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
         } catch (e) {
-            const currentUrl = page.url();
-            console.log(`[RPA] ❌ ERRO CRÍTICO na Etapa 3. O robô perdeu-se no URL: ${currentUrl}`);
             throw new Error(`Falha ao regressar ao Mapa de Clientes. O site pode estar lento.`);
         }
         
@@ -437,24 +432,41 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('span, li, div')).find(el => el.textContent.includes('Devolutivas')); if(btn) btn.click(); });
         await new Promise(r => setTimeout(r, 3000));
 
-        await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, span, div')).find(el => el.textContent.includes('Realizar ação')); if(btn) btn.click(); });
+        // Clica no "Realizar ação" para abrir o modal de upload
+        console.log(`[RPA] Clicando no botão 'Realizar ação'...`);
+        await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, span, div, a')).find(el => el.textContent.includes('Realizar ação')); if(btn) btn.click(); });
+        await new Promise(r => setTimeout(r, 4000));
+
+        // AQUI ESTÁ A SOLUÇÃO NINJA: Injeção Direta
+        console.log(`[RPA] Injetando o PDF no formulário da iGreen...`);
+        
+        const inputFicheiro = await page.$('input[type="file"]');
+        if (inputFicheiro) {
+            await inputFicheiro.uploadFile(caminhoFaturaLocal);
+            console.log(`[RPA] 📎 Ficheiro anexado com sucesso via Injeção Direta!`);
+        } else {
+            console.log(`[RPA] Input direto escondido. Tentando clique visual no botão...`);
+            const [fileChooser] = await Promise.all([
+                page.waitForFileChooser({ timeout: 15000 }),
+                page.evaluate(() => { 
+                    const botoes = Array.from(document.querySelectorAll('button, span, div, label, p'));
+                    const btnUpload = botoes.find(el => {
+                        const txt = el.textContent.toLowerCase();
+                        return txt.includes('selecionar') || txt.includes('anexar') || txt.includes('arquivo') || txt.includes('upload') || txt.includes('escolher');
+                    });
+                    if (btnUpload) btnUpload.click(); 
+                })
+            ]);
+            await fileChooser.accept([caminhoFaturaLocal]);
+            console.log(`[RPA] 📎 Ficheiro anexado com sucesso via Botão Visual!`);
+        }
         await new Promise(r => setTimeout(r, 3000));
 
-        const [fileChooser] = await Promise.all([
-            page.waitForFileChooser(),
-            page.evaluate(() => { 
-                const b = Array.from(document.querySelectorAll('*')).find(el => el.textContent.includes('Selecionar arquivo') || el.type === 'file'); 
-                if (b) b.click(); 
-            })
-        ]);
-        await fileChooser.accept([caminhoFaturaLocal]);
-        await new Promise(r => setTimeout(r, 2000));
-
         await page.evaluate(() => { 
-            const btnSalvar = Array.from(document.querySelectorAll('button')).find(el => el.textContent.toUpperCase().includes('ENVIAR') || el.textContent.toUpperCase().includes('SALVAR')); 
+            const btnSalvar = Array.from(document.querySelectorAll('button')).find(el => el.textContent.toUpperCase().includes('ENVIAR') || el.textContent.toUpperCase().includes('SALVAR') || el.textContent.toUpperCase().includes('CONCLUIR')); 
             if (btnSalvar) btnSalvar.click(); 
         });
-        await new Promise(r => setTimeout(r, 4000));
+        await new Promise(r => setTimeout(r, 5000)); // Tempo para o upload subir para os servidores da iGreen
         
         await browser.close();
         if(fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
@@ -683,4 +695,4 @@ app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindad
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});    
+});
