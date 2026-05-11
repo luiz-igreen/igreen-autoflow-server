@@ -384,7 +384,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         // O COMPROMISSO DO MESTRE: DISPONIBILIZAR O PDF PARA VOCÊ VER!
         // ==============================================================
         try {
-            // Copiamos o PDF secreto do robô para uma pasta fixa que o site pode mostrar
             const pdfProvaPath = path.join('/tmp', 'ultima_fatura.pdf');
             fs.copyFileSync(caminhoFaturaLocal, pdfProvaPath);
             console.log(`\n======================================================`);
@@ -397,7 +396,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         }
 
         // ===============================================
-        // ETAPA 3: INJEÇÃO NA IGREEN (AGORA COM LOOP TEIMOSO)
+        // ETAPA 3: INJEÇÃO NA IGREEN (FORÇA BRUTA EXTREMA)
         // ===============================================
         console.log(`[RPA] ETAPA 3: Injetando a Fatura na iGreen...`);
         
@@ -449,16 +448,14 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         await new Promise(r => setTimeout(r, 3000));
 
         // -------------------------------------------------------------
-        // A SOLUÇÃO DO CARD (O LOOP TEIMOSO)
+        // A SOLUÇÃO ABSOLUTA DE CLIQUE DE UPLOAD
         // -------------------------------------------------------------
         console.log(`[RPA] Navegando pelos popups de Devolutiva...`);
         
-        // O robô tenta clicar em "Realizar ação" até 3 vezes, dando tempo para os cartões internos abrirem
         for (let clique = 0; clique < 3; clique++) {
             await page.evaluate(() => { 
                 const botoes = Array.from(document.querySelectorAll('button, span, a, div'));
                 const botoesAcao = botoes.filter(el => el.textContent.trim() === 'Realizar ação' || el.textContent.includes('Realizar ação'));
-                // Procura sempre o botão mais "novo/interno" que esteja visível
                 const btn = botoesAcao.filter(b => b.offsetParent !== null).pop() || botoesAcao[botoesAcao.length - 1]; 
                 if(btn) {
                     btn.scrollIntoView({behavior: 'smooth', block: 'center'});
@@ -466,56 +463,41 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 }
             });
             await new Promise(r => setTimeout(r, 3000));
-            
-            // Pergunta ao site se o botão invisível de Upload já apareceu. Se sim, para de clicar!
-            const inputApareceu = await page.evaluate(() => document.querySelectorAll('input[type="file"]').length > 0);
-            if (inputApareceu) {
-                console.log(`[RPA] Área de Upload detetada com sucesso!`);
-                break;
-            }
         }
 
-        console.log(`[RPA] Procurando canais de Injeção de PDF...`);
-        const inputsFicheiro = await page.$$('input[type="file"]');
+        console.log(`[RPA] Forçando a abertura do canal de Upload...`);
         
-        if (inputsFicheiro.length > 0) {
-            console.log(`[RPA] Encontrados ${inputsFicheiro.length} canais de upload no sistema. Injetando a fatura em todos...`);
-            for (let input of inputsFicheiro) {
-                try { await input.uploadFile(caminhoFaturaLocal); } catch(e) {}
-            }
-            
-            await page.evaluate(() => {
-                const hiddenInputs = document.querySelectorAll('input[type="file"]');
-                hiddenInputs.forEach(input => {
-                    try { input.dispatchEvent(new Event('change', { bubbles: true })); } catch(e) {}
-                });
-            });
-            console.log(`[RPA] 📎 Ficheiro anexado com sucesso via Injeção Múltipla!`);
-            
-        } else {
-            console.log(`[RPA] Input direto não encontrado. Tentando clique forçado na zona de Upload...`);
-            try {
-                const [fileChooser] = await Promise.all([
-                    page.waitForFileChooser({ timeout: 10000 }), // Se não abrir em 10s, o try/catch impede a máquina de explodir
-                    page.evaluate(() => { 
-                        const botoes = Array.from(document.querySelectorAll('button, span, div, label, p'));
-                        const btnUpload = botoes.find(el => {
-                            const txt = el.textContent.toLowerCase();
-                            return (txt.includes('selecionar') || txt.includes('anexar') || txt.includes('arquivo') || txt.includes('upload') || txt.includes('escolher') || txt.includes('arraste') || txt.includes('procurar')) && el.offsetParent !== null;
-                        });
-                        if (btnUpload) { btnUpload.click(); } 
-                        else {
-                            const labels = document.querySelectorAll('label');
-                            if(labels.length > 0) labels[labels.length - 1].click(); 
-                        }
-                    })
-                ]);
-                await fileChooser.accept([caminhoFaturaLocal]);
-                console.log(`[RPA] 📎 Ficheiro anexado com sucesso via Janela Visual!`);
-            } catch (erroVisual) {
-                console.log(`[RPA] ⚠️ O clique visual não abriu o popup de arquivos. O site pode estar lento ou ter mudado.`);
-            }
+        // Tenta injetar via OS-Level File Dialog (Inquebrável)
+        try {
+            const [fileChooser] = await Promise.all([
+                page.waitForFileChooser({ timeout: 20000 }), // Espera 20s para a iGreen reagir!
+                page.evaluate(() => { 
+                    // 1. Tenta clicar num input invisível
+                    const inputs = document.querySelectorAll('input[type="file"]');
+                    if (inputs.length > 0) { inputs[0].click(); return; }
+                    
+                    // 2. Tenta clicar em textos óbvios
+                    const botoes = Array.from(document.querySelectorAll('button, span, div, label, p'));
+                    const btnUpload = botoes.find(el => {
+                        const txt = el.textContent.toLowerCase();
+                        return (txt.includes('selecionar') || txt.includes('anexar') || txt.includes('arquivo') || txt.includes('upload')) && el.offsetParent !== null;
+                    });
+                    if (btnUpload) { btnUpload.click(); return; }
+                    
+                    // 3. Extrema força bruta: Clica no exato centro da tela (onde o modal de upload sempre abre)
+                    const x = window.innerWidth / 2;
+                    const y = window.innerHeight / 2;
+                    const elMeio = document.elementFromPoint(x, y);
+                    if (elMeio) elMeio.click();
+                })
+            ]);
+            await fileChooser.accept([caminhoFaturaLocal]);
+            console.log(`[RPA] 📎 Ficheiro anexado com SUCESSO ABSOLUTO! (Caixa do Sistema ativada)`);
+        } catch (erroVisual) {
+            console.log(`[RPA] ⚠️ O site bloqueou o clique de anexo. O formulário pode estar corrompido ou demorou mais de 20s.`);
+            throw new Error("Falha ao abrir a caixa de anexo na iGreen.");
         }
+        
         await new Promise(r => setTimeout(r, 3000));
 
         console.log(`[RPA] Salvando a devolutiva na iGreen...`);
