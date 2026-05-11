@@ -337,7 +337,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 return (txt.includes('VER FATURA') || txt.includes('IMPRIMIR') || txt.includes('DOWNLOAD')) && el.offsetParent !== null;
             });
             if(btnVerFatura) {
-                // Remove target blank para tentar abrir na mesma tela
                 if (btnVerFatura.tagName === 'A') btnVerFatura.removeAttribute('target');
                 btnVerFatura.click();
             }
@@ -349,7 +348,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         console.log(`[RPA] Equatorial: Aguardando fatura na rede (10s)...`);
         let pdfCapturado = false;
         
-        // 1. Tenta apanhar o ficheiro por download normal (10 segs)
         for (let i = 0; i < 10; i++) {
             await new Promise(r => setTimeout(r, 1000)); 
             if (fs.existsSync(caminhoFaturaLocal)) {
@@ -359,18 +357,13 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             }
         }
         
-        // 2. Se não baixou, ativamos o Superpoder de Imprimir a Tela!
         if (!pdfCapturado) {
             console.log(`[RPA] O arquivo não foi baixado automaticamente. Ativando o Superpoder: Gerador de PDF de Tela!`);
-            
-            // Dá tempo à fatura para renderizar completamente no ecrã
             await new Promise(r => setTimeout(r, 5000)); 
             
-            // Pega em todas as páginas abertas no navegador e foca na última (caso a fatura tenha aberto noutra aba)
             const pages = await browser.pages();
             const paginaFatura = pages[pages.length - 1];
             
-            // "Imprime" o ecrã atual diretamente para um ficheiro PDF real!
             await paginaFatura.pdf({ 
                 path: caminhoFaturaLocal, 
                 format: 'A4', 
@@ -387,18 +380,31 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             throw new Error("Falha ao gerar o PDF. O site não baixou o ficheiro nem conseguiu renderizar a tela.");
         }
 
+        // ===============================================
+        // ETAPA 3: REGRESSO DIRETO AO MAPA (CORREÇÃO DE NAVEGAÇÃO)
+        // ===============================================
         console.log(`[RPA] ETAPA 3: Injetando a Fatura na iGreen...`);
-        await page.goto("https://escritorio.igreenenergy.com.br", { waitUntil: 'networkidle2' });
-        await new Promise(r => setTimeout(r, 4000));
+        
+        // Traz a aba original para a frente para evitar congelamentos do Chrome
+        await page.bringToFront();
+        
+        // Navega diretamente para o mapa de clientes, sem clicar em menus frágeis
+        console.log(`[RPA] Retornando diretamente ao Mapa de Clientes da iGreen...`);
+        await page.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+        await new Promise(r => setTimeout(r, 6000));
 
-        await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('span, div')).find(el => el.textContent.trim() === 'Clientes'); if(btn) btn.click(); });
-        await new Promise(r => setTimeout(r, 4000));
-
-        await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('span, div, p')).find(el => el.textContent.trim() === 'Green'); if(btn) btn.click(); });
-        await new Promise(r => setTimeout(r, 4000));
+        // Tenta fechar algum popup de "Agora Não" que possa aparecer
+        try { await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não') || el.textContent.includes('Fechar')); if(btn) btn.click(); }); } catch(e){}
 
         console.log(`[RPA] Procurando a barra de Buscar nas Devolutivas...`);
-        const searchDevolutiva = await page.waitForSelector('input[placeholder*="Buscar"]');
+        let searchDevolutiva;
+        try {
+            searchDevolutiva = await page.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
+        } catch (e) {
+            const currentUrl = page.url();
+            console.log(`[RPA] ❌ ERRO CRÍTICO na Etapa 3. O robô perdeu-se no URL: ${currentUrl}`);
+            throw new Error(`Falha ao regressar ao Mapa de Clientes. O site pode estar lento.`);
+        }
         
         await searchDevolutiva.click();
         await new Promise(r => setTimeout(r, 500));
