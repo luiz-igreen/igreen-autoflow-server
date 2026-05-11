@@ -343,7 +343,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         });
         
         // ===============================================
-        // A MÁGICA: DUPLA CAPTURA (Download ou Tela->PDF)
+        // A MÁGICA: DUPLA CAPTURA E PROVA VISUAL
         // ===============================================
         console.log(`[RPA] Equatorial: Aguardando fatura na rede (10s)...`);
         let pdfCapturado = false;
@@ -380,8 +380,24 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             throw new Error("Falha ao gerar o PDF. O site não baixou o ficheiro nem conseguiu renderizar a tela.");
         }
 
+        // ==============================================================
+        // O COMPROMISSO DO MESTRE: DISPONIBILIZAR O PDF PARA VOCÊ VER!
+        // ==============================================================
+        try {
+            // Copiamos o PDF secreto do robô para uma pasta fixa que o site pode mostrar
+            const pdfProvaPath = path.join('/tmp', 'ultima_fatura.pdf');
+            fs.copyFileSync(caminhoFaturaLocal, pdfProvaPath);
+            console.log(`\n======================================================`);
+            console.log(`[RPA] 📄 PROVA DO PDF: O robô guardou uma cópia da fatura.`);
+            console.log(`[RPA] Veja com os seus próprios olhos acessando o link abaixo:`);
+            console.log(`👉 https://igreen-autoflow-server-2.onrender.com/ultima-fatura 👈`);
+            console.log(`======================================================\n`);
+        } catch (e) {
+            console.log(`[RPA] Aviso: O PDF foi gerado mas não consegui criar o link de prova.`);
+        }
+
         // ===============================================
-        // ETAPA 3: INJEÇÃO NA IGREEN (AGORA COM BYPASS)
+        // ETAPA 3: INJEÇÃO NA IGREEN (AGORA COM LOOP TEIMOSO)
         // ===============================================
         console.log(`[RPA] ETAPA 3: Injetando a Fatura na iGreen...`);
         
@@ -432,42 +448,42 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('span, li, div')).find(el => el.textContent.includes('Devolutivas')); if(btn) btn.click(); });
         await new Promise(r => setTimeout(r, 3000));
 
-        // Clica no "Realizar ação" para abrir o modal de upload
-        console.log(`[RPA] Clicando no botão 'Realizar ação'...`);
-        await page.evaluate(() => { 
-            const botoes = Array.from(document.querySelectorAll('button, span, a'));
-            const botoesAcao = botoes.filter(el => el.textContent.includes('Realizar ação'));
-            // Procura o botão que está realmente visível na tela e clica
-            const btn = botoesAcao.find(b => b.offsetParent !== null) || botoesAcao[0]; 
-            if(btn) {
-                btn.scrollIntoView({behavior: 'smooth', block: 'center'});
-                btn.click(); 
+        // -------------------------------------------------------------
+        // A SOLUÇÃO DO CARD (O LOOP TEIMOSO)
+        // -------------------------------------------------------------
+        console.log(`[RPA] Navegando pelos popups de Devolutiva...`);
+        
+        // O robô tenta clicar em "Realizar ação" até 3 vezes, dando tempo para os cartões internos abrirem
+        for (let clique = 0; clique < 3; clique++) {
+            await page.evaluate(() => { 
+                const botoes = Array.from(document.querySelectorAll('button, span, a, div'));
+                const botoesAcao = botoes.filter(el => el.textContent.trim() === 'Realizar ação' || el.textContent.includes('Realizar ação'));
+                // Procura sempre o botão mais "novo/interno" que esteja visível
+                const btn = botoesAcao.filter(b => b.offsetParent !== null).pop() || botoesAcao[botoesAcao.length - 1]; 
+                if(btn) {
+                    btn.scrollIntoView({behavior: 'smooth', block: 'center'});
+                    btn.click(); 
+                }
+            });
+            await new Promise(r => setTimeout(r, 3000));
+            
+            // Pergunta ao site se o botão invisível de Upload já apareceu. Se sim, para de clicar!
+            const inputApareceu = await page.evaluate(() => document.querySelectorAll('input[type="file"]').length > 0);
+            if (inputApareceu) {
+                console.log(`[RPA] Área de Upload detetada com sucesso!`);
+                break;
             }
-        });
-        
-        console.log(`[RPA] Aguardando a janela de anexo abrir...`);
-        await new Promise(r => setTimeout(r, 4000));
+        }
 
-        // AQUI ESTÁ A SOLUÇÃO NINJA EVOLUÍDA: Injeção Múltipla Absoluta
         console.log(`[RPA] Procurando canais de Injeção de PDF...`);
-        
-        // Dá tempo ao site para carregar a caixinha invisível
-        await page.waitForFunction(() => document.querySelectorAll('input[type="file"]').length > 0, { timeout: 10000 }).catch(() => {});
-
-        // Captura TODOS os inputs escondidos na página (o verdadeiro e os fantasmas)
         const inputsFicheiro = await page.$$('input[type="file"]');
         
         if (inputsFicheiro.length > 0) {
             console.log(`[RPA] Encontrados ${inputsFicheiro.length} canais de upload no sistema. Injetando a fatura em todos...`);
-            
-            // Injeta o PDF em todos eles. Não há como falhar!
             for (let input of inputsFicheiro) {
-                try {
-                    await input.uploadFile(caminhoFaturaLocal);
-                } catch(e) {}
+                try { await input.uploadFile(caminhoFaturaLocal); } catch(e) {}
             }
             
-            // Força o site da iGreen a perceber que recebeu o arquivo
             await page.evaluate(() => {
                 const hiddenInputs = document.querySelectorAll('input[type="file"]');
                 hiddenInputs.forEach(input => {
@@ -478,26 +494,27 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             
         } else {
             console.log(`[RPA] Input direto não encontrado. Tentando clique forçado na zona de Upload...`);
-            const [fileChooser] = await Promise.all([
-                page.waitForFileChooser({ timeout: 15000 }),
-                page.evaluate(() => { 
-                    const botoes = Array.from(document.querySelectorAll('button, span, div, label, p'));
-                    const btnUpload = botoes.find(el => {
-                        const txt = el.textContent.toLowerCase();
-                        return (txt.includes('selecionar') || txt.includes('anexar') || txt.includes('arquivo') || txt.includes('upload') || txt.includes('escolher') || txt.includes('arraste') || txt.includes('procurar')) && el.offsetParent !== null;
-                    });
-                    
-                    if (btnUpload) {
-                        btnUpload.click(); 
-                    } else {
-                        // Clica no último label visível (tática de emergência)
-                        const labels = document.querySelectorAll('label');
-                        if(labels.length > 0) labels[labels.length - 1].click(); 
-                    }
-                })
-            ]);
-            await fileChooser.accept([caminhoFaturaLocal]);
-            console.log(`[RPA] 📎 Ficheiro anexado com sucesso via Janela Visual!`);
+            try {
+                const [fileChooser] = await Promise.all([
+                    page.waitForFileChooser({ timeout: 10000 }), // Se não abrir em 10s, o try/catch impede a máquina de explodir
+                    page.evaluate(() => { 
+                        const botoes = Array.from(document.querySelectorAll('button, span, div, label, p'));
+                        const btnUpload = botoes.find(el => {
+                            const txt = el.textContent.toLowerCase();
+                            return (txt.includes('selecionar') || txt.includes('anexar') || txt.includes('arquivo') || txt.includes('upload') || txt.includes('escolher') || txt.includes('arraste') || txt.includes('procurar')) && el.offsetParent !== null;
+                        });
+                        if (btnUpload) { btnUpload.click(); } 
+                        else {
+                            const labels = document.querySelectorAll('label');
+                            if(labels.length > 0) labels[labels.length - 1].click(); 
+                        }
+                    })
+                ]);
+                await fileChooser.accept([caminhoFaturaLocal]);
+                console.log(`[RPA] 📎 Ficheiro anexado com sucesso via Janela Visual!`);
+            } catch (erroVisual) {
+                console.log(`[RPA] ⚠️ O clique visual não abriu o popup de arquivos. O site pode estar lento ou ter mudado.`);
+            }
         }
         await new Promise(r => setTimeout(r, 3000));
 
@@ -506,7 +523,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             const btnSalvar = Array.from(document.querySelectorAll('button')).find(el => el.textContent.toUpperCase().includes('ENVIAR') || el.textContent.toUpperCase().includes('SALVAR') || el.textContent.toUpperCase().includes('CONCLUIR')); 
             if (btnSalvar) btnSalvar.click(); 
         });
-        await new Promise(r => setTimeout(r, 5000)); // Tempo para o upload subir para os servidores da iGreen
+        await new Promise(r => setTimeout(r, 5000)); 
         
         await browser.close();
         if(fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
@@ -709,6 +726,26 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 // ==========================================
+// ROTA PÚBLICA DE PROVAS (A PEDIDO DO MESTRE)
+// ==========================================
+app.get('/ultima-fatura', (req, res) => {
+    const file = path.join('/tmp', 'ultima_fatura.pdf');
+    if (fs.existsSync(file)) {
+        res.contentType('application/pdf');
+        res.sendFile(path.resolve(file));
+    } else {
+        res.status(404).send(`
+            <h2 style="font-family: sans-serif; color: #333; text-align: center; margin-top: 50px;">
+                🕵️‍♂️ Nenhuma fatura foi capturada ainda!
+            </h2>
+            <p style="font-family: sans-serif; color: #666; text-align: center;">
+                Faça o teste de uma Devolutiva no WhatsApp primeiro. Quando o robô gerar o PDF na Equatorial, ele aparecerá aqui.
+            </p>
+        `);
+    }
+});
+
+// ==========================================
 // HEALTH CHECK E INICIALIZAÇÃO
 // ==========================================
 const PORT = process.env.PORT || 10000;
@@ -735,4 +772,4 @@ app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindad
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});    
+});
