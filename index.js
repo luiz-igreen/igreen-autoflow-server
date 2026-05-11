@@ -233,9 +233,15 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 throw new Error("Página carregou, mas a barra de Buscar não existe.");
             }
 
-            await searchInput.type(termoBuscaIgreen); 
+            // O Toque do Mestre: Clicar, digitar devagar e dar ENTER firme.
+            await searchInput.click();
+            await new Promise(r => setTimeout(r, 500));
+            await searchInput.type(termoBuscaIgreen, { delay: 100 }); 
+            await new Promise(r => setTimeout(r, 500));
             await page.keyboard.press('Enter');
-            await new Promise(r => setTimeout(r, 4000));
+            
+            console.log(`[RPA] ENTER pressionado. Aguardando a tabela filtrar...`);
+            await new Promise(r => setTimeout(r, 8000)); // Tempo dobrado para garantir que a linha aparece
 
             // NOVO MÉTODO: Busca dinâmica pelos NOMES das colunas (Sugerido pelo Mestre Luiz Jorge)
             const dadosExtraidos = await page.evaluate((busca) => {
@@ -381,9 +387,14 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
         // CORREÇÃO: Focado 100% na palavra 'Buscar' também na tela de Injeção
         const searchDevolutiva = await page.waitForSelector('input[placeholder*="Buscar"]');
-        await searchDevolutiva.type(cpf);
+        await searchDevolutiva.click();
+        await new Promise(r => setTimeout(r, 500));
+        await searchDevolutiva.type(cpf, { delay: 100 });
+        await new Promise(r => setTimeout(r, 500));
         await page.keyboard.press('Enter');
-        await new Promise(r => setTimeout(r, 4000));
+        
+        console.log(`[RPA] ENTER pressionado na Devolutiva. Aguardando a tabela filtrar...`);
+        await new Promise(r => setTimeout(r, 8000)); // Tempo dobrado
 
         await page.evaluate((alvoUc) => { 
             const linhas = Array.from(document.querySelectorAll('tr')); 
