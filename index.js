@@ -50,11 +50,9 @@ const TEXTOS = {
     T01: "Opção 1️⃣ selecionada! 🌿 \nPara prepararmos o seu desconto e o seu contrato, por favor, envie uma foto bem nítida (ou arquivo PDF) da sua conta de luz mais recente.",
     T02: "Recebemos o seu documento! 📄 A nossa assistente virtual está a analisar as informações neste exato momento. Só um instante...",
     
-    T_RESGATE_START: "Opção 3️⃣ selecionada! ⚡ \nPara resolvermos a devolutiva, a nossa equipe vai buscar a UC, CPF e Nascimento no seu escritório, baixar a fatura na Distribuidora e anexar.\n\nPor favor, digite apenas o **Nome do Cliente ou ID**.\n\n*(Exemplo: 398172 ou Wellington Silva Nunes)*:",
-    T_RESGATE_BUSCANDO: "🔍 Iniciando a verificação em nosso sistema...\n\n1️⃣ Buscando CPF, Nascimento e UC no relatório da iGreen...\n2️⃣ Acessando a Distribuidora Local...\n3️⃣ Baixando fatura atualizada da UC...\n4️⃣ Retornando à iGreen para anexar o documento...\n\nIsso pode levar alguns segundos, por favor, aguarde...",
+    T_RESGATE_START: "Opção 3️⃣ selecionada! ⚡ \nPara resolvermos a devolutiva, a nossa equipe vai buscar os seus dados no escritório, baixar a fatura atualizada na Distribuidora e anexar.\n\nPor favor, digite apenas o **Nome do Cliente ou ID**.\n\n*(Exemplo: 398172 ou Wellington Silva Nunes)*:",
+    T_RESGATE_BUSCANDO: "🔍 Iniciando a verificação em nosso sistema...\n\n1️⃣ Buscando CPF e Nascimento no relatório da iGreen...\n2️⃣ Acessando a Distribuidora Local...\n3️⃣ Baixando fatura atualizada e identificando a UC correta...\n4️⃣ Retornando à iGreen para anexar o documento...\n\nIsso pode levar alguns segundos, por favor, aguarde...",
     T_RESGATE_SUCESSO: "✅ Sucesso Absoluto! A fatura atualizada foi resgatada e anexada na aba de Devolutivas do escritório iGreen. A sua pendência foi resolvida!",
-    
-    // AQUI ESTÁ A NOVA MENSAGEM DO MESTRE LUIZ JORGE
     T_RESGATE_FAIL: "⚠️ Ocorreu um erro no processo.\n\nO nosso time não encontrou a linha do cliente, ou este cliente não existe em nosso cadastro.\n\nPor favor, verifique se o Nome ou ID digitado está correto e tente novamente.",
 
     T_GUARDAR_START: "Opção 2️⃣ selecionada! 💾 \n*Módulo de Pré-Cadastro* ativado!\nPor favor, envie a foto ou PDF da sua *Fatura de Energia*.",
@@ -156,7 +154,8 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
     const caminhoFaturaLocal = path.join('/tmp', `fatura_${Date.now()}.pdf`);
     let cpf = cpfBanco;
     let nascimento = nascBanco;
-    let uc = ucBanco;
+    let uc = ucBanco; // UC Antiga (da iGreen)
+    let docIdMemoria = null;
 
     try {
         browser = await puppeteer.launch({ 
@@ -170,171 +169,106 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             Object.defineProperty(navigator, 'webdriver', { get: () => false });
         });
         
-        // Ecrã UltraWide de 5000px. Obriga TODAS as colunas a serem renderizadas de uma vez.
         await page.setViewport({ width: 5000, height: 1080 });
 
-        if (!cpf || !nascimento || !uc) {
-            console.log(`[RPA] ETAPA 1: Buscando dados de ${termoBuscaIgreen} na iGreen...`);
+        if (!cpf || !nascimento) {
+            console.log(`[RPA] ETAPA 1: Buscando CPF e Nascimento de ${termoBuscaIgreen} na iGreen...`);
             
             await page.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
-            console.log(`[RPA] Página de login carregada.`);
-            
             try { await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Começar')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
             
             await page.waitForSelector('input[type="email"]');
-            
             await page.type('input[type="email"]', IGREEN_USER, { delay: 50 });
             await page.type('input[type="password"]', IGREEN_PASS, { delay: 50 });
             
-            console.log(`[RPA] Clicando no botão de acesso...`);
             await page.evaluate(() => {
                 const botoes = Array.from(document.querySelectorAll('button'));
                 const btnEntrar = botoes.find(b => b.textContent.toLowerCase().includes('entrar') || b.textContent.toLowerCase().includes('acessar') || b.textContent.toLowerCase().includes('login'));
                 if (btnEntrar) btnEntrar.click();
             });
-            
             await page.keyboard.press('Enter');
-            console.log(`[RPA] Credenciais inseridas. Aguardando entrada...`);
             
             await Promise.race([
                 page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }),
                 new Promise(resolve => setTimeout(resolve, 10000))
             ]);
 
-            const urlAtualLogin = page.url();
-            if (urlAtualLogin.includes('login') || urlAtualLogin.includes('entrar')) {
-                throw new Error("O site da iGreen recusou o login. Verifique a senha ou pode ser bloqueio anti-robô.");
-            }
+            if (page.url().includes('login')) throw new Error("O site da iGreen recusou o login. Verifique a senha.");
 
             try { await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
 
-            console.log(`[RPA] Navegando para a página do mapa...`);
             await page.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
             await new Promise(r => setTimeout(r, 5000));
 
-            console.log(`[RPA] Procurando a barra de Buscar...`);
-            
             let searchInput;
             try {
                 searchInput = await page.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
-            } catch (erroSeletor) {
-                console.log(`[RPA] ❌ ERRO CRÍTICO: Não encontrou a barra de Buscar.`);
-                throw new Error("Página carregou, mas a barra de Buscar não existe.");
-            }
+            } catch (erroSeletor) { throw new Error("A barra de Buscar não existe."); }
 
             await searchInput.click();
             await new Promise(r => setTimeout(r, 500));
-            
             await searchInput.click({ clickCount: 3 });
             await page.keyboard.press('Backspace');
             await new Promise(r => setTimeout(r, 500));
-
             await searchInput.type(termoBuscaIgreen, { delay: 100 }); 
             await new Promise(r => setTimeout(r, 500));
             await page.keyboard.press('Enter');
             
-            console.log(`[RPA] Busca digitada. Aguardando a tabela filtrar...`);
-            
             try {
-                await page.waitForFunction(
-                    (busca) => document.body.innerText.toLowerCase().includes(busca.toLowerCase()),
-                    { timeout: 12000 },
-                    termoBuscaIgreen
-                );
-                console.log(`[RPA] O cliente apareceu na tela! Procedendo à extração...`);
-            } catch (e) {
-                console.log(`[RPA] Aviso: O texto não apareceu após 12s. Validando...`);
-            }
-            
+                await page.waitForFunction((busca) => document.body.innerText.toLowerCase().includes(busca.toLowerCase()), { timeout: 12000 }, termoBuscaIgreen);
+            } catch (e) {}
             await new Promise(r => setTimeout(r, 2000));
 
-            // ==========================================
-            // EXTRATOR INQUEBRÁVEL (Método de Eliminação Matemática)
-            // ==========================================
             const dadosExtraidos = await page.evaluate((busca) => {
                 const buscaLimpa = busca.toLowerCase().trim();
-
                 const possiveisLinhas = Array.from(document.querySelectorAll('tr, [role="row"], .MuiDataGrid-row'));
                 const linhasComDados = possiveisLinhas.filter(l => l.textContent.trim().length > 15 && !l.querySelector('th') && !l.getAttribute('role')?.includes('columnheader'));
                 const linhaExata = linhasComDados.find(linha => linha.textContent.toLowerCase().includes(buscaLimpa));
                 
-                if (!linhaExata) {
-                    return { falhouBusca: true, debugVisao: `Linha não encontrada.` };
-                }
+                if (!linhaExata) return { falhouBusca: true };
 
-                // Pega todas as colunas e junta com espaços largos para os números não se colarem
                 let colunas = Array.from(linhaExata.querySelectorAll('td, [role="cell"], .MuiDataGrid-cell'));
                 if (colunas.length === 0) colunas = Array.from(linhaExata.children);
-                
                 const textoLinha = colunas.map(c => c.textContent.trim()).join('   ');
                 
-                let cpfExt = null;
-                let nascExt = null;
-                let ucExt = null;
+                let cpfExt = null; let nascExt = null; let ucExt = null;
 
-                // 1. Extração do CPF (Mascara inconfundível)
                 const cpfMatch = textoLinha.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
-                if (cpfMatch) {
-                    cpfExt = cpfMatch[0];
-                }
+                if (cpfMatch) cpfExt = cpfMatch[0];
 
-                // 2. Extração da Data Nascimento (O ano mais antigo de toda a linha)
                 const todasDatas = textoLinha.match(/\d{2}\/\d{2}\/\d{4}/g);
                 if (todasDatas && todasDatas.length > 0) {
                     let menorAno = 9999;
                     for (let d of todasDatas) {
                         let ano = parseInt(d.split('/')[2], 10);
-                        if (ano < menorAno) {
-                            menorAno = ano;
-                            nascExt = d;
-                        }
+                        if (ano < menorAno) { menorAno = ano; nascExt = d; }
                     }
-                    if (menorAno > 2015) nascExt = null; // Rejeita datas recentes (Cadastro/Validação)
+                    if (menorAno > 2015) nascExt = null; 
                 }
 
-                // 3. Extração da UC (Instalação) via ELIMINAÇÃO ABSOLUTA
-                // O primeiro número de todos é sempre o Código do Cliente (ex: 1119032)
+                // Extrai a UC Antiga apenas por referência, não será essencial para a Equatorial
                 const primeiroNumero = textoLinha.match(/^\s*(\d+)/);
                 const codigoCliente = primeiroNumero ? primeiroNumero[1] : null;
+                let textoSemLixo = textoLinha.replace(/\(\d{2}\)\s*\d{4,5}-\d{4}/g, ' ').replace(/\d{2}\/\d{2}\/\d{4}/g, ' ');
+                if (cpfExt) textoSemLixo = textoSemLixo.replace(cpfExt, ' '); 
 
-                let textoSemLixo = textoLinha;
-                textoSemLixo = textoSemLixo.replace(/\(\d{2}\)\s*\d{4,5}-\d{4}/g, ' '); // Elimina celular
-                textoSemLixo = textoSemLixo.replace(/\d{2}\/\d{2}\/\d{4}/g, ' '); // Elimina TODAS as datas (Impede o erro 2026)
-                if (cpfExt) textoSemLixo = textoSemLixo.replace(cpfExt, ' '); // Elimina o CPF
-
-                // Agora só sobraram números isolados. Procuramos um com 5 a 15 dígitos que não seja o Código.
                 const numerosRestantes = textoSemLixo.match(/\b\d+\b/g) || [];
-                
                 for (let num of numerosRestantes) {
-                    if (num.length >= 5 && num.length <= 15 && num !== codigoCliente) {
-                        ucExt = num;
-                        break;
-                    }
+                    if (num.length >= 5 && num.length <= 15 && num !== codigoCliente) { ucExt = num; break; }
                 }
 
-                if (cpfExt) cpfExt = cpfExt.replace(/\D/g, ''); // Limpa os pontos do CPF no fim
-
+                if (cpfExt) cpfExt = cpfExt.replace(/\D/g, '');
                 return { cpfExt, nascExt, ucExt };
             }, termoBuscaIgreen);
 
-            if (dadosExtraidos && dadosExtraidos.falhouBusca) {
-                console.log(`[RPA] 🔎 RAIO-X DA TABELA: ${dadosExtraidos.debugVisao}`);
-                throw new Error(`Falha ao mapear a tabela. O nosso time não encontrou a linha do cliente.`);
-            }
-
-            if (!dadosExtraidos || !dadosExtraidos.cpfExt || !dadosExtraidos.nascExt || !dadosExtraidos.ucExt) {
-                const falhas = [];
-                if (!dadosExtraidos?.cpfExt) falhas.push("Documento (CPF)");
-                if (!dadosExtraidos?.nascExt) falhas.push("Data Nascimento");
-                if (!dadosExtraidos?.ucExt) falhas.push("Instalação (UC)");
-                
-                throw new Error(`Dados incompletos na extração blindada: Faltando [${falhas.join(', ')}].`);
-            }
+            if (dadosExtraidos && dadosExtraidos.falhouBusca) throw new Error(`O nosso time não encontrou a linha do cliente.`);
+            if (!dadosExtraidos || !dadosExtraidos.cpfExt || !dadosExtraidos.nascExt) throw new Error(`Faltam dados essenciais (CPF/Nascimento) na iGreen.`);
 
             cpf = dadosExtraidos.cpfExt;
             nascimento = dadosExtraidos.nascExt;
-            uc = dadosExtraidos.ucExt;
-            console.log(`[RPA] Sucesso Máximo na Etapa 1! CPF: ${cpf} | Nasc: ${nascimento} | UC: ${uc}`);
+            uc = dadosExtraidos.ucExt; // Pode ser a velha, vamos ignorar na Equatorial
+            docIdMemoria = uc; // Guarda a velha como ID para atualizar o banco depois
+            console.log(`[RPA] iGreen lida! CPF: ${cpf} | Nasc: ${nascimento} | UC Antiga: ${uc}`);
         }
 
         page.on('response', async (response) => {
@@ -345,7 +279,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             }
         });
 
-        console.log(`[RPA] ETAPA 2: Acessando Equatorial AL...`);
+        console.log(`[RPA] ETAPA 2: Acessando Equatorial AL (A Fonte da Verdade)...`);
         await page.goto(EQUATORIAL_AL_URL, { waitUntil: 'networkidle2', timeout: 60000 });
 
         try {
@@ -357,6 +291,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             await new Promise(r => setTimeout(r, 2000));
         } catch(e) {}
 
+        // LOGIN APENAS COM CPF E NASCIMENTO (Ignora a UC velha)
         await page.evaluate((cpfBusca, nascBusca) => {
             const inputs = document.querySelectorAll('input');
             inputs.forEach(input => {
@@ -366,15 +301,45 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             const btnEntrar = Array.from(document.querySelectorAll('button')).find(b => b.textContent.toUpperCase().includes('ENTRAR'));
             if(btnEntrar) btnEntrar.click();
         }, cpf, nascimento);
-        await new Promise(r => setTimeout(r, 5000));
+        await new Promise(r => setTimeout(r, 8000));
 
-        await page.evaluate((alvoUc) => {
+        // INTELIGÊNCIA EQUATORIAL: Auto-Update da UC
+        const novaUcEquatorial = await page.evaluate((ucVelha) => {
             const btnSair = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase().includes('SAIR'));
             if(btnSair) btnSair.click(); 
-            const elemUc = Array.from(document.querySelectorAll('span, div, option, li, p')).find(el => el.textContent.includes(alvoUc));
-            if(elemUc) elemUc.click();
+
+            // Procura todos os números que parecem ser uma "Conta Contrato" (10 a 12 dígitos) na tela
+            const elementos = Array.from(document.querySelectorAll('span, div, p, a, li, option'));
+            const possiveisUcs = elementos.filter(el => {
+                const txt = el.textContent.trim().replace(/\D/g, '');
+                return txt.length >= 8 && txt.length <= 15;
+            });
+
+            // Se achou a velha, ótimo, clica nela
+            const elemVelho = possiveisUcs.find(el => el.textContent.includes(ucVelha));
+            if (elemVelho) { elemVelho.click(); return ucVelha; }
+
+            // Se não achou a velha, clica na primeira UC nova que a Equatorial mostrar (Caso de 1 imóvel)
+            if (possiveisUcs.length > 0) {
+                const escolhida = possiveisUcs[0];
+                const ucNova = escolhida.textContent.trim().replace(/\D/g, '');
+                escolhida.click();
+                return ucNova;
+            }
+            return null;
         }, uc);
+
         await new Promise(r => setTimeout(r, 3000));
+
+        if (novaUcEquatorial && novaUcEquatorial !== uc) {
+            console.log(`[RPA] 🔄 UC Atualizada! Equatorial informou a UC verdadeira: ${novaUcEquatorial} (iGreen tinha a velha: ${uc})`);
+            uc = novaUcEquatorial; // O robô passa a usar a nova
+            
+            // Atualiza o nosso banco de dados em silêncio!
+            if (docIdMemoria) {
+                await salvarNoBanco(docIdMemoria, phone, { UC_ATUALIZADA_EQUATORIAL: novaUcEquatorial, UC: novaUcEquatorial });
+            }
+        }
 
         await page.evaluate(() => {
             const btn2via = Array.from(document.querySelectorAll('span, a, div, button')).find(el => el.textContent.toLowerCase().includes('segunda via'));
@@ -415,6 +380,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         await page.keyboard.press('Backspace');
         await new Promise(r => setTimeout(r, 500));
         
+        // A Injeção continua a usar o CPF para pesquisar na iGreen, não a UC, garantindo que não falha!
         await searchDevolutiva.type(cpf, { delay: 100 });
         await new Promise(r => setTimeout(r, 500));
         await page.keyboard.press('Enter');
@@ -431,14 +397,14 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         
         await new Promise(r => setTimeout(r, 2000));
 
-        await page.evaluate((alvoUc) => { 
+        await page.evaluate((cpfBusca) => { 
             const linhas = Array.from(document.querySelectorAll('tr, [role="row"], div[class*="MuiDataGrid-row"], div[class*="rt-tr"]')); 
-            const linhaExata = linhas.find(row => row.textContent.includes(alvoUc)); 
+            const linhaExata = linhas.find(row => row.textContent.replace(/\D/g, '').includes(cpfBusca)); 
             if(linhaExata) {
                 const btnTresPontinhos = Array.from(linhaExata.querySelectorAll('button, div')).find(el => el.textContent.trim() === '...'); 
                 if(btnTresPontinhos) btnTresPontinhos.click(); 
             }
-        }, uc);
+        }, cpf);
         await new Promise(r => setTimeout(r, 2000));
 
         await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('span, li, div')).find(el => el.textContent.includes('Devolutivas')); if(btn) btn.click(); });
