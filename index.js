@@ -164,7 +164,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         });
         const page = await browser.newPage();
         
-        // --- TRUQUE NINJA: Esconder que é um robô ---
         await page.evaluateOnNewDocument(() => {
             Object.defineProperty(navigator, 'webdriver', { get: () => false });
         });
@@ -177,16 +176,13 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             await page.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
             console.log(`[RPA] Página de login carregada.`);
             
-            // Tenta fechar popups de "Começar"
             try { await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Começar')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
             
             await page.waitForSelector('input[type="email"]');
             
-            // Digita como um humano (com pequeno atraso entre as letras)
             await page.type('input[type="email"]', IGREEN_USER, { delay: 50 });
             await page.type('input[type="password"]', IGREEN_PASS, { delay: 50 });
             
-            // Força o CLIQUE no botão em vez de apenas pressionar Enter
             console.log(`[RPA] Clicando no botão de acesso...`);
             await page.evaluate(() => {
                 const botoes = Array.from(document.querySelectorAll('button'));
@@ -194,12 +190,9 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 if (btnEntrar) btnEntrar.click();
             });
             
-            // Fallback do Enter caso o clique falhe
             await page.keyboard.press('Enter');
-            
             console.log(`[RPA] Credenciais inseridas. Aguardando entrada...`);
             
-            // Espera a navegação ou 10 segundos
             await Promise.race([
                 page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }),
                 new Promise(resolve => setTimeout(resolve, 10000))
@@ -209,50 +202,58 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             console.log(`[RPA] URL após tentativa de login: ${urlAtualLogin}`);
             if (urlAtualLogin.includes('login') || urlAtualLogin.includes('entrar')) {
                 const pageTitle = await page.title();
-                console.log(`[RPA] ERRO: Preso na tela de Login. Título: ${pageTitle}`);
                 throw new Error("O site da iGreen recusou o login. Verifique a senha ou pode ser bloqueio anti-robô.");
             }
 
-            // Tenta fechar popups de "Agora não"
             try { await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
 
             console.log(`[RPA] Navegando para a página do mapa...`);
             await page.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
-            await new Promise(r => setTimeout(r, 5000)); // Tempo extra para o site carregar os scripts
+            await new Promise(r => setTimeout(r, 5000));
 
             console.log(`[RPA] Procurando a barra de Buscar...`);
             
-
-            
             let searchInput;
             try {
-                // CORREÇÃO: Focado 100% na palavra 'Buscar' (Exatamente como está no site)
                 searchInput = await page.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
             } catch (erroSeletor) {
                 console.log(`[RPA] ❌ ERRO CRÍTICO: Não encontrou a barra de Buscar.`);
-                console.log(`[RPA] URL atual: ${page.url()}`);
-                console.log(`[RPA] Título da página: ${await page.title()}`);
                 throw new Error("Página carregou, mas a barra de Buscar não existe.");
             }
 
-            // O Toque do Mestre: Clicar, digitar devagar e dar ENTER firme.
             await searchInput.click();
             await new Promise(r => setTimeout(r, 500));
+            
+            await searchInput.click({ clickCount: 3 });
+            await page.keyboard.press('Backspace');
+            await new Promise(r => setTimeout(r, 500));
+
             await searchInput.type(termoBuscaIgreen, { delay: 100 }); 
             await new Promise(r => setTimeout(r, 500));
             await page.keyboard.press('Enter');
             
-            console.log(`[RPA] ENTER pressionado. Aguardando a tabela filtrar...`);
-            await new Promise(r => setTimeout(r, 8000)); // Tempo dobrado para garantir que a linha aparece
+            console.log(`[RPA] Busca digitada. Aguardando a tabela filtrar...`);
+            
+            try {
+                await page.waitForFunction(
+                    (busca) => document.body.innerText.toLowerCase().includes(busca.toLowerCase()),
+                    { timeout: 12000 },
+                    termoBuscaIgreen
+                );
+                console.log(`[RPA] O cliente ${termoBuscaIgreen} apareceu na tela!`);
+            } catch (e) {
+                console.log(`[RPA] Aviso: O texto não apareceu após 12s. Validando...`);
+            }
+            
+            await new Promise(r => setTimeout(r, 2000));
 
-            // NOVO MÉTODO: Busca dinâmica com RAIO-X
+            // NOVO MÉTODO TRANSPARENTE E SEM FILTROS CEGOS
             const dadosExtraidos = await page.evaluate((busca) => {
                 const cabecalhos = Array.from(document.querySelectorAll('th'));
                 let idxDocumento = -1;
                 let idxNascimento = -1;
                 let idxInstalacao = -1;
 
-                // Mapeia onde está cada coluna pelo NOME do cabeçalho
                 cabecalhos.forEach((th, index) => {
                     const nomeColuna = th.textContent.trim().toLowerCase();
                     if (nomeColuna === 'documento' || nomeColuna.includes('documento')) idxDocumento = index;
@@ -260,55 +261,52 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     if (nomeColuna.includes('instalação') || nomeColuna.includes('instalacao')) idxInstalacao = index;
                 });
 
-                // Procura a linha do cliente apenas no corpo (tbody) para evitar falsos positivos
-                const linhasDados = Array.from(document.querySelectorAll('tbody tr')).filter(tr => tr.textContent.trim().length > 10);
-                const linhaExata = linhasDados.find(tr => tr.textContent.toLowerCase().includes(busca.toLowerCase()));
+                // A SOLUÇÃO: Pegar todas as linhas que contenham texto, sem ignorar as que têm TH escondido.
+                const todasAsLinhas = Array.from(document.querySelectorAll('tr'));
+                const linhasComDados = todasAsLinhas.filter(tr => tr.textContent.trim().length > 10);
+                
+                const linhaExata = linhasComDados.find(tr => tr.textContent.toLowerCase().includes(busca.toLowerCase()));
                 
                 if (!linhaExata) {
-                    // RAIO-X: Captura o que o robô está realmente a ver para o log
-                    const visaoRobo = linhasDados.slice(0, 3).map(tr => tr.textContent.replace(/\s+/g, ' ').trim()).join(" || ");
-                    return { falhouBusca: true, debugVisao: visaoRobo || "A tabela está totalmente vazia (nenhuma linha carregou)." };
+                    const textoVisivel = document.body.innerText.substring(0, 400).replace(/\n/g, ' ');
+                    return { falhouBusca: true, debugVisao: `Robô não achou a linha exata. Texto na tela: ${textoVisivel}...` };
                 }
 
-                const colunas = linhaExata.querySelectorAll('td');
+                // Extração bruta (pegando todas as colunas da linha encontrada)
+                const colunas = linhaExata.querySelectorAll('td, th'); 
                 
                 let cpfExt = null;
                 let nascExt = null;
                 let ucExt = null;
 
-                // 1. Extrair Documento Exato (Coluna Documento)
-                if (idxDocumento !== -1 && colunas[idxDocumento]) {
-                    cpfExt = colunas[idxDocumento].textContent.trim();
-                } else {
-                    // Fallback de segurança caso a coluna mude de nome radicalmente
+                // 1. Tenta extrair pela posição exata do cabeçalho
+                if (idxDocumento !== -1 && colunas[idxDocumento]) cpfExt = colunas[idxDocumento].textContent.trim();
+                if (idxNascimento !== -1 && colunas[idxNascimento]) nascExt = colunas[idxNascimento].textContent.trim();
+                if (idxInstalacao !== -1 && colunas[idxInstalacao]) ucExt = colunas[idxInstalacao].textContent.replace(/\D/g, '');
+
+                // 2. Fallbacks de Extração (Varredura de segurança via Expressões Regulares)
+                if (!cpfExt) {
                     const cpfMatch = linhaExata.textContent.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
                     if (cpfMatch) cpfExt = cpfMatch[0];
                 }
-
-                // 2. Extrair Nascimento Exato (Coluna Data Nascimento)
-                if (idxNascimento !== -1 && colunas[idxNascimento]) {
-                    nascExt = colunas[idxNascimento].textContent.trim();
-                    const nMatch = nascExt.match(/\d{2}\/\d{2}\/\d{4}/);
+                if (!nascExt) {
+                    const nMatch = linhaExata.textContent.match(/\d{2}\/\d{2}\/\d{4}/);
                     if (nMatch) nascExt = nMatch[0];
                 }
-
-                // 3. Extrair Instalação Exata (Coluna Instalação / UC)
-                if (idxInstalacao !== -1 && colunas[idxInstalacao]) {
-                    ucExt = colunas[idxInstalacao].textContent.replace(/\D/g, '');
-                } else if (colunas.length >= 8) {
-                    ucExt = colunas[7].textContent.replace(/\D/g, ''); // Fallback
+                if (!ucExt && colunas.length >= 8) {
+                    ucExt = colunas[7].textContent.replace(/\D/g, ''); 
                 }
 
                 return { cpfExt, nascExt, ucExt };
             }, termoBuscaIgreen);
 
             if (dadosExtraidos && dadosExtraidos.falhouBusca) {
-                console.log(`[RPA] 🔎 RAIO-X DA TABELA: O que o robô está vendo agora -> ${dadosExtraidos.debugVisao}`);
-                throw new Error(`Não encontrou o ID ${termoBuscaIgreen}. O robô viu: ${dadosExtraidos.debugVisao}`);
+                console.log(`[RPA] 🔎 RAIO-X DA TABELA: ${dadosExtraidos.debugVisao}`);
+                throw new Error(`Não encontrou o ID ${termoBuscaIgreen} nas linhas. Log interno: ${dadosExtraidos.debugVisao}`);
             }
 
             if (!dadosExtraidos) {
-                throw new Error(`Não foi possível localizar o cliente "${termoBuscaIgreen}" na tabela.`);
+                throw new Error(`Não foi possível localizar o cliente na tabela (Falha na extração de dados).`);
             }
 
             if (!dadosExtraidos.cpfExt || !dadosExtraidos.nascExt || !dadosExtraidos.ucExt) {
@@ -325,7 +323,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             console.log(`[RPA] Sucesso na Etapa 1! CPF: ${cpf} | Nasc: ${nascimento} | UC: ${uc}`);
         }
 
-        // Restante do código Equatorial e Injeção (Mantido sem alterações bruscas)
         page.on('response', async (response) => {
             const contentType = response.headers()['content-type'];
             if (contentType && contentType.includes('application/pdf')) {
@@ -396,16 +393,29 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         await new Promise(r => setTimeout(r, 4000));
 
         console.log(`[RPA] Procurando a barra de Buscar nas Devolutivas...`);
-        // CORREÇÃO: Focado 100% na palavra 'Buscar' também na tela de Injeção
         const searchDevolutiva = await page.waitForSelector('input[placeholder*="Buscar"]');
+        
         await searchDevolutiva.click();
         await new Promise(r => setTimeout(r, 500));
+        await searchDevolutiva.click({ clickCount: 3 });
+        await page.keyboard.press('Backspace');
+        await new Promise(r => setTimeout(r, 500));
+        
         await searchDevolutiva.type(cpf, { delay: 100 });
         await new Promise(r => setTimeout(r, 500));
         await page.keyboard.press('Enter');
         
         console.log(`[RPA] ENTER pressionado na Devolutiva. Aguardando a tabela filtrar...`);
-        await new Promise(r => setTimeout(r, 8000)); // Tempo dobrado
+        
+        try {
+            await page.waitForFunction(
+                (busca) => document.body.innerText.includes(busca),
+                { timeout: 10000 },
+                cpf
+            );
+        } catch (e) {}
+        
+        await new Promise(r => setTimeout(r, 2000));
 
         await page.evaluate((alvoUc) => { 
             const linhas = Array.from(document.querySelectorAll('tr')); 
