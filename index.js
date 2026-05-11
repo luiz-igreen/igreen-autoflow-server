@@ -224,12 +224,13 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             
             let searchInput;
             try {
-                searchInput = await page.waitForSelector('input[placeholder*="Buscar" i], input[placeholder*="Pesquisar" i]', { timeout: 15000 });
+                // CORREÇÃO: Focado 100% na palavra 'Buscar' (Exatamente como está no site)
+                searchInput = await page.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
             } catch (erroSeletor) {
                 console.log(`[RPA] ❌ ERRO CRÍTICO: Não encontrou a barra de pesquisa.`);
                 console.log(`[RPA] URL atual: ${page.url()}`);
                 console.log(`[RPA] Título da página: ${await page.title()}`);
-                throw new Error("Página carregou, mas a barra de pesquisa não existe.");
+                throw new Error("Página carregou, mas a barra de Buscar não existe.");
             }
 
             await searchInput.type(termoBuscaIgreen); 
@@ -378,7 +379,8 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('span, div, p')).find(el => el.textContent.trim() === 'Green'); if(btn) btn.click(); });
         await new Promise(r => setTimeout(r, 4000));
 
-        const searchDevolutiva = await page.waitForSelector('input[placeholder*="Buscar" i], input[placeholder*="Pesquisar" i]');
+        // CORREÇÃO: Focado 100% na palavra 'Buscar' também na tela de Injeção
+        const searchDevolutiva = await page.waitForSelector('input[placeholder*="Buscar"]');
         await searchDevolutiva.type(cpf);
         await page.keyboard.press('Enter');
         await new Promise(r => setTimeout(r, 4000));
@@ -642,4 +644,4 @@ app.get('/', (req, res) => res.status(200).send('Robô iGreen Online e Blindado!
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});
+});    
