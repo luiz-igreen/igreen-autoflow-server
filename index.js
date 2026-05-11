@@ -37,7 +37,7 @@ try {
 const memoriaEstado = new Map();
 
 // ==========================================
-// TEXTOS DA OPERAÇÃO
+// TEXTOS DA OPERAÇÃO (HUMANIZADOS)
 // ==========================================
 const TEXTOS = {
     T_MENU: "👋 Olá! Bem-vindo ao *Atendimento Inteligente iGreen*. \n\nComo posso ajudar hoje? Escolha uma das opções abaixo enviando apenas o número:\n\n" +
@@ -50,10 +50,12 @@ const TEXTOS = {
     T01: "Opção 1️⃣ selecionada! 🌿 \nPara prepararmos o seu desconto e o seu contrato, por favor, envie uma foto bem nítida (ou arquivo PDF) da sua conta de luz mais recente.",
     T02: "Recebemos o seu documento! 📄 A nossa assistente virtual está a analisar as informações neste exato momento. Só um instante...",
     
-    T_RESGATE_START: "Opção 3️⃣ selecionada! ⚡ \nPara resolvermos a devolutiva, o robô vai buscar a UC, CPF e Nascimento no seu escritório, baixar a fatura na Distribuidora e anexar.\n\nPor favor, digite apenas o **Nome do Cliente ou ID**.\n\n*(Exemplo: 398172 ou Wellington Silva Nunes)*:",
-    T_RESGATE_BUSCANDO: "🔍 Iniciando a Automação Total...\n\n1️⃣ Buscando CPF, Nascimento e UC no relatório da iGreen...\n2️⃣ Acessando a Distribuidora Local...\n3️⃣ Baixando fatura atualizada da UC...\n4️⃣ Retornando à iGreen para injetar o documento...\n\nIsso pode levar alguns segundos, aguarde...",
+    T_RESGATE_START: "Opção 3️⃣ selecionada! ⚡ \nPara resolvermos a devolutiva, a nossa equipe vai buscar a UC, CPF e Nascimento no seu escritório, baixar a fatura na Distribuidora e anexar.\n\nPor favor, digite apenas o **Nome do Cliente ou ID**.\n\n*(Exemplo: 398172 ou Wellington Silva Nunes)*:",
+    T_RESGATE_BUSCANDO: "🔍 Iniciando a verificação em nosso sistema...\n\n1️⃣ Buscando CPF, Nascimento e UC no relatório da iGreen...\n2️⃣ Acessando a Distribuidora Local...\n3️⃣ Baixando fatura atualizada da UC...\n4️⃣ Retornando à iGreen para anexar o documento...\n\nIsso pode levar alguns segundos, por favor, aguarde...",
     T_RESGATE_SUCESSO: "✅ Sucesso Absoluto! A fatura atualizada foi resgatada e anexada na aba de Devolutivas do escritório iGreen. A sua pendência foi resolvida!",
-    T_RESGATE_FAIL: "⚠️ Ocorreu um erro no processo. O robô pode ter sido bloqueado pelo site da iGreen temporariamente ou os dados não foram encontrados. Tentaremos novamente mais tarde.",
+    
+    // AQUI ESTÁ A NOVA MENSAGEM DO MESTRE LUIZ JORGE
+    T_RESGATE_FAIL: "⚠️ Ocorreu um erro no processo.\n\nO nosso time não encontrou a linha do cliente, ou este cliente não existe em nosso cadastro.\n\nPor favor, verifique se o Nome ou ID digitado está correto e tente novamente.",
 
     T_GUARDAR_START: "Opção 2️⃣ selecionada! 💾 \n*Módulo de Pré-Cadastro* ativado!\nPor favor, envie a foto ou PDF da sua *Fatura de Energia*.",
     T_PEDIR_TELEFONE: "✅ Fatura analisada e salva!\n👤 Titular: ${nome}\n⚡ UC: ${uc}\n\nPara completarmos o seu pré-cadastro, digite o **Número de Telefone (com DDD)** do titular:",
@@ -317,7 +319,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
             if (dadosExtraidos && dadosExtraidos.falhouBusca) {
                 console.log(`[RPA] 🔎 RAIO-X DA TABELA: ${dadosExtraidos.debugVisao}`);
-                throw new Error(`Falha ao mapear a tabela. O robô não encontrou a linha do cliente.`);
+                throw new Error(`Falha ao mapear a tabela. O nosso time não encontrou a linha do cliente.`);
             }
 
             if (!dadosExtraidos || !dadosExtraidos.cpfExt || !dadosExtraidos.nascExt || !dadosExtraidos.ucExt) {
@@ -684,7 +686,7 @@ async function validateBrowser() {
 }
 
 // ROTA DE SEGURANÇA PARA O RENDER
-app.get('/', (req, res) => res.status(200).send('Robô iGreen Online e Blindado!'));
+app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindado!'));
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
