@@ -168,7 +168,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             Object.defineProperty(navigator, 'webdriver', { get: () => false });
         });
         
-        // BALA DE PRATA 1: Ecrã UltraWide de 5000px. Obriga TODAS as colunas a serem renderizadas de uma vez.
+        // Ecrã UltraWide de 5000px. Obriga TODAS as colunas a serem renderizadas de uma vez.
         await page.setViewport({ width: 5000, height: 1080 });
 
         if (!cpf || !nascimento || !uc) {
@@ -247,103 +247,70 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             await new Promise(r => setTimeout(r, 2000));
 
             // ==========================================
-            // EXTRATOR BLINDADO V2 (Anti-Deslizamento de Colunas)
+            // EXTRATOR INQUEBRÁVEL (Método de Eliminação Matemática)
             // ==========================================
             const dadosExtraidos = await page.evaluate((busca) => {
                 const buscaLimpa = busca.toLowerCase().trim();
 
-                const cabecalhosNodos = Array.from(document.querySelectorAll('th, [role="columnheader"], div[class*="header"], .MuiDataGrid-columnHeaderTitle'));
-                let idxInstalacao = -1;
-
-                cabecalhosNodos.forEach((nodo, index) => {
-                    const txt = nodo.textContent.trim().toLowerCase();
-                    if (txt === 'instalação' || txt.includes('instalacao')) idxInstalacao = index;
-                });
-
-                const possiveisLinhas = Array.from(document.querySelectorAll('tr, [role="row"], div[class*="MuiDataGrid-row"], div[class*="rt-tr"]'));
-                const linhasComDados = possiveisLinhas.filter(l => l.textContent.trim().length > 15);
+                const possiveisLinhas = Array.from(document.querySelectorAll('tr, [role="row"], .MuiDataGrid-row'));
+                const linhasComDados = possiveisLinhas.filter(l => l.textContent.trim().length > 15 && !l.querySelector('th') && !l.getAttribute('role')?.includes('columnheader'));
                 const linhaExata = linhasComDados.find(linha => linha.textContent.toLowerCase().includes(buscaLimpa));
                 
                 if (!linhaExata) {
-                    const txtTela = document.body.innerText.substring(0, 1000).replace(/\n/g, ' || ');
-                    return { falhouBusca: true, debugVisao: `Linha exata não encontrada. Tela atual: ${txtTela}` };
+                    return { falhouBusca: true, debugVisao: `Linha não encontrada.` };
                 }
 
-                const textoLinha = linhaExata.textContent.trim();
+                // Pega todas as colunas e junta com espaços largos para os números não se colarem
+                let colunas = Array.from(linhaExata.querySelectorAll('td, [role="cell"], .MuiDataGrid-cell'));
+                if (colunas.length === 0) colunas = Array.from(linhaExata.children);
+                
+                const textoLinha = colunas.map(c => c.textContent.trim()).join('   ');
                 
                 let cpfExt = null;
                 let nascExt = null;
                 let ucExt = null;
 
-                // 1. CPF: 100% Regex (Impossível trocar com a Data de Cadastro)
+                // 1. Extração do CPF (Mascara inconfundível)
                 const cpfMatch = textoLinha.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
                 if (cpfMatch) {
                     cpfExt = cpfMatch[0];
                 }
 
-                // 2. NASCIMENTO: A Mágica do "Viajante do Tempo" que já funcionou antes
+                // 2. Extração da Data Nascimento (O ano mais antigo de toda a linha)
                 const todasDatas = textoLinha.match(/\d{2}\/\d{2}\/\d{4}/g);
                 if (todasDatas && todasDatas.length > 0) {
-                    let menorAnoVal = 9999;
-                    let menorAnoData = null;
+                    let menorAno = 9999;
                     for (let d of todasDatas) {
-                        let a = parseInt(d.split('/')[2], 10);
-                        if (a < menorAnoVal) { menorAnoVal = a; menorAnoData = d; }
+                        let ano = parseInt(d.split('/')[2], 10);
+                        if (ano < menorAno) {
+                            menorAno = ano;
+                            nascExt = d;
+                        }
                     }
-                    if (menorAnoVal < 2015) {
-                        nascExt = menorAnoData;
-                    }
+                    if (menorAno > 2015) nascExt = null; // Rejeita datas recentes (Cadastro/Validação)
                 }
 
-                // 3. INSTALAÇÃO (UC): Foco na 8ª Coluna e Bloqueio do Código Inicial
-                let colunas = Array.from(linhaExata.querySelectorAll('td, [role="cell"], div[class*="MuiDataGrid-cell"], div[class*="rt-td"]'));
-                if (colunas.length === 0) colunas = Array.from(linhaExata.children);
+                // 3. Extração da UC (Instalação) via ELIMINAÇÃO ABSOLUTA
+                // O primeiro número de todos é sempre o Código do Cliente (ex: 1119032)
+                const primeiroNumero = textoLinha.match(/^\s*(\d+)/);
+                const codigoCliente = primeiroNumero ? primeiroNumero[1] : null;
 
-                // Regra de Ouro: O "Código" do cliente é sempre o primeiro número da linha
-                const primeiroCodigoMatch = textoLinha.match(/^\d+/);
-                const codigoCliente = primeiroCodigoMatch ? primeiroCodigoMatch[0] : "N/A";
+                let textoSemLixo = textoLinha;
+                textoSemLixo = textoSemLixo.replace(/\(\d{2}\)\s*\d{4,5}-\d{4}/g, ' '); // Elimina celular
+                textoSemLixo = textoSemLixo.replace(/\d{2}\/\d{2}\/\d{4}/g, ' '); // Elimina TODAS as datas (Impede o erro 2026)
+                if (cpfExt) textoSemLixo = textoSemLixo.replace(cpfExt, ' '); // Elimina o CPF
 
-                let ucCandidatos = [];
-                if (idxInstalacao !== -1 && idxInstalacao !== 0) {
-                    if (colunas[idxInstalacao]) ucCandidatos.push(colunas[idxInstalacao].textContent.trim());
-                    if (colunas[idxInstalacao - 1] && (idxInstalacao - 1) !== 0) ucCandidatos.push(colunas[idxInstalacao - 1].textContent.trim());
-                    if (colunas[idxInstalacao + 1]) ucCandidatos.push(colunas[idxInstalacao + 1].textContent.trim());
-                }
+                // Agora só sobraram números isolados. Procuramos um com 5 a 15 dígitos que não seja o Código.
+                const numerosRestantes = textoSemLixo.match(/\b\d+\b/g) || [];
                 
-                // O pedido do Mestre: A Instalação fica na 8ª coluna (índice 7 na programação)
-                if (colunas[7]) ucCandidatos.push(colunas[7].textContent.trim());
-
-                const cpfLimpo = cpfExt ? cpfExt.replace(/\D/g, '') : "N/A";
-                
-                for (let val of ucCandidatos) {
-                    if (!val) continue;
-                    if (val.match(/\d{2}\/\d{2}\/\d{4}/)) continue; 
-                    
-                    const limpo = val.replace(/\D/g, '');
-                    // UC Válida: tem que ser um número de 5 a 15 dígitos E NÃO PODE SER CPF NEM CÓDIGO
-                    if (limpo.length >= 5 && limpo.length <= 15 && limpo !== cpfLimpo && limpo !== codigoCliente) {
-                        ucExt = limpo;
+                for (let num of numerosRestantes) {
+                    if (num.length >= 5 && num.length <= 15 && num !== codigoCliente) {
+                        ucExt = num;
                         break;
                     }
                 }
 
-                // Fallback final varrendo a linha (Imune ao Código Inicial)
-                if (!ucExt) {
-                    let txtSemLixo = textoLinha;
-                    if (codigoCliente !== "N/A") txtSemLixo = txtSemLixo.replace(new RegExp('^' + codigoCliente), ''); // Corta o código fora
-                    if (cpfExt) txtSemLixo = txtSemLixo.replace(cpfExt, ''); // Corta o CPF fora
-                    txtSemLixo = txtSemLixo.replace(/\(\d{2}\)\s*\d{4,5}-\d{4}/g, ''); // Corta o celular
-                    
-                    const ucMatch = txtSemLixo.match(/\b\d{5,15}\b/g);
-                    if (ucMatch) {
-                        for (let n of ucMatch) {
-                            if (n !== cpfLimpo && n !== codigoCliente) {
-                                ucExt = n;
-                                break;
-                            }
-                        }
-                    }
-                }
+                if (cpfExt) cpfExt = cpfExt.replace(/\D/g, ''); // Limpa os pontos do CPF no fim
 
                 return { cpfExt, nascExt, ucExt };
             }, termoBuscaIgreen);
@@ -356,12 +323,13 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             if (!dadosExtraidos || !dadosExtraidos.cpfExt || !dadosExtraidos.nascExt || !dadosExtraidos.ucExt) {
                 const falhas = [];
                 if (!dadosExtraidos?.cpfExt) falhas.push("Documento (CPF)");
-                if (!dadosExtraidos?.nascExt) falhas.push("Data Nascimento (Apenas Data de Cadastro detectada na tela)");
+                if (!dadosExtraidos?.nascExt) falhas.push("Data Nascimento");
                 if (!dadosExtraidos?.ucExt) falhas.push("Instalação (UC)");
-                throw new Error(`Dados incompletos na linha extraída: Faltando [${falhas.join(', ')}].`);
+                
+                throw new Error(`Dados incompletos na extração blindada: Faltando [${falhas.join(', ')}].`);
             }
 
-            cpf = dadosExtraidos.cpfExt.replace(/\D/g, '');
+            cpf = dadosExtraidos.cpfExt;
             nascimento = dadosExtraidos.nascExt;
             uc = dadosExtraidos.ucExt;
             console.log(`[RPA] Sucesso Máximo na Etapa 1! CPF: ${cpf} | Nasc: ${nascimento} | UC: ${uc}`);
