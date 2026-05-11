@@ -434,34 +434,66 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
         // Clica no "Realizar ação" para abrir o modal de upload
         console.log(`[RPA] Clicando no botão 'Realizar ação'...`);
-        await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, span, div, a')).find(el => el.textContent.includes('Realizar ação')); if(btn) btn.click(); });
+        await page.evaluate(() => { 
+            const botoes = Array.from(document.querySelectorAll('button, span, div, a'));
+            const btn = botoes.find(el => el.textContent.includes('Realizar ação')); 
+            if(btn) {
+                btn.scrollIntoView({behavior: 'smooth', block: 'center'});
+                btn.click(); 
+            }
+        });
+        
+        console.log(`[RPA] Aguardando a janela de anexo abrir...`);
         await new Promise(r => setTimeout(r, 4000));
 
-        // AQUI ESTÁ A SOLUÇÃO NINJA: Injeção Direta
-        console.log(`[RPA] Injetando o PDF no formulário da iGreen...`);
+        // AQUI ESTÁ A SOLUÇÃO NINJA EVOLUÍDA: Radar de Espera
+        console.log(`[RPA] Procurando o canal de Injeção de PDF...`);
         
-        const inputFicheiro = await page.$('input[type="file"]');
+        let inputFicheiro = null;
+        try {
+            // A janela da iGreen demora a renderizar, o robô espera até 8 segundos pelo input
+            inputFicheiro = await page.waitForSelector('input[type="file"]', { timeout: 8000 });
+        } catch(e) {}
+
         if (inputFicheiro) {
+            console.log(`[RPA] Input invisível detetado no DOM! Injetando o PDF diretamente...`);
             await inputFicheiro.uploadFile(caminhoFaturaLocal);
+            
+            // Força o sistema do site a perceber que o ficheiro foi alterado (gatilho de segurança)
+            await page.evaluate(() => {
+                const hiddenInput = document.querySelector('input[type="file"]');
+                if(hiddenInput) {
+                    hiddenInput.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            });
             console.log(`[RPA] 📎 Ficheiro anexado com sucesso via Injeção Direta!`);
+            
         } else {
-            console.log(`[RPA] Input direto escondido. Tentando clique visual no botão...`);
+            console.log(`[RPA] Input direto não apareceu. Tentando clique forçado na zona de Upload...`);
             const [fileChooser] = await Promise.all([
                 page.waitForFileChooser({ timeout: 15000 }),
                 page.evaluate(() => { 
                     const botoes = Array.from(document.querySelectorAll('button, span, div, label, p'));
                     const btnUpload = botoes.find(el => {
                         const txt = el.textContent.toLowerCase();
-                        return txt.includes('selecionar') || txt.includes('anexar') || txt.includes('arquivo') || txt.includes('upload') || txt.includes('escolher');
+                        return (txt.includes('selecionar') || txt.includes('anexar') || txt.includes('arquivo') || txt.includes('upload') || txt.includes('escolher') || txt.includes('arraste') || txt.includes('procurar')) && el.offsetParent !== null;
                     });
-                    if (btnUpload) btnUpload.click(); 
+                    
+                    if (btnUpload) {
+                        btnUpload.click(); 
+                    } else {
+                        // Tática de sobrevivência: Clica na última etiqueta da página (costuma ser a de anexo)
+                        const labels = document.querySelectorAll('label');
+                        if(labels.length > 0) labels[labels.length - 1].click(); 
+                    }
                 })
             ]);
             await fileChooser.accept([caminhoFaturaLocal]);
-            console.log(`[RPA] 📎 Ficheiro anexado com sucesso via Botão Visual!`);
+            console.log(`[RPA] 📎 Ficheiro anexado com sucesso via Janela Visual!`);
         }
         await new Promise(r => setTimeout(r, 3000));
 
+        console.log(`[RPA] Salvando a devolutiva na iGreen...`);
         await page.evaluate(() => { 
             const btnSalvar = Array.from(document.querySelectorAll('button')).find(el => el.textContent.toUpperCase().includes('ENVIAR') || el.textContent.toUpperCase().includes('SALVAR') || el.textContent.toUpperCase().includes('CONCLUIR')); 
             if (btnSalvar) btnSalvar.click(); 
@@ -695,4 +727,4 @@ app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindad
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});
+});    
