@@ -163,6 +163,12 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() 
         });
         const page = await browser.newPage();
+        
+        // --- TRUQUE NINJA: Esconder que é um robô ---
+        await page.evaluateOnNewDocument(() => {
+            Object.defineProperty(navigator, 'webdriver', { get: () => false });
+        });
+        
         await page.setViewport({ width: 1920, height: 1080 });
 
         if (!cpf || !nascimento || !uc) {
@@ -175,9 +181,22 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             try { await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Começar')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
             
             await page.waitForSelector('input[type="email"]');
-            await page.type('input[type="email"]', IGREEN_USER);
-            await page.type('input[type="password"]', IGREEN_PASS);
+            
+            // Digita como um humano (com pequeno atraso entre as letras)
+            await page.type('input[type="email"]', IGREEN_USER, { delay: 50 });
+            await page.type('input[type="password"]', IGREEN_PASS, { delay: 50 });
+            
+            // Força o CLIQUE no botão em vez de apenas pressionar Enter
+            console.log(`[RPA] Clicando no botão de acesso...`);
+            await page.evaluate(() => {
+                const botoes = Array.from(document.querySelectorAll('button'));
+                const btnEntrar = botoes.find(b => b.textContent.toLowerCase().includes('entrar') || b.textContent.toLowerCase().includes('acessar') || b.textContent.toLowerCase().includes('login'));
+                if (btnEntrar) btnEntrar.click();
+            });
+            
+            // Fallback do Enter caso o clique falhe
             await page.keyboard.press('Enter');
+            
             console.log(`[RPA] Credenciais inseridas. Aguardando entrada...`);
             
             // Espera a navegação ou 10 segundos
@@ -191,7 +210,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             if (urlAtualLogin.includes('login') || urlAtualLogin.includes('entrar')) {
                 const pageTitle = await page.title();
                 console.log(`[RPA] ERRO: Preso na tela de Login. Título: ${pageTitle}`);
-                throw new Error("O site da iGreen recusou o login. Pode ser bloqueio anti-robô.");
+                throw new Error("O site da iGreen recusou o login. Verifique a senha ou pode ser bloqueio anti-robô.");
             }
 
             // Tenta fechar popups de "Agora não"
@@ -205,7 +224,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             
             let searchInput;
             try {
-                searchInput = await page.waitForSelector('input[placeholder*="Pesquisar" i]', { timeout: 15000 });
+                searchInput = await page.waitForSelector('input[placeholder*="Buscar" i], input[placeholder*="Pesquisar" i]', { timeout: 15000 });
             } catch (erroSeletor) {
                 console.log(`[RPA] ❌ ERRO CRÍTICO: Não encontrou a barra de pesquisa.`);
                 console.log(`[RPA] URL atual: ${page.url()}`);
@@ -317,7 +336,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('span, div, p')).find(el => el.textContent.trim() === 'Green'); if(btn) btn.click(); });
         await new Promise(r => setTimeout(r, 4000));
 
-        const searchDevolutiva = await page.waitForSelector('input[placeholder*="Pesquisar"]');
+        const searchDevolutiva = await page.waitForSelector('input[placeholder*="Buscar" i], input[placeholder*="Pesquisar" i]');
         await searchDevolutiva.type(cpf);
         await page.keyboard.press('Enter');
         await new Promise(r => setTimeout(r, 4000));
@@ -581,4 +600,4 @@ app.get('/', (req, res) => res.status(200).send('Robô iGreen Online e Blindado!
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});
+});    
