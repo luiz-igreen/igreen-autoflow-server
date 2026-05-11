@@ -269,7 +269,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     return { falhouBusca: true, debugVisao: `Linha exata não encontrada. Tela atual: ${txtTela}` };
                 }
 
-                const textoLinha = linhaExata.textContent;
+                const textoLinha = linhaExata.textContent.trim();
                 
                 let cpfExt = null;
                 let nascExt = null;
@@ -295,40 +295,54 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     }
                 }
 
-                // 3. INSTALAÇÃO (UC): Inteligência de Deslizamento de Colunas
+                // 3. INSTALAÇÃO (UC): Foco na 8ª Coluna e Bloqueio do Código Inicial
                 let colunas = Array.from(linhaExata.querySelectorAll('td, [role="cell"], div[class*="MuiDataGrid-cell"], div[class*="rt-td"]'));
                 if (colunas.length === 0) colunas = Array.from(linhaExata.children);
 
+                // Regra de Ouro: O "Código" do cliente é sempre o primeiro número da linha
+                const primeiroCodigoMatch = textoLinha.match(/^\d+/);
+                const codigoCliente = primeiroCodigoMatch ? primeiroCodigoMatch[0] : "N/A";
+
                 let ucCandidatos = [];
-                if (idxInstalacao !== -1) {
-                    // Pega a coluna exata, a anterior e a posterior (caso haja colunas invisíveis a bagunçar o índice)
+                if (idxInstalacao !== -1 && idxInstalacao !== 0) {
                     if (colunas[idxInstalacao]) ucCandidatos.push(colunas[idxInstalacao].textContent.trim());
-                    if (colunas[idxInstalacao - 1]) ucCandidatos.push(colunas[idxInstalacao - 1].textContent.trim());
+                    if (colunas[idxInstalacao - 1] && (idxInstalacao - 1) !== 0) ucCandidatos.push(colunas[idxInstalacao - 1].textContent.trim());
                     if (colunas[idxInstalacao + 1]) ucCandidatos.push(colunas[idxInstalacao + 1].textContent.trim());
                 }
+                
+                // O pedido do Mestre: A Instalação fica na 8ª coluna (índice 7 na programação)
+                if (colunas[7]) ucCandidatos.push(colunas[7].textContent.trim());
 
                 const cpfLimpo = cpfExt ? cpfExt.replace(/\D/g, '') : "N/A";
                 
                 for (let val of ucCandidatos) {
                     if (!val) continue;
-                    // Se a caixa tiver uma data (ex: 20/02/2026), rejeita logo para não trocar com Instalação
                     if (val.match(/\d{2}\/\d{2}\/\d{4}/)) continue; 
                     
                     const limpo = val.replace(/\D/g, '');
-                    // UC Válida: tem que ter de 6 a 12 números E NÃO PODE SER O CPF
-                    if (limpo.length >= 6 && limpo.length <= 12 && limpo !== cpfLimpo) {
+                    // UC Válida: tem que ser um número de 5 a 15 dígitos E NÃO PODE SER CPF NEM CÓDIGO
+                    if (limpo.length >= 5 && limpo.length <= 15 && limpo !== cpfLimpo && limpo !== codigoCliente) {
                         ucExt = limpo;
                         break;
                     }
                 }
 
-                // Se a UC ainda falhar, pega varrendo a linha por um bloco de 7 a 12 números (Ignorando Celular e CPF)
+                // Fallback final varrendo a linha (Imune ao Código Inicial)
                 if (!ucExt) {
                     let txtSemLixo = textoLinha;
-                    if (cpfExt) txtSemLixo = txtSemLixo.replace(cpfExt, ''); // remove o cpf
-                    txtSemLixo = txtSemLixo.replace(/\(\d{2}\)\s*\d{4,5}-\d{4}/g, ''); // remove celular
-                    const ucMatch = txtSemLixo.match(/\b\d{7,12}\b/);
-                    if (ucMatch) ucExt = ucMatch[0];
+                    if (codigoCliente !== "N/A") txtSemLixo = txtSemLixo.replace(new RegExp('^' + codigoCliente), ''); // Corta o código fora
+                    if (cpfExt) txtSemLixo = txtSemLixo.replace(cpfExt, ''); // Corta o CPF fora
+                    txtSemLixo = txtSemLixo.replace(/\(\d{2}\)\s*\d{4,5}-\d{4}/g, ''); // Corta o celular
+                    
+                    const ucMatch = txtSemLixo.match(/\b\d{5,15}\b/g);
+                    if (ucMatch) {
+                        for (let n of ucMatch) {
+                            if (n !== cpfLimpo && n !== codigoCliente) {
+                                ucExt = n;
+                                break;
+                            }
+                        }
+                    }
                 }
 
                 return { cpfExt, nascExt, ucExt };
