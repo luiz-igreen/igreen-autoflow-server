@@ -1,730 +1,508 @@
-import express from 'express';
-import axios from 'axios';
-import admin from 'firebase-admin';
-import puppeteer from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import fs from 'fs';
-import path from 'path';
+// package.json (instale com: npm install)
+{
+  "name": "igreen-autoflow",
+  "version": "1.0.0",
+  "description": "iGreen AutoFlow - Automação WhatsApp + Análise Fatura Gemini",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.2.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "joi": "^17.11.0",
+    "pino": "^8.20.0",
+    "pino-pretty": "^10.2.0",
+    "puppeteer": "^21.5.2",
+    "validator": "^13.11.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
 
-// Ativar a Capa de Invisibilidade (Anti-Imperva WAF)
-puppeteer.use(StealthPlugin());
+// .env.example (copie para .env e preencha)
+GEMINI_API_KEY=your_gemini_api_key
+PHONE_NUMBER=+5511999999999
+WEBHOOK_SECRET=your_secret
+PUPPETEER_TIMEOUT=30000
+STATE_TIMEOUT=86400000
+LOG_LEVEL=info
+PORT=3000
 
-const app = express();
-app.use(express.json());
+// config/config.js
+const dotenv = require('dotenv');
+const Joi = require('joi');
+const path = require('path');
 
-// ==========================================
-// CONFIGURAÇÕES GERAIS E CHAVES
-// ==========================================
-const ZAPI_INSTANCE = process.env.ZAPI_INSTANCE;
-const ZAPI_TOKEN = process.env.ZAPI_TOKEN;
-const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN; 
+dotenv.config();
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY; 
+const envSchema = Joi.object({
+  PORT: Joi.number().default(3000),
+  GEMINI_API_KEY: Joi.string().required(),
+  PHONE_NUMBER: Joi.string().required(),
+  WEBHOOK_SECRET: Joi.string().optional(),
+  PUPPETEER_TIMEOUT: Joi.number().default(30000),
+  STATE_TIMEOUT: Joi.number().default(86400000),
+  LOG_LEVEL: Joi.string().default('info')
+});
 
-const IGREEN_LOGIN_URL = "https://escritorio.igreenenergy.com.br"; 
-const IGREEN_MAPA_URL = "https://escritorio.igreenenergy.com.br/mapa-clientes";
-const EQUATORIAL_AL_URL = "https://al.equatorialenergia.com.br/siteantigo";
+const { error, value: config } = envSchema.validate(process.env, { abortEarly: false });
 
-const IGREEN_USER = process.env.IGREEN_USER;
-const IGREEN_PASS = process.env.IGREEN_PASS;
+if (error) {
+  console.error('Erro de validação de configuração:', error.details.map(d => d.message).join(', '));
+  process.exit(1);
+}
 
-const APP_ID = 'igreen-autoflow-v4';
+module.exports = config;
 
-try {
-    const firebaseConfig = process.env.FIREBASE_CONFIG ? JSON.parse(process.env.FIREBASE_CONFIG) : null;
-    if (firebaseConfig && admin.apps.length === 0) {
-        admin.initializeApp({ credential: admin.credential.cert(firebaseConfig) });
-        console.log("✅ Banco de Dados Cloud ligado!");
+// utils/logger.js
+const pino = require('pino');
+
+const logger = pino({
+  level: process.env.LOG_LEVEL || 'info',
+  redact: ['*.key', '*.secret'],
+  transport: process.env.NODE_ENV !== 'production' ? {
+    target: 'pino-pretty',
+    options: {
+      colorize: true,
+      levelFirst: true
     }
-} catch (e) { console.error("Erro DB:", e.message); }
+  } : undefined
+});
 
-const memoriaEstado = new Map();
+module.exports = logger;
 
-// ==========================================
-// TEXTOS DA OPERAÇÃO (HUMANIZADOS)
-// ==========================================
-const TEXTOS = {
-    T_MENU: "👋 Olá! Bem-vindo ao *Atendimento Inteligente iGreen*. \n\nComo posso ajudar hoje? Escolha uma das opções abaixo enviando apenas o número:\n\n" +
-            "1️⃣ *Novo Cadastro* (Analisar fatura e preparar o seu desconto)\n" +
-            "2️⃣ *Pré-Cadastro* (Salvar dados da fatura)\n" +
-            "3️⃣ *Resolver Devolutiva* (Automação completa Equatorial/iGreen)\n" +
-            "4️⃣ *Enviar Documentos* (Anexar RG ou CNH pendentes)\n\n" +
-            "_(Dica: Digite *0* a qualquer momento para voltar a este menu)_",
-            
-    T01: "Opção 1️⃣ selecionada! 🌿 \nPara prepararmos o seu desconto e o seu contrato, por favor, envie uma foto bem nítida (ou arquivo PDF) da sua conta de luz mais recente.",
-    T02: "Recebemos o seu documento! 📄 A nossa assistente virtual está a analisar as informações neste exato momento. Só um instante...",
-    
-    T_RESGATE_START: "Opção 3️⃣ selecionada! ⚡ \nPara resolvermos a devolutiva, a nossa equipe vai buscar os seus dados no escritório, baixar a fatura atualizada na Distribuidora e anexar.\n\nPor favor, digite apenas o **Nome do Cliente ou ID**.\n\n*(Exemplo: 398172 ou Wellington Silva Nunes)*:",
-    T_RESGATE_BUSCANDO: "🔍 Iniciando a verificação em nosso sistema...\n\n1️⃣ Buscando CPF e Nascimento no relatório da iGreen...\n2️⃣ Acessando a Distribuidora Local...\n3️⃣ Baixando fatura atualizada e identificando a UC correta...\n4️⃣ Retornando à iGreen para anexar o documento...\n\nIsso pode levar alguns segundos, por favor, aguarde...",
-    T_RESGATE_SUCESSO: "✅ Sucesso Absoluto! A fatura atualizada foi resgatada e anexada na aba de Devolutivas do escritório iGreen. A sua pendência foi resolvida!",
-    T_RESGATE_FAIL: "⚠️ Ocorreu um erro no processo.\n\nO nosso time não encontrou a linha do cliente, ou o site da distribuidora bloqueou o acesso temporariamente por segurança.\n\nPor favor, verifique se o Nome ou ID digitado está correto e tente novamente mais tarde.",
+// utils/validators.js
+const validator = require('validator');
+const path = require('path');
 
-    T_GUARDAR_START: "Opção 2️⃣ selecionada! 💾 \n*Módulo de Pré-Cadastro* ativado!\nPor favor, envie a foto ou PDF da sua *Fatura de Energia*.",
-    T_PEDIR_TELEFONE: "✅ Fatura analisada e salva!\n👤 Titular: ${nome}\n⚡ UC: ${uc}\n\nPara completarmos o seu pré-cadastro, digite o **Número de Telefone (com DDD)** do titular:",
-    T_PEDIR_EMAIL: "Ótimo! 📱 Telefone salvo.\n\nAgora, por favor, digite o **melhor E-mail** do titular:",
-    T_FIM_PRE_CADASTRO: "Perfeito! 📧 E-mail salvo no seu perfil.\n\n⚠️ *Aviso:* O seu cadastro está 'Pendente de Documentos'. Quando quiser enviar a foto do seu documento (Frente e Verso), escolha a **Opção 4** no menu inicial.",
-    
-    T_START_OPCAO_4: "Opção 4️⃣ selecionada! 📎\nPara anexarmos o documento no cadastro correto, digite o número da sua **UC ou Conta Contrato** (apenas os números):",
-    T_OP4_FALTANDO_TEL: "🔍 Localizei o seu cadastro, mas ainda não temos o seu **Telefone**. Digite-o com DDD para atualizarmos:",
-    T_OP4_FALTANDO_MAIL: "Certo! E qual o seu melhor **E-mail**?",
-    T_PEDIR_FOTO_DOC_FRENTE: "✅ Cadastro atualizado e pronto! \n\nPor favor, envie agora uma foto legível apenas da **FRENTE** do seu Documento de Identificação (RG ou CNH):",
-    T_PEDIR_FOTO_DOC_VERSO: "✅ Frente recebida!\n\nAgora, envie a foto do **VERSO** do mesmo documento:",
-    T_DOCS_RECEBIDOS: "✅ Documentos recebidos com sucesso! \nAs imagens foram anexadas ao seu perfil com segurança. Muito obrigado! 🙏"
+function validatePhone(phone) {
+  return validator.isMobilePhone(phone.toString(), ['pt-BR']);
+}
+
+function sanitizeInput(input) {
+  if (!input) return '';
+  return input.toString().trim().replace(/[<>]/g, '');
+}
+
+function validateURL(urlStr) {
+  try {
+    new URL(urlStr);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function safePath(baseDir, relPath) {
+  if (!relPath) return null;
+  const fullPath = path.join(baseDir, relPath);
+  const resolvedBase = path.resolve(baseDir);
+  const resolvedFull = path.resolve(fullPath);
+  return resolvedFull.startsWith(resolvedBase) ? resolvedFull : null;
+}
+
+module.exports = {
+  validatePhone,
+  sanitizeInput,
+  validateURL,
+  safePath
 };
 
-const CHROME_ARGS = [
-    "--no-sandbox", 
-    "--disable-setuid-sandbox", 
-    "--disable-dev-shm-usage", 
-    "--disable-gpu", 
-    "--no-zygote", 
-    "--disable-blink-features=AutomationControlled",
-    "--window-size=1920,1080"
-];
+// middleware/errorHandler.js
+const logger = require('../utils/logger');
 
-// ==========================================
-// FUNÇÕES AUXILIARES
-// ==========================================
-async function enviarMensagem(phone, message) {
-    const numLimpo = String(phone).replace(/\D/g, ''); 
-    try { 
-        await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, 
-        { phone: numLimpo, message: String(message) }, 
-        { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN, 'Content-Type': 'application/json' } }); 
-    } catch (e) { console.error(`[Z-API] Erro:`, e.message); }
-}
+module.exports = (err, req, res, next) => {
+  logger.error(err, { url: req.url, method: req.method });
+  res.status(err.status || 500).json({
+    error: 'Erro interno do servidor'
+  });
+};
 
-async function buscarNoBanco(docId) {
-    if (admin.apps.length > 0) {
-        try {
-            const db = admin.firestore();
-            const doc = await db.collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').doc(docId).get();
-            return doc.exists ? doc.data() : null;
-        } catch (e) { return null; }
-    }
-    return null;
-}
+// services/puppeteerService.js
+const puppeteer = require('puppeteer');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const logger = require('../utils/logger');
+const config = require('../config/config');
 
-function limparDadosVazios(dados) {
-    return Object.fromEntries(Object.entries(dados).filter(([_, v]) => v !== "" && v !== "Não extraído" && v !== "0" && v !== null && v !== undefined));
-}
+class PuppeteerService {
+  constructor() {
+    this.browser = null;
+    this.page = null;
+    this.isInitialized = false;
+    this.userDataDir = path.join(os.tmpdir(), 'igreen-whatsapp');
+    fs.mkdirSync(this.userDataDir, { recursive: true });
+  }
 
-async function salvarNoBanco(docId, phone, dadosExtras) {
-    if (admin.apps.length > 0) {
-        try {
-            const db = admin.firestore();
-            const dadosLimpos = limparDadosVazios(dadosExtras); 
-            await db.collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').doc(docId).set(
-                { ...dadosLimpos, TELEFONE_REMETENTE: phone, DATA_ULTIMA_ATUALIZACAO: admin.firestore.FieldValue.serverTimestamp() }, 
-                { merge: true } 
-            );
-        } catch (e) { console.error("Erro Firebase:", e.message); }
-    }
-}
-
-// ==========================================
-// MÓDULO 2: EXTRATOR RPA TOTAL (IGREEN -> EQUATORIAL -> IGREEN)
-// ==========================================
-async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, nascBanco = null, isAutomated = false) {
-    let browser;
-    const caminhoFaturaLocal = path.join('/tmp', `fatura_${Date.now()}.pdf`);
-    let cpf = cpfBanco;
-    let nascimento = nascBanco;
-    let ucExtraidaEquatorial = null; 
+  /**
+   * Inicializa o browser Puppeteer se necessário
+   */
+  async init() {
+    if (this.isInitialized) return;
 
     try {
-        browser = await puppeteer.launch({ 
-            headless: true, 
-            args: CHROME_ARGS,
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() 
-        });
-        const page = await browser.newPage();
-        
-        // Anti-Detecção Extra
-        await page.setExtraHTTPHeaders({
-            'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7'
-        });
-        
-        await page.setViewport({ width: 1920, height: 1080 });
+      this.browser = await puppeteer.launch({
+        headless: false, // Mude para 'new' após login manual inicial
+        userDataDir: this.userDataDir,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage'
+        ]
+      });
 
-        if (!cpf || !nascimento) {
-            console.log(`[RPA] ETAPA 1: Buscando CPF e Nascimento de ${termoBuscaIgreen} na iGreen...`);
-            
-            await page.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
-            try { await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Começar')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
-            
-            await page.waitForSelector('input[type="email"]');
-            await page.type('input[type="email"]', IGREEN_USER, { delay: 50 });
-            await page.type('input[type="password"]', IGREEN_PASS, { delay: 50 });
-            
-            await page.evaluate(() => {
-                const botoes = Array.from(document.querySelectorAll('button'));
-                const btnEntrar = botoes.find(b => b.textContent.toLowerCase().includes('entrar') || b.textContent.toLowerCase().includes('acessar') || b.textContent.toLowerCase().includes('login'));
-                if (btnEntrar) btnEntrar.click();
-            });
-            await page.keyboard.press('Enter');
-            
-            await Promise.race([
-                page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }),
-                new Promise(resolve => setTimeout(resolve, 10000))
-            ]);
+      this.page = await this.browser.newPage();
+      await this.page.setViewport({ width: 1366, height: 768 });
 
-            if (page.url().includes('login')) throw new Error("O site da iGreen recusou o login. Verifique a senha.");
+      logger.info('Acessando WhatsApp Web...');
+      await this.page.goto('https://web.whatsapp.com', {
+        waitUntil: 'networkidle0',
+        timeout: config.PUPPETEER_TIMEOUT
+      });
 
-            try { await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
+      // Aguarda login (QR code manual na primeira vez)
+      await this.page.waitForSelector('[data-testid="chat-list"]', { timeout: 60000 }).catch(() => {
+        logger.warn('Login manual pode ser necessário. Verifique o browser.');
+      });
 
-            await page.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
-            await new Promise(r => setTimeout(r, 5000));
-
-            let searchInput;
-            try {
-                searchInput = await page.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
-            } catch (erroSeletor) { throw new Error("A barra de Buscar não existe."); }
-
-            await searchInput.click();
-            await new Promise(r => setTimeout(r, 500));
-            await searchInput.click({ clickCount: 3 });
-            await page.keyboard.press('Backspace');
-            await new Promise(r => setTimeout(r, 500));
-            await searchInput.type(termoBuscaIgreen, { delay: 100 }); 
-            await new Promise(r => setTimeout(r, 500));
-            await page.keyboard.press('Enter');
-            
-            try {
-                await page.waitForFunction((busca) => document.body.innerText.toLowerCase().includes(busca.toLowerCase()), { timeout: 12000 }, termoBuscaIgreen);
-            } catch (e) {}
-            await new Promise(r => setTimeout(r, 2000));
-
-            const dadosExtraidos = await page.evaluate((busca) => {
-                const buscaLimpa = busca.toLowerCase().trim();
-                const possiveisLinhas = Array.from(document.querySelectorAll('tr, [role="row"], .MuiDataGrid-row'));
-                const linhasComDados = possiveisLinhas.filter(l => l.textContent.trim().length > 15 && !l.querySelector('th') && !l.getAttribute('role')?.includes('columnheader'));
-                const linhaExata = linhasComDados.find(linha => linha.textContent.toLowerCase().includes(buscaLimpa));
-                
-                if (!linhaExata) return { falhouBusca: true };
-
-                let colunas = Array.from(linhaExata.querySelectorAll('td, [role="cell"], .MuiDataGrid-cell'));
-                if (colunas.length === 0) colunas = Array.from(linhaExata.children);
-                const textoLinha = colunas.map(c => c.textContent.trim()).join('   ');
-                
-                let cpfExt = null; let nascExt = null;
-
-                const cpfMatch = textoLinha.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
-                if (cpfMatch) cpfExt = cpfMatch[0];
-
-                const todasDatas = textoLinha.match(/\d{2}\/\d{2}\/\d{4}/g);
-                if (todasDatas && todasDatas.length > 0) {
-                    let menorAno = 9999;
-                    for (let d of todasDatas) {
-                        let ano = parseInt(d.split('/')[2], 10);
-                        if (ano < menorAno) { menorAno = ano; nascExt = d; }
-                    }
-                    if (menorAno > 2015) nascExt = null; 
-                }
-
-                if (cpfExt) cpfExt = cpfExt.replace(/\D/g, '');
-                return { cpfExt, nascExt };
-            }, termoBuscaIgreen);
-
-            if (dadosExtraidos && dadosExtraidos.falhouBusca) throw new Error(`O nosso time não encontrou a linha do cliente.`);
-            if (!dadosExtraidos || !dadosExtraidos.cpfExt || !dadosExtraidos.nascExt) throw new Error(`Faltam dados essenciais (CPF ou Data de Nascimento) na iGreen.`);
-
-            cpf = dadosExtraidos.cpfExt;
-            nascimento = dadosExtraidos.nascExt;
-            console.log(`[RPA] iGreen lida com sucesso! CPF: ${cpf} | Nasc: ${nascimento}`);
-        }
-
-        // ===============================================
-        // INTERCEPTADOR DE DOWNLOAD GLOBAL
-        // ===============================================
-        const escutarPDF = async (response) => {
-            try {
-                const contentType = response.headers()['content-type'];
-                const contentDisposition = response.headers()['content-disposition'];
-                
-                // Evita capturar bloqueios do Imperva (Error 16 que é HTML)
-                if (response.status() === 200 && ((contentType && contentType.includes('application/pdf')) || 
-                    (contentDisposition && contentDisposition.includes('.pdf')))) {
-                    const buffer = await response.buffer();
-                    fs.writeFileSync(caminhoFaturaLocal, buffer);
-                    console.log(`[RPA] 🎯 ALVO ABATIDO! PDF interceptado e gravado com sucesso!`);
-                }
-            } catch(err) {}
-        };
-
-        page.on('response', escutarPDF);
-
-        browser.on('targetcreated', async (target) => {
-            if (target.type() === 'page') {
-                try {
-                    const novaAba = await target.page();
-                    novaAba.on('response', escutarPDF);
-                } catch (e) {}
-            }
-        });
-
-        console.log(`[RPA] ETAPA 2: Acessando Equatorial AL (Invisível ao Imperva)...`);
-        await page.goto(EQUATORIAL_AL_URL, { waitUntil: 'networkidle2', timeout: 60000 });
-
-        try {
-            await page.evaluate(() => {
-                const check = document.querySelector('input[type="checkbox"]'); if(check) check.click();
-                const btnEnviar = Array.from(document.querySelectorAll('button, div, span')).find(el => el.textContent.toUpperCase().includes('ENVIAR')); if(btnEnviar) btnEnviar.click();
-                const btnFechar = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase().includes('FECHAR')); if(btnFechar) btnFechar.click();
-            });
-            await new Promise(r => setTimeout(r, 2000));
-        } catch(e) {}
-
-        console.log(`[RPA] Equatorial: Inserindo CPF e Nascimento para Login...`);
-        await page.evaluate((cpfBusca, nascBusca) => {
-            const inputs = document.querySelectorAll('input');
-            inputs.forEach(input => {
-                if (input.placeholder.toLowerCase().includes('cpf') || input.placeholder.toLowerCase().includes('cnpj')) input.value = cpfBusca;
-                if (input.placeholder.toLowerCase().includes('nascimento') || input.placeholder.toLowerCase().includes('data')) input.value = nascBusca;
-            });
-            const btnEntrar = Array.from(document.querySelectorAll('button')).find(b => b.textContent.toUpperCase().includes('ENTRAR'));
-            if(btnEntrar) btnEntrar.click();
-        }, cpf, nascimento);
-        
-        console.log(`[RPA] Equatorial: Aguardando painel carregar...`);
-        await new Promise(r => setTimeout(r, 10000)); // Tempo extra para o Imperva analisar a nossa "capa"
-
-        console.log(`[RPA] Equatorial: Procurando a UC na tela para selecionar...`);
-        const ucIdentificada = await page.evaluate(() => {
-            const btnFechar = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase() === 'FECHAR' || el.textContent.toUpperCase() === 'X');
-            if(btnFechar) btnFechar.click(); 
-
-            const elementos = Array.from(document.querySelectorAll('span, div, p, a, li, option, td, h3, h4'));
-            const elemUc = elementos.find(el => {
-                const txt = el.textContent.trim();
-                if (txt.includes('/') || txt.includes('-') || txt.includes('.')) return false;
-                const soNumeros = txt.replace(/\D/g, '');
-                return soNumeros.length >= 8 && soNumeros.length <= 15 && txt === soNumeros;
-            });
-
-            if (elemUc) {
-                const numeroUc = elemUc.textContent.trim();
-                elemUc.click();
-                return numeroUc; 
-            }
-            return null;
-        });
-
-        if (ucIdentificada) {
-            console.log(`[RPA] Equatorial: A UC [${ucIdentificada}] apareceu na tela e foi clicada!`);
-            ucExtraidaEquatorial = ucIdentificada;
-            await salvarNoBanco(cpf, phone, { UC_ATUALIZADA_EQUATORIAL: ucIdentificada, UC: ucIdentificada });
-        } else {
-            console.log(`[RPA] Equatorial: Nenhuma lista de UCs encontrada. O cliente deve ter apenas 1 imóvel e entrou direto.`);
-        }
-        
-        await new Promise(r => setTimeout(r, 4000));
-
-        console.log(`[RPA] Equatorial: Acessando Segunda Via...`);
-        await page.evaluate(() => {
-            const btn2via = Array.from(document.querySelectorAll('span, a, div, button')).find(el => el.textContent.toLowerCase().includes('segunda via') || el.textContent.toLowerCase().includes('faturas'));
-            if(btn2via) btn2via.click();
-        });
-        await new Promise(r => setTimeout(r, 5000));
-
-        console.log(`[RPA] Equatorial: Clicando na fatura mais recente (Ícone R$ ou Baixar)...`);
-        await page.evaluate(() => {
-            const btnBaixar = Array.from(document.querySelectorAll('span, td, div, button, a')).find(el => el.textContent.includes('R$') || el.textContent.toLowerCase().includes('baixar'));
-            if(btnBaixar) btnBaixar.click();
-        });
-        await new Promise(r => setTimeout(r, 2000));
-
-        console.log(`[RPA] Equatorial: Solicitando VER FATURA...`);
-        await page.evaluate(() => {
-            const botoes = Array.from(document.querySelectorAll('button, a, span'));
-            const btnVerFatura = botoes.find(el => {
-                const txt = el.textContent.toUpperCase();
-                return (txt.includes('VER FATURA') || txt.includes('IMPRIMIR') || txt.includes('DOWNLOAD')) && el.offsetParent !== null;
-            });
-            if(btnVerFatura) {
-                if (btnVerFatura.tagName === 'A') btnVerFatura.removeAttribute('target');
-                btnVerFatura.click();
-            }
-        });
-        
-        console.log(`[RPA] Equatorial: Aguardando fatura na rede (10s)...`);
-        let pdfCapturado = false;
-        
-        for (let i = 0; i < 10; i++) {
-            await new Promise(r => setTimeout(r, 1000)); 
-            if (fs.existsSync(caminhoFaturaLocal)) {
-                pdfCapturado = true;
-                console.log(`[RPA] Sucesso! PDF interceptado na rede.`);
-                break;
-            }
-        }
-        
-        if (!pdfCapturado) {
-            console.log(`[RPA] O arquivo não foi baixado. Ativando o Gerador de PDF de Tela...`);
-            await new Promise(r => setTimeout(r, 5000)); 
-            
-            const pages = await browser.pages();
-            const paginaFatura = pages[pages.length - 1];
-            
-            // Verifica se fomos bloqueados pelo Imperva antes de gerar o PDF
-            const bodyText = await paginaFatura.evaluate(() => document.body.innerText);
-            if (bodyText.includes("Access denied") || bodyText.includes("Error 16") || bodyText.includes("imperva")) {
-                 throw new Error("O Firewall da Equatorial (Imperva) bloqueou o acesso do robô à fatura.");
-            }
-            
-            await paginaFatura.pdf({ path: caminhoFaturaLocal, format: 'A4', printBackground: true });
-            
-            if (fs.existsSync(caminhoFaturaLocal)) {
-                pdfCapturado = true;
-                console.log(`[RPA] 🖨️ Sucesso! A tela aberta foi perfeitamente convertida em PDF.`);
-            }
-        }
-
-        if (!pdfCapturado) throw new Error("Falha ao gerar o PDF. O site não baixou o ficheiro nem conseguiu renderizar a tela.");
-
-        // ==============================================================
-        // O COMPROMISSO DO MESTRE: DISPONIBILIZAR O PDF PARA VOCÊ VER!
-        // ==============================================================
-        try {
-            const pdfProvaPath = path.join('/tmp', 'ultima_fatura.pdf');
-            fs.copyFileSync(caminhoFaturaLocal, pdfProvaPath);
-            console.log(`\n======================================================`);
-            console.log(`[RPA] 📄 PROVA DO PDF: O robô guardou uma cópia da fatura.`);
-            console.log(`[RPA] Veja com os seus próprios olhos acessando o link abaixo:`);
-            console.log(`👉 https://igreen-autoflow-server-2.onrender.com/ultima-fatura 👈`);
-            console.log(`======================================================\n`);
-        } catch (e) {}
-
-        // ===============================================
-        // ETAPA 3: INJEÇÃO NA IGREEN (FORÇA BRUTA INVISÍVEL)
-        // ===============================================
-        console.log(`[RPA] ETAPA 3: Injetando a Fatura na iGreen...`);
-        
-        await page.bringToFront();
-        
-        console.log(`[RPA] Retornando diretamente ao Mapa de Clientes da iGreen...`);
-        await page.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 60000 });
-        await new Promise(r => setTimeout(r, 6000));
-
-        try { await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não') || el.textContent.includes('Fechar')); if(btn) btn.click(); }); } catch(e){}
-
-        console.log(`[RPA] Procurando a barra de Buscar nas Devolutivas...`);
-        let searchDevolutiva = await page.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
-        
-        await searchDevolutiva.click();
-        await new Promise(r => setTimeout(r, 500));
-        await searchDevolutiva.click({ clickCount: 3 });
-        await page.keyboard.press('Backspace');
-        await new Promise(r => setTimeout(r, 500));
-        
-        await searchDevolutiva.type(cpf, { delay: 100 });
-        await new Promise(r => setTimeout(r, 500));
-        await page.keyboard.press('Enter');
-        
-        console.log(`[RPA] ENTER pressionado na Devolutiva. Aguardando a tabela filtrar...`);
-        
-        try { await page.waitForFunction((busca) => document.body.innerText.includes(busca), { timeout: 10000 }, cpf); } catch (e) {}
-        await new Promise(r => setTimeout(r, 2000));
-
-        await page.evaluate((cpfBusca) => { 
-            const linhas = Array.from(document.querySelectorAll('tr, [role="row"], div[class*="MuiDataGrid-row"]')); 
-            const linhaExata = linhas.find(row => row.textContent.replace(/\D/g, '').includes(cpfBusca)); 
-            if(linhaExata) {
-                const btnTresPontinhos = Array.from(linhaExata.querySelectorAll('button, div')).find(el => el.textContent.trim() === '...'); 
-                if(btnTresPontinhos) btnTresPontinhos.click(); 
-            }
-        }, cpf);
-        await new Promise(r => setTimeout(r, 2000));
-
-        await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('span, li, div')).find(el => el.textContent.includes('Devolutivas')); if(btn) btn.click(); });
-        await new Promise(r => setTimeout(r, 3000));
-
-        console.log(`[RPA] Navegando pelos popups de Devolutiva...`);
-        
-        for (let clique = 0; clique < 3; clique++) {
-            await page.evaluate(() => { 
-                const botoes = Array.from(document.querySelectorAll('button, span, a, div'));
-                const botoesAcao = botoes.filter(el => el.textContent.trim() === 'Realizar ação' || el.textContent.includes('Realizar ação'));
-                const btn = botoesAcao.filter(b => b.offsetParent !== null).pop() || botoesAcao[botoesAcao.length - 1]; 
-                if(btn) {
-                    btn.scrollIntoView({behavior: 'smooth', block: 'center'});
-                    btn.click(); 
-                }
-            });
-            await new Promise(r => setTimeout(r, 3000));
-        }
-
-        console.log(`[RPA] INJEÇÃO DIRETA NO CÓDIGO HTML...`);
-        
-        // Em vez de clicar, injeta o ficheiro no input invisível imediatamente!
-        const inputUploads = await page.$$('input[type="file"]');
-        if (inputUploads.length > 0) {
-            console.log(`[RPA] ${inputUploads.length} inputs encontrados. Injetando PDF...`);
-            for (let input of inputUploads) {
-                try {
-                    await input.uploadFile(caminhoFaturaLocal);
-                    await page.evaluate((el) => el.dispatchEvent(new Event('change', { bubbles: true })), input);
-                } catch(e){}
-            }
-            console.log(`[RPA] PDF Injetado com SUCESSO ABSOLUTO sem abrir janelas!`);
-        } else {
-             throw new Error("O formulário de anexo da iGreen está bloqueado ou invisível.");
-        }
-        
-        await new Promise(r => setTimeout(r, 3000));
-
-        console.log(`[RPA] Salvando a devolutiva na iGreen...`);
-        await page.evaluate(() => { 
-            const btnSalvar = Array.from(document.querySelectorAll('button')).find(el => el.textContent.toUpperCase().includes('ENVIAR') || el.textContent.toUpperCase().includes('SALVAR') || el.textContent.toUpperCase().includes('CONCLUIR')); 
-            if (btnSalvar) btnSalvar.click(); 
-        });
-        await new Promise(r => setTimeout(r, 5000)); 
-        
-        await browser.close();
-        if(fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
-
-        if(!isAutomated) await enviarMensagem(phone, TEXTOS.T_RESGATE_SUCESSO);
-        
-    } catch (e) { 
-        console.error("Erro RPA Devolutivas:", e.message);
-        if(browser) await browser.close(); 
-        if(fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
-        if(!isAutomated) await enviarMensagem(phone, TEXTOS.T_RESGATE_FAIL);
-    }
-}
-
-// ==========================================
-// MÓDULO 3: MOTOR RECORRENTE (A CADA 24H)
-// ==========================================
-function iniciarMotorRecorrente() {
-    setInterval(async () => {
-        if (admin.apps.length > 0) {
-            try {
-                const db = admin.firestore();
-                const snapshot = await db.collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads')
-                                        .where('STATUS_CADASTRO', '==', 'PENDENTE_MEDIA').get();
-                
-                snapshot.forEach(async (doc) => {
-                    const lead = doc.data();
-                    const ultimaVerificacao = lead.DATA_ULTIMA_ATUALIZACAO ? lead.DATA_ULTIMA_ATUALIZACAO.toDate() : new Date();
-                    const diasPassados = Math.floor((new Date() - ultimaVerificacao) / (1000 * 60 * 60 * 24));
-                    
-                    if (diasPassados >= 15) {
-                        fluxoResgateDevolutiva(lead.NOME_CLIENTE, lead.TELEFONE_REMETENTE, lead.CPF, lead.DATA_NASCIMENTO, true);
-                        await salvarNoBanco(doc.id, lead.TELEFONE_REMETENTE, { STATUS_CADASTRO: 'PENDENTE_MEDIA' }); 
-                    }
-                });
-            } catch (e) { console.error("Erro no Cron:", e.message); }
-        }
-    }, 86400000); 
-}
-iniciarMotorRecorrente();
-
-// ==========================================
-// LÓGICA DO WEBHOOK
-// ==========================================
-app.post('/webhook/igreen', async (req, res) => {
-    res.status(200).send("OK");
-    const data = req.body;
-    if (data.fromMe) return;
-
-    const phone = data.phone;
-    const textoIn = data.text?.message?.trim() || "";
-    const txtL = textoIn.toLowerCase();
-    const temMidia = !!(data.image?.imageUrl || data.document?.documentUrl);
-    const mediaUrl = data.image?.imageUrl || data.document?.documentUrl;
-    const mimeType = data.document ? 'application/pdf' : 'image/jpeg';
-
-    if (['0', 'cancelar', 'menu'].includes(txtL)) {
-        memoriaEstado.set(phone, { STATUS_CADASTRO: 'NOVO' });
-        await enviarMensagem(phone, "🔄 Operação cancelada.\n\n" + TEXTOS.T_MENU);
-        return;
-    }
-
-    let mem = memoriaEstado.get(phone) || { STATUS_CADASTRO: 'NOVO' };
-
-    if (mem.STATUS_CADASTRO === 'NOVO') {
-        if (txtL === '1') { memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA' }); await enviarMensagem(phone, TEXTOS.T01); return; }
-        if (txtL === '2') { memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA_SOH_BANCO' }); await enviarMensagem(phone, TEXTOS.T_GUARDAR_START); return; }
-        if (txtL === '3') { memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DADOS_DEVOLUTIVA' }); await enviarMensagem(phone, TEXTOS.T_RESGATE_START); return; }
-        if (txtL === '4') { memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_UC_DOC' }); await enviarMensagem(phone, TEXTOS.T_START_OPCAO_4); return; }
-        await enviarMensagem(phone, TEXTOS.T_MENU);
-        return;
-    }
-
-    switch (mem.STATUS_CADASTRO) {
-        case 'AGUARDANDO_FATURA': {
-            if (temMidia) {
-                await enviarMensagem(phone, TEXTOS.T02); 
-                try {
-                    const dadosIA = await analisarFaturaGemini(mediaUrl, mimeType);
-                    const docId = dadosIA.UC ? dadosIA.UC.replace(/\D/g, '') : `SEM_UC_${Date.now()}`;
-                    await salvarNoBanco(docId, phone, { ...dadosIA, LINK_FATURA: mediaUrl, STATUS_CADASTRO: "CONCLUIDO" });
-                    await enviarMensagem(phone, `✅ Tudo certo! Titular: ${dadosIA.NOME_CLIENTE}. Especialista entrará em contato.`);
-                    memoriaEstado.delete(phone); 
-                } catch (e) { await enviarMensagem(phone, "❌ Erro ao ler fatura."); }
-            } else { await enviarMensagem(phone, "⚠️ Aguardando foto/PDF da fatura."); }
-            break;
-        }
-
-        case 'AGUARDANDO_FATURA_SOH_BANCO': {
-            if (temMidia) {
-                await enviarMensagem(phone, TEXTOS.T02); 
-                try {
-                    const dadosIA = await analisarFaturaGemini(mediaUrl, mimeType);
-                    const docId = dadosIA.UC ? dadosIA.UC.replace(/\D/g, '') : `SEM_UC_${Date.now()}`;
-                    await salvarNoBanco(docId, phone, { ...dadosIA, LINK_FATURA: mediaUrl, STATUS_CADASTRO: "AGUARDANDO_TELEFONE" });
-                    memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_TELEFONE', docId });
-                    await enviarMensagem(phone, TEXTOS.T_PEDIR_TELEFONE.replace('${nome}', dadosIA.NOME_CLIENTE).replace('${uc}', dadosIA.UC));
-                } catch (e) { await enviarMensagem(phone, "❌ Erro na análise."); }
-            } else { await enviarMensagem(phone, "⚠️ Aguardando foto/PDF da fatura."); }
-            break;
-        }
-
-        case 'AGUARDANDO_TELEFONE': {
-            if (textoIn.length >= 8) { 
-                await salvarNoBanco(mem.docId, phone, { TELEFONE: textoIn, STATUS_CADASTRO: "AGUARDANDO_EMAIL" });
-                memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_EMAIL', docId: mem.docId });
-                await enviarMensagem(phone, TEXTOS.T_PEDIR_EMAIL);
-            } else { await enviarMensagem(phone, "⚠️ Digite um telefone válido."); }
-            break;
-        }
-
-        case 'AGUARDANDO_EMAIL': {
-            if (textoIn.includes('@')) { 
-                await salvarNoBanco(mem.docId, phone, { EMAIL: textoIn, STATUS_CADASTRO: "PENDENTE_DOCUMENTOS" });
-                await enviarMensagem(phone, TEXTOS.T_FIM_PRE_CADASTRO);
-                memoriaEstado.delete(phone);
-            } else { await enviarMensagem(phone, "⚠️ Digite um e-mail válido."); }
-            break;
-        }
-
-        case 'AGUARDANDO_DADOS_DEVOLUTIVA': {
-            if (textoIn.length >= 3) {
-                await enviarMensagem(phone, TEXTOS.T_RESGATE_BUSCANDO);
-                memoriaEstado.delete(phone); 
-                
-                setTimeout(() => { fluxoResgateDevolutiva(textoIn, phone, null, null, false); }, 2000);
-            } else {
-                await enviarMensagem(phone, "⚠️ Digite o Nome ou ID corretamente (mínimo de 3 caracteres).");
-            }
-            break;
-        }
-
-        case 'AGUARDANDO_UC_DOC': {
-            if (textoIn.length >= 4) { 
-                const ucLimpa = textoIn.replace(/\D/g, '');
-                const leadExistente = await buscarNoBanco(ucLimpa);
-                
-                if (leadExistente) {
-                    if (!leadExistente.TELEFONE) {
-                        memoriaEstado.set(phone, { STATUS_CADASTRO: 'OP4_PEDIR_TELEFONE', docId: ucLimpa });
-                        await enviarMensagem(phone, TEXTOS.T_OP4_FALTANDO_TEL);
-                    } else if (!leadExistente.EMAIL) {
-                        memoriaEstado.set(phone, { STATUS_CADASTRO: 'OP4_PEDIR_EMAIL', docId: ucLimpa });
-                        await enviarMensagem(phone, TEXTOS.T_OP4_FALTANDO_MAIL);
-                    } else {
-                        memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: ucLimpa });
-                        await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
-                    }
-                } else {
-                    memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: ucLimpa });
-                    await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
-                }
-            } else { await enviarMensagem(phone, "⚠️ Digite a UC corretamente."); }
-            break;
-        }
-
-        case 'OP4_PEDIR_TELEFONE': {
-            if (textoIn.length >= 8) {
-                await salvarNoBanco(mem.docId, phone, { TELEFONE: textoIn });
-                const leadAtualizadoTel = await buscarNoBanco(mem.docId);
-                
-                if (leadAtualizadoTel && !leadAtualizadoTel.EMAIL) {
-                    memoriaEstado.set(phone, { STATUS_CADASTRO: 'OP4_PEDIR_EMAIL', docId: mem.docId });
-                    await enviarMensagem(phone, TEXTOS.T_OP4_FALTANDO_MAIL);
-                } else {
-                    memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: mem.docId });
-                    await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
-                }
-            } else { await enviarMensagem(phone, "⚠️ Digite um telefone válido."); }
-            break;
-        }
-
-        case 'OP4_PEDIR_EMAIL': {
-            if (textoIn.includes('@')) {
-                await salvarNoBanco(mem.docId, phone, { EMAIL: textoIn });
-                memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: mem.docId });
-                await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
-            } else { await enviarMensagem(phone, "⚠️ Digite um e-mail válido."); }
-            break;
-        }
-
-        case 'AGUARDANDO_DOC_FRENTE': {
-            if (temMidia) {
-                await salvarNoBanco(mem.docId, phone, { LINK_DOC_FRENTE: mediaUrl });
-                memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO', docId: mem.docId });
-                await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_VERSO);
-            } else { await enviarMensagem(phone, "⚠️ Envie a foto da FRENTE."); }
-            break;
-        }
-
-        case 'AGUARDANDO_DOC_VERSO': {
-            if (temMidia) {
-                await salvarNoBanco(mem.docId, phone, { LINK_DOC_VERSO: mediaUrl, STATUS_CADASTRO: "CONCLUIDO_COM_DOCS" });
-                await enviarMensagem(phone, TEXTOS.T_DOCS_RECEBIDOS);
-                memoriaEstado.delete(phone);
-            } else { await enviarMensagem(phone, "⚠️ Envie a foto do VERSO."); }
-            break;
-        }
-    }
-});
-
-// ==========================================
-// ROTA PÚBLICA DE PROVAS (A PEDIDO DO MESTRE)
-// ==========================================
-app.get('/ultima-fatura', (req, res) => {
-    const file = path.join('/tmp', 'ultima_fatura.pdf');
-    if (fs.existsSync(file)) {
-        res.contentType('application/pdf');
-        res.sendFile(path.resolve(file));
-    } else {
-        res.status(404).send(`
-            <h2 style="font-family: sans-serif; color: #333; text-align: center; margin-top: 50px;">
-                🕵️‍♂️ Nenhuma fatura foi capturada ainda!
-            </h2>
-            <p style="font-family: sans-serif; color: #666; text-align: center;">
-                Faça o teste de uma Devolutiva no WhatsApp primeiro. Quando o robô gerar o PDF na Equatorial, ele aparecerá aqui.
-            </p>
-        `);
-    }
-});
-
-// ==========================================
-// HEALTH CHECK E INICIALIZAÇÃO
-// ==========================================
-const PORT = process.env.PORT || 10000;
-
-async function validateBrowser() {
-    try {
-        console.log("⏳ Iniciando Health Check do Navegador (Modo Docker)...");
-        const browser = await puppeteer.launch({
-            headless: true,
-            args: CHROME_ARGS,
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath()
-        });
-        await browser.close();
-        console.log('✔ Browser health check passed! O contentor Docker está perfeito.');
-        return true;
+      this.isInitialized = true;
+      logger.info('Puppeteer inicializado com sucesso.');
     } catch (error) {
-        console.error('❌ Browser initialization failed:', error.message);
-        process.exit(1); 
+      logger.error('Falha ao inicializar Puppeteer:', error);
+      throw error;
     }
+  }
+
+  /**
+   * Envia mensagem via WhatsApp Web
+   * @param {string} phone - Número com código país
+   * @param {string} message - Mensagem a enviar
+   */
+  async sendMessage(phone, message) {
+    await this.init();
+
+    const cleanPhone = phone.replace(/[^\d]/g, '');
+    if (cleanPhone.length < 10) {
+      throw new Error('Número de telefone inválido');
+    }
+
+    logger.debug(`Enviando mensagem para ${phone}: ${message.substring(0, 50)}...`);
+
+    try {
+      await this.page.goto(`https://web.whatsapp.com/send?phone=${cleanPhone}`, {
+        waitUntil: 'networkidle0',
+        timeout: config.PUPPETEER_TIMEOUT
+      });
+
+      // Selector para caixa de texto (pode variar, adapte se necessário)
+      const inputSelector = 'div[contenteditable="true"][data-tab="10"], [data-testid="msg-input"]';
+      await this.page.waitForSelector(inputSelector, { timeout: 10000 });
+
+      await this.page.type(inputSelector, message, { delay: 30 });
+
+      const sendSelector = 'button[data-testid="compose-btn-send"], span[data-icon="send"]';
+      await this.page.click(sendSelector, { timeout: 5000 });
+
+      // Aguarda envio
+      await this.page.waitForTimeout(2000);
+
+      logger.debug('Mensagem enviada com sucesso');
+    } catch (error) {
+      logger.error('Erro ao enviar mensagem:', error);
+      throw error;
+    }
+  }
+
+  async close() {
+    if (this.browser) {
+      await this.browser.close();
+      this.browser = null;
+      this.isInitialized = false;
+      logger.info('Puppeteer fechado');
+    }
+  }
 }
 
-// ROTA DE SEGURANÇA PARA O RENDER
-app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindado!'));
+module.exports = new PuppeteerService();
 
-validateBrowser().then(() => {
-    app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
+// services/stateService.js (adicionei para gerenciar estado sem leak)
+const config = require('../config/config');
+
+class StateManager {
+  constructor(timeoutMs) {
+    this.states = new Map();
+    this.timeoutMs = timeoutMs;
+    this.cleanupInterval = setInterval(() => this._cleanup(), 3600000); // Limpa a cada 1h
+  }
+
+  set(key, value) {
+    this.states.set(key, {
+      value,
+      timestamp: Date.now()
+    });
+  }
+
+  get(key) {
+    const entry = this.states.get(key);
+    if (!entry || (Date.now() - entry.timestamp > this.timeoutMs)) {
+      this.states.delete(key);
+      return null;
+    }
+    return entry.value;
+  }
+
+  _cleanup() {
+    const now = Date.now();
+    for (const [key, entry] of this.states.entries()) {
+      if (now - entry.timestamp > this.timeoutMs) {
+        this.states.delete(key);
+      }
+    }
+  }
+
+  close() {
+    clearInterval(this.cleanupInterval);
+    this.states.clear();
+  }
+}
+
+module.exports = new StateManager(config.STATE_TIMEOUT);
+
+// services/whatsappService.js
+const puppeteerService = require('./puppeteerService');
+const stateManager = require('./stateService');
+const logger = require('../utils/logger');
+
+/**
+ * Envia mensagem via WhatsApp
+ */
+async function sendMessage(phone, message) {
+  try {
+    await puppeteerService.sendMessage(phone, message);
+  } catch (error) {
+    logger.error('Erro no WhatsAppService:', error);
+    throw error;
+  }
+}
+
+module.exports = {
+  sendMessage,
+  stateManager
+};
+
+// services/faturaAnalysisService.js
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const logger = require('../utils/logger');
+const config = require('../config/config');
+const { safePath } = require('../utils/validators');
+
+const genAI = new GoogleGenerativeAI(config.GEMINI_API_KEY);
+
+const TMP_BASE_DIR = path.join(os.tmpdir(), 'igreen-tmp');
+
+const mimeTypes = {
+  '.pdf': 'application/pdf',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp'
+};
+
+/**
+ * Analisa fatura usando Gemini AI
+ * @param {string} filePath - Caminho seguro para arquivo
+ * @param {string} [prompt] - Prompt customizado
+ * @returns {Promise<string>} Análise textual
+ */
+async function analisarFaturaGemini(filePath, prompt = 'Analise esta fatura e extraia: emitente, CNPJ, data emissão, valor total, itens principais. Formate em JSON se possível.') {
+  try {
+    const safeFilePath = safePath(TMP_BASE_DIR, filePath);
+    if (!safeFilePath || !fs.existsSync(safeFilePath)) {
+      throw new Error('Arquivo inválido ou não encontrado');
+    }
+
+    const ext = path.extname(safeFilePath).toLowerCase();
+    const mimeType = mimeTypes[ext];
+    if (!mimeType) {
+      throw new Error('Formato de arquivo não suportado (apenas PDF e imagens)');
+    }
+
+    const fileData = fs.readFileSync(safeFilePath);
+    const base64Data = fileData.toString('base64');
+
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-exp" });
+    const result = await model.generateContent([
+      prompt,
+      {
+        inlineData: {
+          data: base64Data,
+          mimeType
+        }
+      }
+    ]);
+
+    const response = await result.response;
+    return response.text();
+  } catch (error) {
+    logger.error('Erro na análise Gemini:', error);
+    throw new Error(`Falha na análise: ${error.message}`);
+  }
+}
+
+module.exports = { analisarFaturaGemini };
+
+// controllers/webhookController.js
+const express = require('express');
+const router = express.Router();
+const fs = require('fs');
+const https = require('https');
+const path = require('path');
+const os = require('os');
+
+const logger = require('../utils/logger');
+const config = require('../config/config');
+const { sendMessage, stateManager } = require('../services/whatsappService');
+const { analisarFaturaGemini } = require('../services/faturaAnalysisService');
+const { validatePhone, sanitizeInput, validateURL } = require('../utils/validators');
+
+const TMP_DIR = path.join(os.tmpdir(), 'igreen-tmp');
+fs.mkdirSync(TMP_DIR, { recursive: true });
+
+const rateLimits = new Map();
+
+async function downloadMedia(url, phone) {
+  if (!validateURL(url)) throw new Error('URL inválida');
+
+  return new Promise((resolve, reject) => {
+    const safeName = phone.replace(/[^a-z0-9]/gi, '');
+    const filename = path.join(TMP_DIR, `fatura_${Date.now()}_${safeName}.${Date.now() % 1000}.jpg`);
+    const file = fs.createWriteStream(filename);
+
+    const req = https.get(url, (res) => {
+      if (res.statusCode !== 200) {
+        req.destroy();
+        return reject(new Error(`Falha download: ${res.statusCode}`));
+      }
+      res.pipe(file);
+    });
+
+    file.on('finish', () => {
+      file.close(resolve(filename));
+    });
+
+    req.on('error', reject);
+    file.on('error', reject);
+  });
+}
+
+/**
+ * Webhook para mensagens WhatsApp
+ * Body esperado: { phone, message, mediaUrl?, type? }
+ */
+router.post('/', async (req, res) => {
+  let tempFile = null;
+  try {
+    // Rate limiting simples (20 req/min por IP)
+    const ip = req.ip;
+    const now = Date.now();
+    let calls = rateLimits.get(ip) || [];
+    calls = calls.filter((t) => now - t < 60000);
+    if (calls.length >= 20) {
+      return res.status(429).json({ error: 'Limite de taxa excedido' });
+    }
+    calls.push(now);
+    rateLimits.set(ip, calls);
+
+    // Validação secret
+    if (config.WEBHOOK_SECRET && req.get('x-webhook-secret') !== config.WEBHOOK_SECRET) {
+      return res.status(401).json({ error: 'Não autorizado' });
+    }
+
+    const { phone, message = '', mediaUrl, type = 'text' } = req.body;
+    const cleanPhone = sanitizeInput(phone);
+
+    if (!validatePhone(cleanPhone)) {
+      logger.warn(`Telefone inválido: ${cleanPhone}`);
+      return res.json({ status: 'ok' });
+    }
+
+    const currentState = stateManager.get(cleanPhone);
+    let reply = 'Olá! Digite "fatura" para analisar uma fatura.';
+    let analysis = '';
+
+    if (message.toLowerCase().includes('fatura') || currentState?.waitingFatura) {
+      if (mediaUrl && (type === 'image' || type === 'document')) {
+        tempFile = await downloadMedia(mediaUrl, cleanPhone);
+        analysis = await analisarFaturaGemini(path.relative(TMP_DIR, tempFile));
+        reply = `Análise da fatura:\n\n${analysis}`;
+        stateManager.set(cleanPhone, { analyzed: true });
+      } else {
+        stateManager.set(cleanPhone, { waitingFatura: true });
+        reply = 'Envie a imagem ou PDF da fatura para análise.';
+      }
+    }
+
+    await sendMessage(cleanPhone, reply);
+    logger.info(`Resposta enviada para ${cleanPhone}`);
+
+    res.json({ status: 'ok', processed: true });
+  } catch (error) {
+    logger.error('Erro no webhook:', error);
+    if (tempFile) fs.unlink(tempFile, () => {});
+    res.status(500).json({ error: 'Erro no processamento' });
+  }
 });
+
+module.exports = router;
+
+// index.js (arquivo principal)
+const express = require('express');
+const cors = require('cors');
+const config = require('./config/config');
+const logger = require('./utils/logger');
+const webhookController = require('./controllers/webhookController');
+const errorHandler = require('./middleware/errorHandler');
+const puppeteerService = require('./services/puppeteerService');
+
+const app = express();
+
+app.use(cors({ origin: '*' }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+app.use('/webhook', webhookController);
+
+app.use(errorHandler);
+
+// Health check
+app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
+
+const server = app.listen(config.PORT, () => {
+  logger.info(`iGreen AutoFlow rodando na porta ${config.PORT}`);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+  logger.info('Fechando servidor...');
+  await puppeteerService.close();
+  server.close(() => {
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', async () => {
+  logger.info('SIGINT recebido');
+  await puppeteerService.close();
+  process.exit(0);
+});
+
+logger.info('Servidor iniciado com sucesso!');
