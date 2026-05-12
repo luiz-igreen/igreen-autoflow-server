@@ -154,111 +154,90 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
 }
 
 // ==========================================
-// MÓDULO 2: EXTRATOR RPA TOTAL (IGREEN -> EQUATORIAL -> IGREEN)
+// MÓDULO 2: EXTRATOR RPA TOTAL (ARQUITETURA DE DOIS MOTORES)
 // ==========================================
 async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, nascBanco = null, isAutomated = false) {
-    let browser;
+    let browserIgreen = null;
+    let browserEquatorial = null;
     let proxyUrlToUse = null;
     const caminhoFaturaLocal = path.join('/tmp', `fatura_${Date.now()}.pdf`);
     let cpf = cpfBanco;
     let nascimento = nascBanco;
     let ucExtraidaEquatorial = null; 
+    let pdfCapturado = false;
 
     try {
-        let puppeteerArgs = [...CHROME_ARGS];
-        
-        // 🛡️ O TÚNEL SECRETO + TRADUTOR DE PROXY (OBRIGATÓRIO PARA SITES HTTPS COMO A EQUATORIAL)
-        if (process.env.PROXY_IP && process.env.PROXY_PORT && process.env.PROXY_USER) {
-            console.log(`[RPA] 🛡️ Preparando Túnel Seguro com Proxy Chain...`);
-            
-            const safeUser = encodeURIComponent(process.env.PROXY_USER);
-            const safePass = encodeURIComponent(process.env.PROXY_PASS);
-            const rawProxyUrl = `http://${safeUser}:${safePass}@${process.env.PROXY_IP}:${process.env.PROXY_PORT}`;
-            
-            proxyUrlToUse = await proxyChain.anonymizeProxy(rawProxyUrl);
-            puppeteerArgs.push(`--proxy-server=${proxyUrlToUse}`);
-            
-            // Bypass para entrar na iGreen pela porta da frente rápida (NÃO usa proxy na iGreen)
-            puppeteerArgs.push(`--proxy-bypass-list=*.igreenenergy.com.br,<-loopback>`);
-            
-            console.log(`[RPA] 🔑 Passaporte VIP validado com Tradutor! Regra de Bypass para a iGreen ativada.`);
-        } else {
-            console.log(`[RPA] ⚠️ Nenhum proxy detetado no Render. A rodar com IP nativo dos EUA.`);
-        }
-
-        browser = await puppeteer.launch({ 
+        // ==============================================================
+        // MOTOR 1: IGREEN (Conexão Direta, Nativa e Rápida)
+        // ==============================================================
+        console.log(`[RPA] 🚀 Arrancando MOTOR 1 (iGreen - Sem Proxy)...`);
+        browserIgreen = await puppeteer.launch({ 
             headless: true, 
-            args: puppeteerArgs,
+            args: CHROME_ARGS,
             executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() 
         });
         
-        const page = await browser.newPage();
-        
-        await page.setExtraHTTPHeaders({ 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7' });
-        
-        // 👁️ O GOLPE DE MESTRE: Monitor virtual de 4000 pixels (Para ver colunas escondidas na iGreen)
-        await page.setViewport({ width: 4000, height: 1080 });
+        const pageIgreen = await browserIgreen.newPage();
+        await pageIgreen.setViewport({ width: 4000, height: 1080 }); // Visão de Águia
 
         if (!cpf || !nascimento) {
-            console.log(`[RPA] ETAPA 1: Buscando CPF e Nascimento de ${termoBuscaIgreen} na iGreen (Acesso Direto, Sem Proxy)...`);
+            console.log(`[RPA] ETAPA 1: Buscando dados de ${termoBuscaIgreen} na iGreen...`);
             
-            await page.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
-            try { await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Começar')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
+            await pageIgreen.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+            try { await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Começar')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
             
-            await page.waitForSelector('input[type="email"]');
-            await page.type('input[type="email"]', IGREEN_USER, { delay: 50 });
-            await page.type('input[type="password"]', IGREEN_PASS, { delay: 50 });
+            await pageIgreen.waitForSelector('input[type="email"]');
+            await pageIgreen.type('input[type="email"]', IGREEN_USER, { delay: 50 });
+            await pageIgreen.type('input[type="password"]', IGREEN_PASS, { delay: 50 });
             
-            await page.evaluate(() => {
+            await pageIgreen.evaluate(() => {
                 const botoes = Array.from(document.querySelectorAll('button'));
                 const btnEntrar = botoes.find(b => b.textContent.toLowerCase().includes('entrar') || b.textContent.toLowerCase().includes('acessar') || b.textContent.toLowerCase().includes('login'));
                 if (btnEntrar) btnEntrar.click();
             });
-            await page.keyboard.press('Enter');
+            await pageIgreen.keyboard.press('Enter');
             
             await Promise.race([
-                page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }),
+                pageIgreen.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }),
                 new Promise(resolve => setTimeout(resolve, 10000))
             ]);
 
-            if (page.url().includes('login')) throw new Error("O site da iGreen recusou o login. Verifique a senha.");
+            if (pageIgreen.url().includes('login')) throw new Error("O site da iGreen recusou o login. Verifique a senha.");
 
-            try { await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
+            try { await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
 
-            await page.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+            await pageIgreen.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
             await new Promise(r => setTimeout(r, 5000));
 
-            // 👁️ VISÃO DE ÁGUIA 1: Tira o zoom da página para garantir que todas as colunas cabem no ecrã
-            await page.evaluate(() => { document.body.style.zoom = "0.4"; });
+            await pageIgreen.evaluate(() => { document.body.style.zoom = "0.4"; });
             await new Promise(r => setTimeout(r, 1000));
 
             let searchInput;
             try {
-                searchInput = await page.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
+                searchInput = await pageIgreen.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
             } catch (erroSeletor) { throw new Error("A barra de Buscar não existe."); }
 
             await searchInput.click();
             await new Promise(r => setTimeout(r, 500));
             await searchInput.click({ clickCount: 3 });
-            await page.keyboard.press('Backspace');
+            await pageIgreen.keyboard.press('Backspace');
             await new Promise(r => setTimeout(r, 500));
             await searchInput.type(termoBuscaIgreen, { delay: 100 }); 
             await new Promise(r => setTimeout(r, 500));
-            await page.keyboard.press('Enter');
+            await pageIgreen.keyboard.press('Enter');
             
             try {
-                await page.waitForFunction((busca) => document.body.innerText.toLowerCase().includes(busca.toLowerCase()), { timeout: 12000 }, termoBuscaIgreen);
+                await pageIgreen.waitForFunction((busca) => document.body.innerText.toLowerCase().includes(busca.toLowerCase()), { timeout: 12000 }, termoBuscaIgreen);
             } catch (e) {}
             await new Promise(r => setTimeout(r, 2000));
 
-            // 👁️ VISÃO DE ÁGUIA 2: Força a tabela a rolar toda para a direita para revelar CPF e Nascimento escondidos
-            await page.evaluate(() => {
+            await pageIgreen.evaluate(() => {
                 const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller');
                 scrollers.forEach(s => s.scrollLeft = 9999);
             });
             await new Promise(r => setTimeout(r, 2000)); 
 
-            const dadosExtraidos = await page.evaluate((busca) => {
+            const dadosExtraidos = await pageIgreen.evaluate((busca) => {
                 const buscaLimpa = busca.toLowerCase().trim();
                 const possiveisLinhas = Array.from(document.querySelectorAll('tr, [role="row"], .MuiDataGrid-row'));
                 const linhasComDados = possiveisLinhas.filter(l => l.textContent.trim().length > 15 && !l.querySelector('th') && !l.getAttribute('role')?.includes('columnheader'));
@@ -297,247 +276,246 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             console.log(`[RPA] iGreen lida com sucesso! CPF: ${cpf} | Nasc: ${nascimento}`);
         }
 
-        // ===============================================
-        // INTERCEPTADOR DE DOWNLOAD GLOBAL
-        // ===============================================
-        const escutarPDF = async (response) => {
-            try {
-                const contentType = response.headers()['content-type'];
-                const contentDisposition = response.headers()['content-disposition'];
-                
-                if (response.status() === 200 && ((contentType && contentType.includes('application/pdf')) || 
-                    (contentDisposition && contentDisposition.includes('.pdf')))) {
-                    const buffer = await response.buffer();
-                    fs.writeFileSync(caminhoFaturaLocal, buffer);
-                    console.log(`[RPA] 🎯 ALVO ABATIDO! PDF interceptado e gravado com sucesso!`);
-                }
-            } catch(err) {}
-        };
-
-        page.on('response', escutarPDF);
-
-        browser.on('targetcreated', async (target) => {
-            if (target.type() === 'page') {
-                try {
-                    const novaAba = await target.page();
-                    novaAba.on('response', escutarPDF);
-                } catch (e) {}
-            }
-        });
-
-        console.log(`[RPA] ETAPA 2: Acessando Equatorial AL (Vestindo Disfarce Invisível)...`);
+        // ==============================================================
+        // MOTOR 2: EQUATORIAL (Sistema de Rotação Implacável)
+        // ==============================================================
+        console.log(`[RPA] 👻 Preparando MOTOR 2 (Equatorial com Múltiplos Disfarces)...`);
         
-        // 👁️ GOLPE DE MESTRE 1: Sistema de persistência (Tenta 3 vezes se o túnel oscilar)
-        let eqAcessado = false;
+        let baseProxyPass = process.env.PROXY_PASS || "";
+        // Limpa qualquer sessão antiga que tenha ficado presa na variável
+        baseProxyPass = baseProxyPass.replace(/_session-[a-zA-Z0-9]+/, '').replace(/_lifetime-[0-9]+[a-z]/, '');
+
         for (let tentativa = 1; tentativa <= 3; tentativa++) {
+            console.log(`\n[RPA] ---> Iniciando Salto para Equatorial (Tentativa ${tentativa}/3) <---`);
+            
             try {
-                await page.goto(EQUATORIAL_AL_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
-                await new Promise(r => setTimeout(r, 5000)); 
-                eqAcessado = true;
-                break; 
-            } catch (err) {
-                console.log(`[RPA] O túnel oscilou (Tentativa ${tentativa}/3). Erro: ${err.message}`);
-                await new Promise(r => setTimeout(r, 5000));
-            }
-        }
-        
-        if (!eqAcessado) {
-            throw new Error("O túnel do Proxy falhou repetidamente ao tentar abrir a Equatorial.");
-        }
-
-        console.log(`[RPA] Verificando se há lixo de outro cliente (Botão SAIR)...`);
-        try {
-            // 👁️ GOLPE DE MESTRE 2 (A SUA IDEIA GENIAL!): Clicar em SAIR se tiver memória de outro cliente
-            const clicouSair = await page.evaluate(() => {
-                const btnSair = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase().includes('SAIR') || el.textContent.toUpperCase().includes('X SAIR'));
-                if (btnSair) {
-                    btnSair.click();
-                    return true;
+                let puppeteerArgsEq = [...CHROME_ARGS];
+                
+                if (process.env.PROXY_IP && process.env.PROXY_USER) {
+                    // GERADOR DE SESSÃO DINÂMICA: Muda de IP a cada tentativa falhada!
+                    const dynamicSession = `_session-rpa${Date.now()}_lifetime-5m`;
+                    const passComSessao = baseProxyPass.includes('_country-br') ? `${baseProxyPass}${dynamicSession}` : `${baseProxyPass}_country-br${dynamicSession}`;
+                    
+                    const safeUser = encodeURIComponent(process.env.PROXY_USER);
+                    const safePass = encodeURIComponent(passComSessao);
+                    const rawProxyUrl = `http://${safeUser}:${safePass}@${process.env.PROXY_IP}:${process.env.PROXY_PORT}`;
+                    
+                    proxyUrlToUse = await proxyChain.anonymizeProxy(rawProxyUrl);
+                    puppeteerArgsEq.push(`--proxy-server=${proxyUrlToUse}`);
+                    console.log(`[RPA] 🛡️ Disfarce IP gerado para esta tentativa.`);
                 }
-                return false;
-            });
 
-            if (clicouSair) {
-                console.log(`[RPA] 🧹 Memória antiga encontrada! Botão SAIR clicado. Aguardando limpeza...`);
-                await new Promise(r => setTimeout(r, 8000)); 
+                browserEquatorial = await puppeteer.launch({ 
+                    headless: true, 
+                    args: puppeteerArgsEq,
+                    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() 
+                });
+                
+                const pageEq = await browserEquatorial.newPage();
+                await pageEq.setExtraHTTPHeaders({ 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7' });
+                
+                // Interceptador de PDF apenas para este Motor
+                const escutarPDF = async (response) => {
+                    try {
+                        const contentType = response.headers()['content-type'];
+                        const contentDisposition = response.headers()['content-disposition'];
+                        if (response.status() === 200 && ((contentType && contentType.includes('application/pdf')) || 
+                            (contentDisposition && contentDisposition.includes('.pdf')))) {
+                            const buffer = await response.buffer();
+                            fs.writeFileSync(caminhoFaturaLocal, buffer);
+                            console.log(`[RPA] 🎯 ALVO ABATIDO! PDF interceptado e gravado com sucesso!`);
+                        }
+                    } catch(err) {}
+                };
+
+                pageEq.on('response', escutarPDF);
+                browserEquatorial.on('targetcreated', async (target) => {
+                    if (target.type() === 'page') {
+                        try { const novaAba = await target.page(); novaAba.on('response', escutarPDF); } catch (e) {}
+                    }
+                });
+
+                console.log(`[RPA] Abrindo o portal da Equatorial...`);
+                await pageEq.goto(EQUATORIAL_AL_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
+                await new Promise(r => setTimeout(r, 5000)); 
+
+                console.log(`[RPA] Verificando se há lixo de outro cliente (Botão SAIR)...`);
+                const clicouSair = await pageEq.evaluate(() => {
+                    const btnSair = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase().includes('SAIR') || el.textContent.toUpperCase().includes('X SAIR'));
+                    if (btnSair) { btnSair.click(); return true; }
+                    return false;
+                });
+
+                if (clicouSair) {
+                    console.log(`[RPA] 🧹 Memória antiga encontrada! Botão SAIR clicado. Aguardando limpeza...`);
+                    await new Promise(r => setTimeout(r, 8000)); 
+                }
+
+                await pageEq.evaluate(() => {
+                    const check = document.querySelector('input[type="checkbox"]'); if(check) check.click();
+                    const btnEnviar = Array.from(document.querySelectorAll('button, div, span')).find(el => el.textContent.toUpperCase().includes('ENVIAR')); if(btnEnviar) btnEnviar.click();
+                    const btnFechar = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase() === 'FECHAR' || el.textContent.toUpperCase() === 'X'); if(btnFechar) btnFechar.click();
+                });
+                await new Promise(r => setTimeout(r, 2000));
+
+                console.log(`[RPA] Equatorial: Inserindo CPF para Login (Teclado Humano Nativo)...`);
+                
+                let encontrouCpf = await pageEq.evaluate(() => {
+                    const inputs = Array.from(document.querySelectorAll('input'));
+                    let cpfField = inputs.find(i => 
+                        (i.placeholder && i.placeholder.toLowerCase().includes('digite')) || 
+                        (i.placeholder && i.placeholder.toLowerCase().includes('cpf')) ||
+                        (i.previousElementSibling && i.previousElementSibling.textContent.toLowerCase().includes('cpf')) ||
+                        (i.id && i.id.toLowerCase().includes('cpf'))
+                    );
+                    if (cpfField) { cpfField.focus(); cpfField.click(); return true; }
+                    return false;
+                });
+
+                if (encontrouCpf) {
+                    await pageEq.keyboard.type(cpf, { delay: 100 }); 
+                    await new Promise(r => setTimeout(r, 1000));
+                    
+                    await pageEq.evaluate(() => {
+                        const btnEntrar = Array.from(document.querySelectorAll('button, a, div')).find(b => b.textContent.trim().toUpperCase() === 'ENTRAR' || b.textContent.trim().toUpperCase() === 'CONTINUAR');
+                        if (btnEntrar) btnEntrar.click();
+                    });
+                }
+                
+                await new Promise(r => setTimeout(r, 4000));
+
+                console.log(`[RPA] Equatorial: Verificando se exigiu 2ª etapa (Data de Nascimento)...`);
+                let encontrouNasc = await pageEq.evaluate(() => {
+                    const inputs = Array.from(document.querySelectorAll('input'));
+                    let nascField = inputs.find(i => 
+                        (i.placeholder && i.placeholder.toLowerCase().includes('nascimento')) || 
+                        (i.placeholder && i.placeholder.toLowerCase().includes('data')) ||
+                        (i.previousElementSibling && i.previousElementSibling.textContent.toLowerCase().includes('nascimento')) ||
+                        (i.id && (i.id.toLowerCase().includes('nasc') || i.id.toLowerCase().includes('data')))
+                    );
+                    if (nascField && nascField.offsetParent !== null) { nascField.focus(); nascField.click(); return true; }
+                    return false;
+                });
+
+                if (encontrouNasc) {
+                    await pageEq.keyboard.type(nascimento, { delay: 100 });
+                    await new Promise(r => setTimeout(r, 1000));
+                    
+                    await pageEq.evaluate(() => {
+                        const btnEntrar = Array.from(document.querySelectorAll('button, a, div')).find(b => b.textContent.trim().toUpperCase() === 'ENTRAR' || b.textContent.trim().toUpperCase() === 'CONTINUAR' || b.textContent.trim().toUpperCase() === 'ACESSAR');
+                        if (btnEntrar) btnEntrar.click();
+                    });
+                }
+
+                console.log(`[RPA] Equatorial: Aguardando painel carregar...`);
+                await new Promise(r => setTimeout(r, 10000));
+
+                console.log(`[RPA] Equatorial: Procurando a UC na tela para selecionar...`);
+                const ucIdentificada = await pageEq.evaluate(() => {
+                    const btnFechar = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase() === 'FECHAR' || el.textContent.toUpperCase() === 'X');
+                    if(btnFechar) btnFechar.click(); 
+
+                    const elementos = Array.from(document.querySelectorAll('span, div, p, a, li, option, td, h3, h4'));
+                    const elemUc = elementos.find(el => {
+                        const txt = el.textContent.trim();
+                        if (txt.includes('/') || txt.includes('-') || txt.includes('.')) return false;
+                        const soNumeros = txt.replace(/\D/g, '');
+                        return soNumeros.length >= 8 && soNumeros.length <= 15 && txt === soNumeros;
+                    });
+                    if (elemUc) { elemUc.click(); return elemUc.textContent.trim(); }
+                    return null;
+                });
+
+                if (ucIdentificada) {
+                    console.log(`[RPA] Equatorial: A UC [${ucIdentificada}] apareceu na tela e foi clicada!`);
+                    ucExtraidaEquatorial = ucIdentificada;
+                    await salvarNoBanco(cpf, phone, { UC_ATUALIZADA_EQUATORIAL: ucIdentificada, UC: ucIdentificada });
+                }
+                
+                await new Promise(r => setTimeout(r, 4000));
+
+                console.log(`[RPA] Equatorial: Acessando Segunda Via...`);
+                await pageEq.evaluate(() => {
+                    const btn2via = Array.from(document.querySelectorAll('span, a, div, button')).find(el => el.textContent.toLowerCase().includes('segunda via') || el.textContent.toLowerCase().includes('faturas'));
+                    if(btn2via) btn2via.click();
+                });
+                await new Promise(r => setTimeout(r, 5000));
+
+                console.log(`[RPA] Equatorial: Clicando na fatura mais recente (Ícone R$ ou Baixar)...`);
+                await pageEq.evaluate(() => {
+                    const btnBaixar = Array.from(document.querySelectorAll('span, td, div, button, a')).find(el => el.textContent.includes('R$') || el.textContent.toLowerCase().includes('baixar'));
+                    if(btnBaixar) btnBaixar.click();
+                });
+                await new Promise(r => setTimeout(r, 2000));
+
+                console.log(`[RPA] Equatorial: Solicitando VER FATURA...`);
+                await pageEq.evaluate(() => {
+                    const botoes = Array.from(document.querySelectorAll('button, a, span'));
+                    const btnVerFatura = botoes.find(el => {
+                        const txt = el.textContent.toUpperCase();
+                        return (txt.includes('VER FATURA') || txt.includes('IMPRIMIR') || txt.includes('DOWNLOAD')) && el.offsetParent !== null;
+                    });
+                    if(btnVerFatura) {
+                        if (btnVerFatura.tagName === 'A') btnVerFatura.removeAttribute('target');
+                        btnVerFatura.click();
+                    }
+                });
+                
+                console.log(`[RPA] Equatorial: Aguardando fatura na rede (10s)...`);
+                for (let i = 0; i < 10; i++) {
+                    await new Promise(r => setTimeout(r, 1000)); 
+                    if (fs.existsSync(caminhoFaturaLocal)) { pdfCapturado = true; break; }
+                }
+                
+                if (!pdfCapturado) {
+                    console.log(`[RPA] Ativando o Gerador de PDF de Tela...`);
+                    await new Promise(r => setTimeout(r, 5000)); 
+                    
+                    const pages = await browserEquatorial.pages();
+                    const paginaFatura = pages.find(p => p.url().includes('exibir-faturas')) || pages[pages.length - 1];
+                    
+                    const bodyText = await paginaFatura.evaluate(() => document.body.innerText.toLowerCase());
+                    if (bodyText.includes("access denied") || bodyText.includes("error 16") || bodyText.includes("imperva")) {
+                         throw new Error("Firewall da Equatorial bloqueou o acesso à fatura.");
+                    }
+                    
+                    if (!paginaFatura.url().includes('exibir-faturas') && !paginaFatura.url().includes('blob') && !paginaFatura.url().includes('.pdf')) {
+                         throw new Error("A tela não carregou a fatura corretamente.");
+                    }
+                    
+                    await paginaFatura.pdf({ path: caminhoFaturaLocal, format: 'A4', printBackground: true });
+                    if (fs.existsSync(caminhoFaturaLocal)) pdfCapturado = true;
+                }
+
+                if (!pdfCapturado) throw new Error("Falha ao gerar o PDF.");
+
+                if (fs.existsSync(caminhoFaturaLocal)) {
+                    const stats = fs.statSync(caminhoFaturaLocal);
+                    if (stats.size < 15000) {
+                        fs.unlinkSync(caminhoFaturaLocal);
+                        throw new Error("Fatura gerada é inválida ou foi bloqueada.");
+                    }
+                } else {
+                    throw new Error("Fatura não encontrada.");
+                }
+
+                // Se chegou até aqui sem dar erro, o PDF está na mão! Encerra o loop.
+                console.log(`[RPA] 🎉 Operação no Motor 2 concluída com sucesso! Destruindo túnel...`);
+                await browserEquatorial.close().catch(()=>{});
+                if (proxyUrlToUse) await proxyChain.closeAnonymizedProxy(proxyUrlToUse, true).catch(()=>{});
+                break; 
+
+            } catch (err) {
+                console.log(`[RPA] ⚠️ O túnel ou extração falhou na casa atual: ${err.message}`);
+                // Em caso de erro, destroi TUDO para garantir que a próxima tentativa use uma SESSÃO NOVA
+                if (browserEquatorial) await browserEquatorial.close().catch(()=>{});
+                if (proxyUrlToUse) await proxyChain.closeAnonymizedProxy(proxyUrlToUse, true).catch(()=>{});
+                await new Promise(r => setTimeout(r, 3000));
             }
+        } // FIM DO LOOP
 
-            await page.evaluate(() => {
-                const check = document.querySelector('input[type="checkbox"]'); if(check) check.click();
-                const btnEnviar = Array.from(document.querySelectorAll('button, div, span')).find(el => el.textContent.toUpperCase().includes('ENVIAR')); if(btnEnviar) btnEnviar.click();
-                const btnFechar = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase() === 'FECHAR' || el.textContent.toUpperCase() === 'X'); if(btnFechar) btnFechar.click();
-            });
-            await new Promise(r => setTimeout(r, 2000));
-        } catch(e) {}
-
-        console.log(`[RPA] Equatorial: Inserindo CPF para Login (Teclado Humano Nativo)...`);
-        
-        // ⌨️ GOLPE DE MESTRE 4: Teclado Virtual Humano Fantasma
-        let encontrouCpf = await page.evaluate(() => {
-            const inputs = Array.from(document.querySelectorAll('input'));
-            let cpfField = inputs.find(i => 
-                (i.placeholder && i.placeholder.toLowerCase().includes('digite')) || 
-                (i.placeholder && i.placeholder.toLowerCase().includes('cpf')) ||
-                (i.previousElementSibling && i.previousElementSibling.textContent.toLowerCase().includes('cpf')) ||
-                (i.id && i.id.toLowerCase().includes('cpf'))
-            );
-            if (cpfField) {
-                cpfField.focus(); 
-                cpfField.click();
-                return true;
-            }
-            return false;
-        });
-
-        if (encontrouCpf) {
-            await page.keyboard.type(cpf, { delay: 100 }); 
-            await new Promise(r => setTimeout(r, 1000));
-            
-            await page.evaluate(() => {
-                const btnEntrar = Array.from(document.querySelectorAll('button, a, div')).find(b => b.textContent.trim().toUpperCase() === 'ENTRAR' || b.textContent.trim().toUpperCase() === 'CONTINUAR');
-                if (btnEntrar) btnEntrar.click();
-            });
-        }
-        
-        await new Promise(r => setTimeout(r, 4000));
-
-        // 👁️ GOLPE DE MESTRE 3: Lidar com o Login em 2 Etapas (Data de Nascimento depois do CPF)
-        console.log(`[RPA] Equatorial: Verificando se exigiu 2ª etapa (Data de Nascimento)...`);
-        
-        let encontrouNasc = await page.evaluate(() => {
-            const inputs = Array.from(document.querySelectorAll('input'));
-            let nascField = inputs.find(i => 
-                (i.placeholder && i.placeholder.toLowerCase().includes('nascimento')) || 
-                (i.placeholder && i.placeholder.toLowerCase().includes('data')) ||
-                (i.previousElementSibling && i.previousElementSibling.textContent.toLowerCase().includes('nascimento')) ||
-                (i.id && (i.id.toLowerCase().includes('nasc') || i.id.toLowerCase().includes('data')))
-            );
-            
-            if (nascField && nascField.offsetParent !== null) { 
-                nascField.focus();
-                nascField.click();
-                return true;
-            }
-            return false;
-        });
-
-        if (encontrouNasc) {
-            await page.keyboard.type(nascimento, { delay: 100 });
-            await new Promise(r => setTimeout(r, 1000));
-            
-            await page.evaluate(() => {
-                const btnEntrar = Array.from(document.querySelectorAll('button, a, div')).find(b => b.textContent.trim().toUpperCase() === 'ENTRAR' || b.textContent.trim().toUpperCase() === 'CONTINUAR' || b.textContent.trim().toUpperCase() === 'ACESSAR');
-                if (btnEntrar) btnEntrar.click();
-            });
-        }
-
-        console.log(`[RPA] Equatorial: Aguardando painel carregar...`);
-        await new Promise(r => setTimeout(r, 10000));
-
-        console.log(`[RPA] Equatorial: Procurando a UC na tela para selecionar...`);
-        const ucIdentificada = await page.evaluate(() => {
-            const btnFechar = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase() === 'FECHAR' || el.textContent.toUpperCase() === 'X');
-            if(btnFechar) btnFechar.click(); 
-
-            const elementos = Array.from(document.querySelectorAll('span, div, p, a, li, option, td, h3, h4'));
-            const elemUc = elementos.find(el => {
-                const txt = el.textContent.trim();
-                if (txt.includes('/') || txt.includes('-') || txt.includes('.')) return false;
-                const soNumeros = txt.replace(/\D/g, '');
-                return soNumeros.length >= 8 && soNumeros.length <= 15 && txt === soNumeros;
-            });
-
-            if (elemUc) {
-                const numeroUc = elemUc.textContent.trim();
-                elemUc.click();
-                return numeroUc; 
-            }
-            return null;
-        });
-
-        if (ucIdentificada) {
-            console.log(`[RPA] Equatorial: A UC [${ucIdentificada}] apareceu na tela e foi clicada!`);
-            ucExtraidaEquatorial = ucIdentificada;
-            await salvarNoBanco(cpf, phone, { UC_ATUALIZADA_EQUATORIAL: ucIdentificada, UC: ucIdentificada });
-        } else {
-            console.log(`[RPA] Equatorial: Nenhuma lista de UCs encontrada. O cliente deve ter apenas 1 imóvel e entrou direto.`);
-        }
-        
-        await new Promise(r => setTimeout(r, 4000));
-
-        console.log(`[RPA] Equatorial: Acessando Segunda Via...`);
-        await page.evaluate(() => {
-            const btn2via = Array.from(document.querySelectorAll('span, a, div, button')).find(el => el.textContent.toLowerCase().includes('segunda via') || el.textContent.toLowerCase().includes('faturas'));
-            if(btn2via) btn2via.click();
-        });
-        await new Promise(r => setTimeout(r, 5000));
-
-        console.log(`[RPA] Equatorial: Clicando na fatura mais recente (Ícone R$ ou Baixar)...`);
-        await page.evaluate(() => {
-            const btnBaixar = Array.from(document.querySelectorAll('span, td, div, button, a')).find(el => el.textContent.includes('R$') || el.textContent.toLowerCase().includes('baixar'));
-            if(btnBaixar) btnBaixar.click();
-        });
-        await new Promise(r => setTimeout(r, 2000));
-
-        console.log(`[RPA] Equatorial: Solicitando VER FATURA...`);
-        await page.evaluate(() => {
-            const botoes = Array.from(document.querySelectorAll('button, a, span'));
-            const btnVerFatura = botoes.find(el => {
-                const txt = el.textContent.toUpperCase();
-                return (txt.includes('VER FATURA') || txt.includes('IMPRIMIR') || txt.includes('DOWNLOAD')) && el.offsetParent !== null;
-            });
-            if(btnVerFatura) {
-                if (btnVerFatura.tagName === 'A') btnVerFatura.removeAttribute('target');
-                btnVerFatura.click();
-            }
-        });
-        
-        console.log(`[RPA] Equatorial: Aguardando fatura na rede (10s)...`);
-        let pdfCapturado = false;
-        
-        for (let i = 0; i < 10; i++) {
-            await new Promise(r => setTimeout(r, 1000)); 
-            if (fs.existsSync(caminhoFaturaLocal)) {
-                pdfCapturado = true;
-                console.log(`[RPA] Sucesso! PDF interceptado na rede.`);
-                break;
-            }
-        }
-        
         if (!pdfCapturado) {
-            console.log(`[RPA] O arquivo não foi baixado. Ativando o Gerador de PDF de Tela...`);
-            await new Promise(r => setTimeout(r, 5000)); 
-            
-            const pages = await browser.pages();
-            const paginaFatura = pages.find(p => p.url().includes('exibir-faturas')) || pages[pages.length - 1];
-            
-            const bodyText = await paginaFatura.evaluate(() => document.body.innerText.toLowerCase());
-            if (bodyText.includes("access denied") || bodyText.includes("error 16") || bodyText.includes("imperva")) {
-                 throw new Error("⚠️ PAUSA DE SEGURANÇA: O Firewall da Equatorial bloqueou o acesso à fatura. Operação abortada.");
-            }
-            
-            if (!paginaFatura.url().includes('exibir-faturas') && !paginaFatura.url().includes('blob') && !paginaFatura.url().includes('.pdf')) {
-                 throw new Error("⚠️ PAUSA DE SEGURANÇA: A tela não carregou a fatura corretamente. Operação abortada para proteger a iGreen.");
-            }
-            
-            await paginaFatura.pdf({ path: caminhoFaturaLocal, format: 'A4', printBackground: true });
-            
-            if (fs.existsSync(caminhoFaturaLocal)) {
-                pdfCapturado = true;
-                console.log(`[RPA] 🖨️ Sucesso! A tela aberta foi perfeitamente convertida em PDF.`);
-            }
-        }
-
-        if (!pdfCapturado) throw new Error("Falha ao gerar o PDF. O site não baixou o ficheiro nem conseguiu renderizar a tela.");
-
-        if (fs.existsSync(caminhoFaturaLocal)) {
-            const stats = fs.statSync(caminhoFaturaLocal);
-            if (stats.size < 15000) {
-                fs.unlinkSync(caminhoFaturaLocal);
-                throw new Error("⚠️ PAUSA DE SEGURANÇA: A fatura gerada é inválida ou foi bloqueada pela Equatorial. Operação abortada para não enviar erro à iGreen.");
-            }
-        } else {
-            throw new Error("⚠️ PAUSA DE SEGURANÇA: Fatura não encontrada. Operação abortada.");
+            throw new Error("O túnel do Proxy falhou repetidamente em várias casas no Brasil. A Equatorial pode estar em manutenção.");
         }
 
         try {
@@ -545,51 +523,45 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             fs.copyFileSync(caminhoFaturaLocal, pdfProvaPath);
             console.log(`\n======================================================`);
             console.log(`[RPA] 📄 PROVA DO PDF: O robô guardou uma cópia da fatura.`);
-            console.log(`[RPA] Veja com os seus próprios olhos acessando o link abaixo:`);
             console.log(`👉 https://igreen-autoflow-server-2.onrender.com/ultima-fatura 👈`);
             console.log(`======================================================\n`);
         } catch (e) {}
 
-        console.log(`[RPA] ETAPA 3: Injetando a Fatura na iGreen...`);
-        
-        await page.bringToFront();
-        
-        console.log(`[RPA] Retornando diretamente ao Mapa de Clientes da iGreen...`);
-        await page.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 60000 });
-        await new Promise(r => setTimeout(r, 6000));
+        // ==============================================================
+        // RETORNO AO MOTOR 1 (IGREEN) PARA FINALIZAR O SERVIÇO
+        // ==============================================================
+        console.log(`[RPA] ⚡ Retornando ao MOTOR 1 (iGreen) para injetar o ficheiro...`);
+        const pages = await browserIgreen.pages();
+        const pageIgreenFinal = pages[pages.length - 1];
+        await pageIgreenFinal.bringToFront();
 
-        // 👁️ VISÃO DE ÁGUIA 3: Tira o zoom de novo para caber os pontinhos na tela
-        await page.evaluate(() => { document.body.style.zoom = "0.4"; });
-        await new Promise(r => setTimeout(r, 1000));
-
-        try { await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não') || el.textContent.includes('Fechar')); if(btn) btn.click(); }); } catch(e){}
+        try { await pageIgreenFinal.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não') || el.textContent.includes('Fechar')); if(btn) btn.click(); }); } catch(e){}
 
         console.log(`[RPA] Procurando a barra de Buscar nas Devolutivas...`);
-        let searchDevolutiva = await page.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
+        let searchDevolutiva = await pageIgreenFinal.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
         
         await searchDevolutiva.click();
         await new Promise(r => setTimeout(r, 500));
         await searchDevolutiva.click({ clickCount: 3 });
-        await page.keyboard.press('Backspace');
+        await pageIgreenFinal.keyboard.press('Backspace');
         await new Promise(r => setTimeout(r, 500));
         
         await searchDevolutiva.type(cpf, { delay: 100 });
         await new Promise(r => setTimeout(r, 500));
-        await page.keyboard.press('Enter');
+        await pageIgreenFinal.keyboard.press('Enter');
         
         console.log(`[RPA] ENTER pressionado na Devolutiva. Aguardando a tabela filtrar...`);
         
-        try { await page.waitForFunction((busca) => document.body.innerText.includes(busca), { timeout: 10000 }, cpf); } catch (e) {}
+        try { await pageIgreenFinal.waitForFunction((busca) => document.body.innerText.includes(busca), { timeout: 10000 }, cpf); } catch (e) {}
         await new Promise(r => setTimeout(r, 2000));
 
-        // 👁️ VISÃO DE ÁGUIA 4: Garante que a ação (...) está visível na Devolutiva
-        await page.evaluate(() => {
+        await pageIgreenFinal.evaluate(() => {
             const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller');
             scrollers.forEach(s => s.scrollLeft = 9999);
         });
         await new Promise(r => setTimeout(r, 1500));
 
-        await page.evaluate((cpfBusca) => { 
+        await pageIgreenFinal.evaluate((cpfBusca) => { 
             const linhas = Array.from(document.querySelectorAll('tr, [role="row"], div[class*="MuiDataGrid-row"]')); 
             const linhaExata = linhas.find(row => row.textContent.replace(/\D/g, '').includes(cpfBusca)); 
             if(linhaExata) {
@@ -599,13 +571,13 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         }, cpf);
         await new Promise(r => setTimeout(r, 2000));
 
-        await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('span, li, div')).find(el => el.textContent.includes('Devolutivas')); if(btn) btn.click(); });
+        await pageIgreenFinal.evaluate(() => { const btn = Array.from(document.querySelectorAll('span, li, div')).find(el => el.textContent.includes('Devolutivas')); if(btn) btn.click(); });
         await new Promise(r => setTimeout(r, 3000));
 
         console.log(`[RPA] Navegando pelos popups de Devolutiva...`);
         
         for (let clique = 0; clique < 3; clique++) {
-            await page.evaluate(() => { 
+            await pageIgreenFinal.evaluate(() => { 
                 const botoes = Array.from(document.querySelectorAll('button, span, a, div'));
                 const botoesAcao = botoes.filter(el => el.textContent.trim() === 'Realizar ação' || el.textContent.includes('Realizar ação'));
                 const btn = botoesAcao.filter(b => b.offsetParent !== null).pop() || botoesAcao[botoesAcao.length - 1]; 
@@ -619,13 +591,13 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
         console.log(`[RPA] INJEÇÃO DIRETA NO CÓDIGO HTML...`);
         
-        const inputUploads = await page.$$('input[type="file"]');
+        const inputUploads = await pageIgreenFinal.$$('input[type="file"]');
         if (inputUploads.length > 0) {
             console.log(`[RPA] ${inputUploads.length} inputs encontrados. Injetando PDF...`);
             for (let input of inputUploads) {
                 try {
                     await input.uploadFile(caminhoFaturaLocal);
-                    await page.evaluate((el) => el.dispatchEvent(new Event('change', { bubbles: true })), input);
+                    await pageIgreenFinal.evaluate((el) => el.dispatchEvent(new Event('change', { bubbles: true })), input);
                 } catch(e){}
             }
             console.log(`[RPA] PDF Injetado com SUCESSO ABSOLUTO sem abrir janelas!`);
@@ -636,23 +608,24 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         await new Promise(r => setTimeout(r, 3000));
 
         console.log(`[RPA] Salvando a devolutiva na iGreen...`);
-        await page.evaluate(() => { 
+        await pageIgreenFinal.evaluate(() => { 
             const btnSalvar = Array.from(document.querySelectorAll('button')).find(el => el.textContent.toUpperCase().includes('ENVIAR') || el.textContent.toUpperCase().includes('SALVAR') || el.textContent.toUpperCase().includes('CONCLUIR')); 
             if (btnSalvar) btnSalvar.click(); 
         });
         await new Promise(r => setTimeout(r, 5000)); 
         
-        await browser.close();
-        if (proxyUrlToUse) await proxyChain.closeAnonymizedProxy(proxyUrlToUse, true).catch(()=>{});
-        if(fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
+        // Destruição final do Motor 1
+        if (browserIgreen) await browserIgreen.close().catch(()=>{});
+        if (fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
 
         if(!isAutomated) await enviarMensagem(phone, TEXTOS.T_RESGATE_SUCESSO);
         
     } catch (e) { 
         console.error("Erro RPA Devolutivas:", e.message);
-        if(browser) await browser.close().catch(()=>{}); 
+        if (browserIgreen) await browserIgreen.close().catch(()=>{}); 
+        if (browserEquatorial) await browserEquatorial.close().catch(()=>{}); 
         if (proxyUrlToUse) await proxyChain.closeAnonymizedProxy(proxyUrlToUse, true).catch(()=>{});
-        if(fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
+        if (fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
         if(!isAutomated) await enviarMensagem(phone, TEXTOS.T_RESGATE_FAIL);
     }
 }
@@ -891,4 +864,4 @@ app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindad
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});
+});    
