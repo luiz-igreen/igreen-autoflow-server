@@ -322,10 +322,30 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         });
 
         console.log(`[RPA] ETAPA 2: Acessando Equatorial AL (Vestindo Disfarce Invisível)...`);
-        await page.goto(EQUATORIAL_AL_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+        
+        // 👁️ GOLPE DE MESTRE 1: Sistema de persistência (Tenta 3 vezes se o túnel oscilar)
+        let eqAcessado = false;
+        for (let tentativa = 1; tentativa <= 3; tentativa++) {
+            try {
+                await page.goto(EQUATORIAL_AL_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+                eqAcessado = true;
+                break; // Se deu certo, sai do loop
+            } catch (err) {
+                console.log(`[RPA] O túnel oscilou (Tentativa ${tentativa}/3). Reconectando...`);
+                await new Promise(r => setTimeout(r, 5000));
+            }
+        }
+        
+        if (!eqAcessado) {
+            throw new Error("O túnel do Proxy falhou repetidamente ao tentar abrir a Equatorial.");
+        }
 
         try {
             await page.evaluate(() => {
+                // 👁️ GOLPE DE MESTRE 2 (A SUA IDEIA GENIAL!): Clicar em SAIR se tiver memória de outro cliente
+                const btnSair = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase().includes('SAIR'));
+                if (btnSair) btnSair.click();
+                
                 const check = document.querySelector('input[type="checkbox"]'); if(check) check.click();
                 const btnEnviar = Array.from(document.querySelectorAll('button, div, span')).find(el => el.textContent.toUpperCase().includes('ENVIAR')); if(btnEnviar) btnEnviar.click();
                 const btnFechar = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase().includes('FECHAR')); if(btnFechar) btnFechar.click();
