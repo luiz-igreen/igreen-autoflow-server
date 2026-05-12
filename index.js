@@ -133,19 +133,39 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
     let ucExtraidaEquatorial = null; 
 
     try {
+        let puppeteerArgs = [...CHROME_ARGS];
+        
+        // 🛡️ O TÚNEL SECRETO (PROXY) - Carregado a partir do Render
+        if (process.env.PROXY_IP && process.env.PROXY_PORT) {
+            console.log(`[RPA] 🛡️ Ativando Túnel de Proxy Residencial (${process.env.PROXY_IP})...`);
+            puppeteerArgs.push(`--proxy-server=http://${process.env.PROXY_IP}:${process.env.PROXY_PORT}`);
+        } else {
+            console.log(`[RPA] ⚠️ Nenhum proxy detetado no Render. A rodar com IP nativo dos EUA.`);
+        }
+
         browser = await puppeteer.launch({ 
             headless: true, 
-            args: CHROME_ARGS,
+            args: puppeteerArgs,
             executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() 
         });
+        
         const page = await browser.newPage();
+
+        // 🔑 AUTENTICAÇÃO DO PROXY (Passaporte Alagoano)
+        if (process.env.PROXY_USER && process.env.PROXY_PASS) {
+            await page.authenticate({
+                username: process.env.PROXY_USER,
+                password: process.env.PROXY_PASS
+            });
+            console.log(`[RPA] 🔑 Passaporte VIP validado com sucesso! O robô agora está em Maceió, AL.`);
+        }
         
         // Anti-Detecção Extra
         await page.setExtraHTTPHeaders({
             'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7'
         });
         
-        await page.setViewport({ width: 5000, height: 1080 });
+        await page.setViewport({ width: 1920, height: 1080 });
 
         if (!cpf || !nascimento) {
             console.log(`[RPA] ETAPA 1: Buscando CPF e Nascimento de ${termoBuscaIgreen} na iGreen...`);
@@ -364,8 +384,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             await new Promise(r => setTimeout(r, 5000)); 
             
             const pages = await browser.pages();
-            
-            // O TOQUE DO MESTRE: Procura a aba exata do seu print (exibir-faturas)
             const paginaFatura = pages.find(p => p.url().includes('exibir-faturas')) || pages[pages.length - 1];
             
             // TRAVA DE SEGURANÇA 1: Verifica se fomos bloqueados pelo Imperva antes de gerar o PDF
@@ -729,7 +747,7 @@ async function validateBrowser() {
         console.log("⏳ Iniciando Health Check do Navegador (Modo Docker)...");
         const browser = await puppeteer.launch({
             headless: true,
-            args: CHROME_ARGS,
+            args: CHROME_ARGS, // O Health Check roda sem proxy para poupar os seus dados!
             executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath()
         });
         await browser.close();
