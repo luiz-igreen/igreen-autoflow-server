@@ -283,7 +283,10 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         
         let baseProxyPass = process.env.PROXY_PASS || "";
         // Limpa qualquer sessão antiga que tenha ficado presa na variável
-        baseProxyPass = baseProxyPass.replace(/_session-[a-zA-Z0-9]+/, '').replace(/_lifetime-[0-9]+[a-z]/, '');
+        baseProxyPass = baseProxyPass.split('_session-')[0].split('_lifetime-')[0];
+        if (!baseProxyPass.includes('_country-br')) {
+            baseProxyPass += '_country-br';
+        }
 
         for (let tentativa = 1; tentativa <= 3; tentativa++) {
             console.log(`\n[RPA] ---> Iniciando Salto para Equatorial (Tentativa ${tentativa}/3) <---`);
@@ -293,8 +296,8 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 
                 if (process.env.PROXY_IP && process.env.PROXY_USER) {
                     // GERADOR DE SESSÃO DINÂMICA: Muda de IP a cada tentativa falhada!
-                    const dynamicSession = `_session-rpa${Date.now()}_lifetime-5m`;
-                    const passComSessao = baseProxyPass.includes('_country-br') ? `${baseProxyPass}${dynamicSession}` : `${baseProxyPass}_country-br${dynamicSession}`;
+                    const sessionID = Math.floor(Math.random() * 100000000);
+                    const passComSessao = `${baseProxyPass}_session-rpa${sessionID}`;
                     
                     const safeUser = encodeURIComponent(process.env.PROXY_USER);
                     const safePass = encodeURIComponent(passComSessao);
@@ -302,6 +305,10 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     
                     proxyUrlToUse = await proxyChain.anonymizeProxy(rawProxyUrl);
                     puppeteerArgsEq.push(`--proxy-server=${proxyUrlToUse}`);
+                    
+                    // CORREÇÃO CRÍTICA AQUI: Apenas o bypass normal. A palavra "<-loopback>" foi REMOVIDA para não quebrar o proxy local.
+                    puppeteerArgsEq.push(`--proxy-bypass-list=*.igreenenergy.com.br`);
+                    
                     console.log(`[RPA] 🛡️ Disfarce IP gerado para esta tentativa.`);
                 }
 
@@ -864,4 +871,4 @@ app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindad
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});    
+});
