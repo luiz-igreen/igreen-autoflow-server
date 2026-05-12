@@ -367,47 +367,41 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             await new Promise(r => setTimeout(r, 2000));
         } catch(e) {}
 
-        console.log(`[RPA] Equatorial: Inserindo CPF (e Nascimento se existir) para Login...`);
-        await page.evaluate((cpfBusca, nascBusca) => {
+        console.log(`[RPA] Equatorial: Inserindo CPF para Login (Teclado Humano Nativo)...`);
+        
+        let encontrouCpf = await page.evaluate(() => {
             const inputs = Array.from(document.querySelectorAll('input'));
-            
-            // Procura o campo de CPF (mesmo que diga apenas "Digite aqui")
             let cpfField = inputs.find(i => 
                 (i.placeholder && i.placeholder.toLowerCase().includes('digite')) || 
                 (i.placeholder && i.placeholder.toLowerCase().includes('cpf')) ||
                 (i.previousElementSibling && i.previousElementSibling.textContent.toLowerCase().includes('cpf')) ||
                 (i.id && i.id.toLowerCase().includes('cpf'))
             );
-            
-            // Procura o campo de Nascimento (se estiver logo na primeira tela)
-            let nascField = inputs.find(i => 
-                (i.placeholder && i.placeholder.toLowerCase().includes('nascimento')) || 
-                (i.placeholder && i.placeholder.toLowerCase().includes('data')) ||
-                (i.previousElementSibling && i.previousElementSibling.textContent.toLowerCase().includes('nascimento')) ||
-                (i.id && (i.id.toLowerCase().includes('nasc') || i.id.toLowerCase().includes('data')))
-            );
-
-            // Injeta o valor e dispara o evento de "teclado" para o site reconhecer a digitação
             if (cpfField) {
-                cpfField.value = cpfBusca;
-                cpfField.dispatchEvent(new Event('input', { bubbles: true }));
-                cpfField.dispatchEvent(new Event('change', { bubbles: true }));
+                cpfField.focus(); // Foca na caixa para o teclado virtual entrar em ação
+                cpfField.click();
+                return true;
             }
-            if (nascField) {
-                nascField.value = nascBusca;
-                nascField.dispatchEvent(new Event('input', { bubbles: true }));
-                nascField.dispatchEvent(new Event('change', { bubbles: true }));
-            }
+            return false;
+        });
 
-            const btnEntrar = Array.from(document.querySelectorAll('button, a, div')).find(b => b.textContent.trim().toUpperCase() === 'ENTRAR' || b.textContent.trim().toUpperCase() === 'CONTINUAR');
-            if (btnEntrar) btnEntrar.click();
-        }, cpf, nascimento);
+        if (encontrouCpf) {
+            // O robô "tecla" o CPF como uma pessoa (100ms de pausa entre cada número)
+            await page.keyboard.type(cpf, { delay: 100 }); 
+            await new Promise(r => setTimeout(r, 1000));
+            
+            await page.evaluate(() => {
+                const btnEntrar = Array.from(document.querySelectorAll('button, a, div')).find(b => b.textContent.trim().toUpperCase() === 'ENTRAR' || b.textContent.trim().toUpperCase() === 'CONTINUAR');
+                if (btnEntrar) btnEntrar.click();
+            });
+        }
         
         await new Promise(r => setTimeout(r, 4000));
 
         // 👁️ GOLPE DE MESTRE 3: Lidar com o Login em 2 Etapas (Data de Nascimento depois do CPF)
         console.log(`[RPA] Equatorial: Verificando se exigiu 2ª etapa (Data de Nascimento)...`);
-        await page.evaluate((nascBusca) => {
+        
+        let encontrouNasc = await page.evaluate(() => {
             const inputs = Array.from(document.querySelectorAll('input'));
             let nascField = inputs.find(i => 
                 (i.placeholder && i.placeholder.toLowerCase().includes('nascimento')) || 
@@ -416,16 +410,24 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 (i.id && (i.id.toLowerCase().includes('nasc') || i.id.toLowerCase().includes('data')))
             );
             
-            // Se encontrou o campo de data e ele está visível na tela
             if (nascField && nascField.offsetParent !== null) { 
-                nascField.value = nascBusca;
-                nascField.dispatchEvent(new Event('input', { bubbles: true }));
-                nascField.dispatchEvent(new Event('change', { bubbles: true }));
-                
+                nascField.focus();
+                nascField.click();
+                return true;
+            }
+            return false;
+        });
+
+        if (encontrouNasc) {
+            // Tecla a Data de Nascimento magicamente como humano
+            await page.keyboard.type(nascimento, { delay: 100 });
+            await new Promise(r => setTimeout(r, 1000));
+            
+            await page.evaluate(() => {
                 const btnEntrar = Array.from(document.querySelectorAll('button, a, div')).find(b => b.textContent.trim().toUpperCase() === 'ENTRAR' || b.textContent.trim().toUpperCase() === 'CONTINUAR' || b.textContent.trim().toUpperCase() === 'ACESSAR');
                 if (btnEntrar) btnEntrar.click();
-            }
-        }, nascimento);
+            });
+        }
 
         console.log(`[RPA] Equatorial: Aguardando painel carregar...`);
         await new Promise(r => setTimeout(r, 10000));
@@ -887,4 +889,4 @@ app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindad
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});
+});    
