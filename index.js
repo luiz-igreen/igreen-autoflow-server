@@ -172,10 +172,13 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             console.log(`[RPA] 🛡️ Preparando Túnel Seguro com Proxy Chain...`);
             const rawProxyUrl = `http://${process.env.PROXY_USER}:${process.env.PROXY_PASS}@${process.env.PROXY_IP}:${process.env.PROXY_PORT}`;
             
-            // O tradutor converte a senha num túnel limpo para o Chrome não dar erro de Auth Unsupported
             proxyUrlToUse = await proxyChain.anonymizeProxy(rawProxyUrl);
             puppeteerArgs.push(`--proxy-server=${proxyUrlToUse}`);
-            console.log(`[RPA] 🔑 Passaporte VIP validado! Destino: Maceió, AL.`);
+            
+            // O GOLPE DE MESTRE: Não usar o Proxy para entrar na iGreen (Nossa casa não precisa de disfarce!)
+            puppeteerArgs.push(`--proxy-bypass-list=*.igreenenergy.com.br`);
+            
+            console.log(`[RPA] 🔑 Passaporte VIP validado! Regra de Bypass para a iGreen ativada.`);
         } else {
             console.log(`[RPA] ⚠️ Nenhum proxy detetado no Render. A rodar com IP nativo dos EUA.`);
         }
@@ -192,7 +195,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         await page.setViewport({ width: 1920, height: 1080 });
 
         if (!cpf || !nascimento) {
-            console.log(`[RPA] ETAPA 1: Buscando CPF e Nascimento de ${termoBuscaIgreen} na iGreen...`);
+            console.log(`[RPA] ETAPA 1: Buscando CPF e Nascimento de ${termoBuscaIgreen} na iGreen (Acesso Direto, Sem Proxy)...`);
             
             await page.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
             try { await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Começar')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
@@ -306,7 +309,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             }
         });
 
-        console.log(`[RPA] ETAPA 2: Acessando Equatorial AL (Invisível ao Imperva)...`);
+        console.log(`[RPA] ETAPA 2: Acessando Equatorial AL (Vestindo Disfarce Invisível)...`);
         await page.goto(EQUATORIAL_AL_URL, { waitUntil: 'networkidle2', timeout: 60000 });
 
         try {
@@ -778,4 +781,4 @@ app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindad
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});
+});    
