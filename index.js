@@ -79,8 +79,7 @@ const CHROME_ARGS = [
     "--disable-dev-shm-usage", 
     "--disable-gpu", 
     "--no-zygote", 
-    "--disable-blink-features=AutomationControlled",
-    "--window-size=1920,1080"
+    "--disable-blink-features=AutomationControlled"
 ];
 
 // ==========================================
@@ -175,7 +174,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             proxyUrlToUse = await proxyChain.anonymizeProxy(rawProxyUrl);
             puppeteerArgs.push(`--proxy-server=${proxyUrlToUse}`);
             
-            // O GOLPE DE MESTRE: Não usar o Proxy para entrar na iGreen (Nossa casa não precisa de disfarce!)
+            // Bypass para entrar na iGreen pela porta da frente rápida
             puppeteerArgs.push(`--proxy-bypass-list=*.igreenenergy.com.br`);
             
             console.log(`[RPA] 🔑 Passaporte VIP validado! Regra de Bypass para a iGreen ativada.`);
@@ -192,7 +191,9 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         const page = await browser.newPage();
         
         await page.setExtraHTTPHeaders({ 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7' });
-        await page.setViewport({ width: 1920, height: 1080 });
+        
+        // 👁️ O GOLPE DE MESTRE: Monitor virtual de 4000 pixels (Para ver colunas escondidas)
+        await page.setViewport({ width: 4000, height: 1080 });
 
         if (!cpf || !nascimento) {
             console.log(`[RPA] ETAPA 1: Buscando CPF e Nascimento de ${termoBuscaIgreen} na iGreen (Acesso Direto, Sem Proxy)...`);
@@ -223,6 +224,10 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             await page.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
             await new Promise(r => setTimeout(r, 5000));
 
+            // 👁️ VISÃO DE ÁGUIA 1: Tira o zoom da página para garantir que todas as colunas cabem no ecrã
+            await page.evaluate(() => { document.body.style.zoom = "0.4"; });
+            await new Promise(r => setTimeout(r, 1000));
+
             let searchInput;
             try {
                 searchInput = await page.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
@@ -241,6 +246,13 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 await page.waitForFunction((busca) => document.body.innerText.toLowerCase().includes(busca.toLowerCase()), { timeout: 12000 }, termoBuscaIgreen);
             } catch (e) {}
             await new Promise(r => setTimeout(r, 2000));
+
+            // 👁️ VISÃO DE ÁGUIA 2: Força a tabela a rolar toda para a direita para revelar CPF e Nascimento escondidos
+            await page.evaluate(() => {
+                const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller');
+                scrollers.forEach(s => s.scrollLeft = 9999);
+            });
+            await new Promise(r => setTimeout(r, 2000)); // Espera a tabela processar o scroll e renderizar o CPF
 
             const dadosExtraidos = await page.evaluate((busca) => {
                 const buscaLimpa = busca.toLowerCase().trim();
@@ -459,6 +471,10 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         await page.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 60000 });
         await new Promise(r => setTimeout(r, 6000));
 
+        // 👁️ VISÃO DE ÁGUIA 3: Tira o zoom de novo para caber os pontinhos na tela
+        await page.evaluate(() => { document.body.style.zoom = "0.4"; });
+        await new Promise(r => setTimeout(r, 1000));
+
         try { await page.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não') || el.textContent.includes('Fechar')); if(btn) btn.click(); }); } catch(e){}
 
         console.log(`[RPA] Procurando a barra de Buscar nas Devolutivas...`);
@@ -478,6 +494,13 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         
         try { await page.waitForFunction((busca) => document.body.innerText.includes(busca), { timeout: 10000 }, cpf); } catch (e) {}
         await new Promise(r => setTimeout(r, 2000));
+
+        // 👁️ VISÃO DE ÁGUIA 4: Garante que a ação (...) está visível na Devolutiva
+        await page.evaluate(() => {
+            const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller');
+            scrollers.forEach(s => s.scrollLeft = 9999);
+        });
+        await new Promise(r => setTimeout(r, 1500));
 
         await page.evaluate((cpfBusca) => { 
             const linhas = Array.from(document.querySelectorAll('tr, [role="row"], div[class*="MuiDataGrid-row"]')); 
