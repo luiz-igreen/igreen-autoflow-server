@@ -83,7 +83,7 @@ const CHROME_ARGS = [
 ];
 
 // ==========================================
-// FUNÇÕES AUXILIARES
+// FUNÇÕES AUXILIARES E IA
 // ==========================================
 async function enviarMensagem(phone, message) {
     const numLimpo = String(phone).replace(/\D/g, ''); 
@@ -119,6 +119,38 @@ async function salvarNoBanco(docId, phone, dadosExtras) {
                 { merge: true } 
             );
         } catch (e) { console.error("Erro Firebase:", e.message); }
+    }
+}
+
+async function analisarFaturaGemini(mediaUrl, mimeType) {
+    try {
+        console.log("[IA] Baixando documento para análise no Gemini...");
+        const response = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
+        const base64Data = Buffer.from(response.data, 'binary').toString('base64');
+
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+        const promptText = `Analise esta fatura de energia. Extraia os dados em formato JSON exato. Chaves necessárias: "NOME_CLIENTE", "CPF", "DATA_NASCIMENTO", "UC", "VENCIMENTO", "VALOR". Retorne APENAS o JSON, sem marcações ou blocos de código markdown.`;
+
+        const payload = {
+            contents: [{
+                parts: [
+                    { text: promptText },
+                    { inline_data: { mime_type: mimeType === 'application/pdf' ? 'application/pdf' : 'image/jpeg', data: base64Data } }
+                ]
+            }]
+        };
+
+        const result = await axios.post(geminiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
+        let textoResposta = result.data.candidates[0].content.parts[0].text;
+        
+        // Limpar possíveis sujeiras da IA
+        textoResposta = textoResposta.replace(/```json/g, '').replace(/```/g, '').trim();
+        
+        console.log("[IA] Leitura concluída com sucesso!");
+        return JSON.parse(textoResposta);
+    } catch (error) {
+        console.error("[IA] Erro na análise Gemini:", error.response?.data || error.message);
+        throw new Error("Falha ao ler fatura.");
     }
 }
 
@@ -595,173 +627,4 @@ app.post('/webhook/igreen', async (req, res) => {
                 await enviarMensagem(phone, TEXTOS.T02); 
                 try {
                     const dadosIA = await analisarFaturaGemini(mediaUrl, mimeType);
-                    const docId = dadosIA.UC ? dadosIA.UC.replace(/\D/g, '') : `SEM_UC_${Date.now()}`;
-                    await salvarNoBanco(docId, phone, { ...dadosIA, LINK_FATURA: mediaUrl, STATUS_CADASTRO: "CONCLUIDO" });
-                    await enviarMensagem(phone, `✅ Tudo certo! Titular: ${dadosIA.NOME_CLIENTE}. Especialista entrará em contato.`);
-                    memoriaEstado.delete(phone); 
-                } catch (e) { await enviarMensagem(phone, "❌ Erro ao ler fatura."); }
-            } else { await enviarMensagem(phone, "⚠️ Aguardando foto/PDF da fatura."); }
-            break;
-        }
-
-        case 'AGUARDANDO_FATURA_SOH_BANCO': {
-            if (temMidia) {
-                await enviarMensagem(phone, TEXTOS.T02); 
-                try {
-                    const dadosIA = await analisarFaturaGemini(mediaUrl, mimeType);
-                    const docId = dadosIA.UC ? dadosIA.UC.replace(/\D/g, '') : `SEM_UC_${Date.now()}`;
-                    await salvarNoBanco(docId, phone, { ...dadosIA, LINK_FATURA: mediaUrl, STATUS_CADASTRO: "AGUARDANDO_TELEFONE" });
-                    memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_TELEFONE', docId });
-                    await enviarMensagem(phone, TEXTOS.T_PEDIR_TELEFONE.replace('${nome}', dadosIA.NOME_CLIENTE).replace('${uc}', dadosIA.UC));
-                } catch (e) { await enviarMensagem(phone, "❌ Erro na análise."); }
-            } else { await enviarMensagem(phone, "⚠️ Aguardando foto/PDF da fatura."); }
-            break;
-        }
-
-        case 'AGUARDANDO_TELEFONE': {
-            if (textoIn.length >= 8) { 
-                await salvarNoBanco(mem.docId, phone, { TELEFONE: textoIn, STATUS_CADASTRO: "AGUARDANDO_EMAIL" });
-                memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_EMAIL', docId: mem.docId });
-                await enviarMensagem(phone, TEXTOS.T_PEDIR_EMAIL);
-            } else { await enviarMensagem(phone, "⚠️ Digite um telefone válido."); }
-            break;
-        }
-
-        case 'AGUARDANDO_EMAIL': {
-            if (textoIn.includes('@')) { 
-                await salvarNoBanco(mem.docId, phone, { EMAIL: textoIn, STATUS_CADASTRO: "PENDENTE_DOCUMENTOS" });
-                await enviarMensagem(phone, TEXTOS.T_FIM_PRE_CADASTRO);
-                memoriaEstado.delete(phone);
-            } else { await enviarMensagem(phone, "⚠️ Digite um e-mail válido."); }
-            break;
-        }
-
-        case 'AGUARDANDO_DADOS_DEVOLUTIVA': {
-            if (textoIn.length >= 3) {
-                await enviarMensagem(phone, TEXTOS.T_RESGATE_BUSCANDO);
-                memoriaEstado.delete(phone); 
-                
-                setTimeout(() => { fluxoResgateDevolutiva(textoIn, phone, null, null, false); }, 2000);
-            } else {
-                await enviarMensagem(phone, "⚠️ Digite o Nome ou ID corretamente (mínimo de 3 caracteres).");
-            }
-            break;
-        }
-
-        case 'AGUARDANDO_UC_DOC': {
-            if (textoIn.length >= 4) { 
-                const ucLimpa = textoIn.replace(/\D/g, '');
-                const leadExistente = await buscarNoBanco(ucLimpa);
-                
-                if (leadExistente) {
-                    if (!leadExistente.TELEFONE) {
-                        memoriaEstado.set(phone, { STATUS_CADASTRO: 'OP4_PEDIR_TELEFONE', docId: ucLimpa });
-                        await enviarMensagem(phone, TEXTOS.T_OP4_FALTANDO_TEL);
-                    } else if (!leadExistente.EMAIL) {
-                        memoriaEstado.set(phone, { STATUS_CADASTRO: 'OP4_PEDIR_EMAIL', docId: ucLimpa });
-                        await enviarMensagem(phone, TEXTOS.T_OP4_FALTANDO_MAIL);
-                    } else {
-                        memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: ucLimpa });
-                        await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
-                    }
-                } else {
-                    memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: ucLimpa });
-                    await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
-                }
-            } else { await enviarMensagem(phone, "⚠️ Digite a UC corretamente."); }
-            break;
-        }
-
-        case 'OP4_PEDIR_TELEFONE': {
-            if (textoIn.length >= 8) {
-                await salvarNoBanco(mem.docId, phone, { TELEFONE: textoIn });
-                const leadAtualizadoTel = await buscarNoBanco(mem.docId);
-                
-                if (leadAtualizadoTel && !leadAtualizadoTel.EMAIL) {
-                    memoriaEstado.set(phone, { STATUS_CADASTRO: 'OP4_PEDIR_EMAIL', docId: mem.docId });
-                    await enviarMensagem(phone, TEXTOS.T_OP4_FALTANDO_MAIL);
-                } else {
-                    memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: mem.docId });
-                    await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
-                }
-            } else { await enviarMensagem(phone, "⚠️ Digite um telefone válido."); }
-            break;
-        }
-
-        case 'OP4_PEDIR_EMAIL': {
-            if (textoIn.includes('@')) {
-                await salvarNoBanco(mem.docId, phone, { EMAIL: textoIn });
-                memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: mem.docId });
-                await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
-            } else { await enviarMensagem(phone, "⚠️ Digite um e-mail válido."); }
-            break;
-        }
-
-        case 'AGUARDANDO_DOC_FRENTE': {
-            if (temMidia) {
-                await salvarNoBanco(mem.docId, phone, { LINK_DOC_FRENTE: mediaUrl });
-                memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO', docId: mem.docId });
-                await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_VERSO);
-            } else { await enviarMensagem(phone, "⚠️ Envie a foto da FRENTE."); }
-            break;
-        }
-
-        case 'AGUARDANDO_DOC_VERSO': {
-            if (temMidia) {
-                await salvarNoBanco(mem.docId, phone, { LINK_DOC_VERSO: mediaUrl, STATUS_CADASTRO: "CONCLUIDO_COM_DOCS" });
-                await enviarMensagem(phone, TEXTOS.T_DOCS_RECEBIDOS);
-                memoriaEstado.delete(phone);
-            } else { await enviarMensagem(phone, "⚠️ Envie a foto do VERSO."); }
-            break;
-        }
-    }
-});
-
-// ==========================================
-// ROTA PÚBLICA DE PROVAS (A PEDIDO DO MESTRE)
-// ==========================================
-app.get('/ultima-fatura', (req, res) => {
-    const file = path.join('/tmp', 'ultima_fatura.pdf');
-    if (fs.existsSync(file)) {
-        res.contentType('application/pdf');
-        res.sendFile(path.resolve(file));
-    } else {
-        res.status(404).send(`
-            <h2 style="font-family: sans-serif; color: #333; text-align: center; margin-top: 50px;">
-                🕵️‍♂️ Nenhuma fatura foi capturada ainda!
-            </h2>
-            <p style="font-family: sans-serif; color: #666; text-align: center;">
-                Faça o teste de uma Devolutiva no WhatsApp primeiro. Quando o robô gerar o PDF na Equatorial, ele aparecerá aqui.
-            </p>
-        `);
-    }
-});
-
-// ==========================================
-// HEALTH CHECK E INICIALIZAÇÃO
-// ==========================================
-const PORT = process.env.PORT || 10000;
-
-async function validateBrowser() {
-    try {
-        console.log("⏳ Iniciando Health Check do Navegador (Modo Docker)...");
-        const browser = await puppeteer.launch({
-            headless: true,
-            args: CHROME_ARGS, // O Health Check roda sem proxy para poupar os seus dados!
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath()
-        });
-        await browser.close();
-        console.log('✔ Browser health check passed! O contentor Docker está perfeito.');
-        return true;
-    } catch (error) {
-        console.error('❌ Browser initialization failed:', error.message);
-        process.exit(1); 
-    }
-}
-
-// ROTA DE SEGURANÇA PARA O RENDER
-app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindado!'));
-
-validateBrowser().then(() => {
-    app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});    
+                    const docId = dadosIA.UC ? dadosIA.UC.replace(/\D/g, '') : `SEM_    
