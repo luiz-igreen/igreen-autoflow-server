@@ -1,320 +1,458 @@
-#!/usr/bin/env node
-
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 puppeteer.use(StealthPlugin());
-
 const fs = require('fs');
-const fsp = require('fs/promises');
 const path = require('path');
-const https = require('https');
-require('dotenv').config();
-const { v4: uuidv4 } = require('uuid');
+const { promisify } = require('util');
 
-// Validação de credenciais
-if (!process.env.EQUATORIAL_USER || !process.env.EQUATORIAL_PASS || !process.env.IGREEN_USER || !process.env.IGREEN_PASS) {
-  console.error('❌ Credenciais obrigatórias ausentes no .env');
-  process.exit(1);
+const fsStat = promisify(fs.stat);
+const fsReadFile = promisify(fs.readFile);
+const fsReaddir = promisify(fs.readdir);
+const fsOpen = promisify(fs.open);
+const fsRead = promisify((fd, buffer, offset, length, position) => new Promise((resolve, reject) => fs.read(fd, buffer, offset, length, position, (err, bytes) => err ? reject(err) : resolve(bytes))));
+const fsClose = promisify(fs.close);
+
+// User-Agents humanizados
+
+const userAgents = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0'
+];
+
+// Utilitários
+
+async function randomDelay(min = 100, max = 500) {
+  const delay = min + Math.random() * (max - min);
+  return new Promise(resolve => setTimeout(resolve, delay));
 }
 
-const proxies = JSON.parse(process.env.PROXIES || '[]');
-
-async function withRetry(fn, maxRetries = 3, baseDelay = 2000) {
-  let lastError;
-  for (let i = 0; i <= maxRetries; i++) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error;
-      if (i === maxRetries) throw error;
-      console.log(`Retry ${i + 1}/${maxRetries} em ${baseDelay * Math.pow(2, i)}ms`);
-      await new Promise(resolve => setTimeout(resolve, baseDelay * Math.pow(2, i)));
-    }
+async function humanMouseMovements(page, duration = 2000) {
+  // Simula movimentos de mouse humanos aleatórios
+  const viewport = await page.viewport();
+  for (let i = 0; i < 5; i++) {
+    const x = Math.random() * viewport.width;
+    const y = Math.random() * viewport.height;
+    await page.mouse.move(x, y);
+    await randomDelay(50, 150);
   }
 }
 
-async function sendWhatsApp(phone, apikey, msg) {
+async function humanClick(page, selector) {
+  await humanMouseMovements(page);
+  await randomDelay();
+  await page.click(selector, { delay: 100 + Math.random() * 200 });
+}
+
+async function humanType(page, selector, text) {
+  await page.focus(selector);
+  await page.type(selector, text, { delay: 50 + Math.random() * 50 });
+}
+
+function getRandomUserAgent() {
+  return userAgents[Math.floor(Math.random() * userAgents.length)];
+}
+
+async function isValidPDF(filePath) {
+  // Validação de PDF: tamanho > 5KB e header %PDF
+  try {
+    const stats = await fsStat(filePath);
+    if (stats.size < 5 * 1024) {
+      console.log(`PDF inválido: tamanho ${stats.size} bytes < 5KB`);
+      return false;
+    }
+
+    const fd = await fsOpen(filePath, 'r');
+    const buffer = Buffer.alloc(4);
+    await fsRead(fd.fd, buffer, 0, 4, 0);
+    await fsClose(fd.fd);
+
+    const header = buffer.toString();
+    if (!header.startsWith('%PDF')) {
+      console.log(`PDF inválido: header incorreto ${header}`);
+      return false;
+    }
+
+    console.log(`PDF válido: ${path.basename(filePath)}, ${stats.size} bytes`);
+    return true;
+  } catch (error) {
+    console.error(`Erro validando PDF ${filePath}:`, error.message);
+    return false;
+  }
+}
+
+function suggestSolution(errorMsg) {
+  if (errorMsg.includes('Imperva') || errorMsg.includes('bot') || errorMsg.includes('challenge')) {
+    return 'Bloqueio anti-bot (Imperva). Solução: Troque proxy/VPN, aguarde 5min ou use User-Agent diferente.';
+  } else if (errorMsg.includes('timeout') || errorMsg.includes('net::ERR')) {
+    return 'Timeout/conexão falhou. Solução: Verifique internet/proxy, aumente timeout ou use VPN.';
+  } else if (errorMsg.includes('file') || errorMsg.includes('upload')) {
+    return 'Falha no upload. Solução: Verifique PDF válido, seletores do site ou permissões de arquivo.';
+  } else {
+    return 'Erro desconhecido. Verifique logs e config.';
+  }
+}
+
+async function waitForDownload(downloadDir, prefix) {
+  // Aguarda download completar (tamanho estável)
   return new Promise((resolve, reject) => {
-    const data = `phone=${phone}&text=${encodeURIComponent(msg)}&apikey=${apikey}`;
-    const req = https.request({
-      hostname: 'api.callmebot.com',
-      path: '/whatsapp.php',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Content-Length': Buffer.byteLength(data)
-      }
-    }, (res) => {
-      let body = '';
-      res.on('data', (chunk) => body += chunk);
-      res.on('end', () => {
-        if (res.statusCode === 200) {
-          resolve();
-        } else {
-          reject(new Error(`HTTP ${res.statusCode}: ${body}`));
+    const checkInterval = setInterval(async () => {
+      try {
+        const files = (await fsReaddir(downloadDir)).filter(f => f.startsWith(prefix) && f.endsWith('.pdf'));
+        if (files.length > 0) {
+          const filePath = path.join(downloadDir, files[0]);
+          const stats1 = await fsStat(filePath);
+          await randomDelay(1000, 2000);
+          const stats2 = await fsStat(filePath);
+          if (stats1.size === stats2.size) {
+            clearInterval(checkInterval);
+            resolve(filePath);
+          }
         }
-      });
-    });
-    req.on('error', reject);
-    req.write(data);
-    req.end();
+      } catch (e) {
+        // continua
+      }
+    }, 500);
+
+    setTimeout(() => {
+      clearInterval(checkInterval);
+      reject(new Error('Timeout no download'));
+    }, 60000);
   });
 }
 
-class EquatorialScraper {
-  constructor() {
-    this.proxyIndex = 0;
+class EquatorialScraperV2 {
+  constructor(options = {}) {
+    this.proxy = options.proxy;
+    this.headless = options.headless ?? true;
+    this.downloadDir = options.downloadDir || './downloads';
+    this.browser = null;
+    this.page = null;
   }
 
-  async launchBrowser(proxy = null) {
-    const args = [
+  async init() {
+    const launchArgs = [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
-      '--disable-web-security',
-      '--disable-features=VizDisplayCompositor'
+      '--disable-accelerated-2d-canvas',
+      '--no-first-run',
+      '--no-zygote',
+      '--disable-gpu'
     ];
-    if (proxy) {
-      args.push(`--proxy-server=${proxy}`);
+
+    if (this.proxy) {
+      launchArgs.push(`--proxy-server=${this.proxy}`);
     }
-    return puppeteer.launch({
-      headless: 'new',
-      args
+
+    this.browser = await puppeteer.launch({
+      headless: this.headless,
+      args: launchArgs
     });
+
+    this.page = await this.browser.newPage();
+    await this.page.setUserAgent(getRandomUserAgent());
+    await this.page.setViewport({ width: 1920, height: 1080 });
+
+    // Config download
+    const client = await this.page.target().createCDPSession();
+    await client.send('Page.setDownloadBehavior', {
+      behavior: 'allow',
+      downloadPath: this.downloadDir
+    });
+
+    fs.mkdirSync(this.downloadDir, { recursive: true });
   }
 
-  async login(page) {
-    await page.goto('https://equatorialpi.equatorialenergia.com.br/sel/login', { waitUntil: 'networkidle2', timeout: 60000 });
-    await page.type('#usuario', process.env.EQUATORIAL_USER);
-    await page.type('#senha', process.env.EQUATORIAL_PASS);
-    await page.click('button[type="submit"]');
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
-
-    // Verifica login inválido
-    const errorEl = await page.$('.erro-login, .alert-danger, [class*="error"]');
-    if (errorEl) {
-      throw new Error('Login inválido');
-    }
-
-    // Verifica Imperva ou bot detection
+  async login(creds, selectors) {
     try {
-      await page.waitForSelector('#imperva-challenge, .bot-challenge', { timeout: 5000 });
-      throw new Error('Imperva detectado (Error 16)');
-    } catch (e) {
-      // OK
+      console.log('> Navegando para Equatorial...');
+      await this.page.goto(selectors.url, { waitUntil: 'networkidle2', timeout: 60000 });
+      await randomDelay();
+      await humanMouseMovements(this.page);
+
+      // Login
+      await humanClick(this.page, selectors.loginButton);
+      await randomDelay();
+
+      await humanType(this.page, selectors.userField, creds.user);
+      await randomDelay(500, 1000);
+
+      await humanType(this.page, selectors.passField, creds.pass);
+      await randomDelay();
+
+      await humanClick(this.page, selectors.submitButton);
+      await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 });
+      await randomDelay();
+
+      console.log('✓ Login Equatorial realizado');
+    } catch (error) {
+      throw new Error(`Falha no login Equatorial: ${error.message}`);
     }
   }
 
-  async scrape(month) {
-    const cacheDir = path.join(__dirname, 'cache');
-    await fsp.mkdir(cacheDir, { recursive: true });
-    const cachePath = path.join(cacheDir, `${month}.pdf`);
+  async downloadFaturas(selectors, numFaturas = 1) {
+    const pdfs = [];
+    try {
+      console.log('> Baixando faturas...');
+      await this.page.goto(selectors.faturasUrl, { waitUntil: 'networkidle2' });
+      await randomDelay();
 
-    if (fs.existsSync(cachePath)) {
-      console.log(`✅ PDF em cache: ${cachePath}`);
-      return cachePath;
+      for (let i = 0; i < numFaturas; i++) {
+        await humanClick(this.page, selectors.downloadButton);
+        const pdfPath = await waitForDownload(this.downloadDir, 'fatura');
+        if (await isValidPDF(pdfPath)) {
+          pdfs.push(pdfPath);
+        } else {
+          fs.unlinkSync(pdfPath); // Remove inválido
+        }
+        await randomDelay(2000, 4000);
+      }
+
+      console.log(`✓ ${pdfs.length} faturas baixadas e validadas`);
+      return pdfs;
+    } catch (error) {
+      throw new Error(`Falha no download: ${error.message}`);
+    }
+  }
+
+  async close() {
+    if (this.page) await this.page.close();
+    if (this.browser) await this.browser.close();
+  }
+}
+
+class iGreenUploaderV2 {
+  constructor(options = {}) {
+    this.proxy = options.proxy;
+    this.headless = options.headless ?? true;
+    this.browser = null;
+    this.page = null;
+  }
+
+  async init() {
+    const launchArgs = [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage'
+    ];
+
+    if (this.proxy) {
+      launchArgs.push(`--proxy-server=${this.proxy}`);
     }
 
-    const numProxies = proxies.length;
-    for (let attempt = 0; attempt < numProxies + 1; attempt++) {
-      const useProxy = attempt > 0;
-      const proxy = useProxy ? proxies[this.proxyIndex % numProxies] : null;
-      if (useProxy) this.proxyIndex++;
+    this.browser = await puppeteer.launch({ headless: this.headless, args: launchArgs });
+    this.page = await this.browser.newPage();
+    await this.page.setUserAgent(getRandomUserAgent());
+    await this.page.setViewport({ width: 1920, height: 1080 });
+  }
 
-      let browser;
+  async login(creds, selectors) {
+    try {
+      console.log('> Navegando para iGreen...');
+      await this.page.goto(selectors.url, { waitUntil: 'networkidle2', timeout: 60000 });
+      await randomDelay();
+      await humanMouseMovements(this.page);
+
+      await humanType(this.page, selectors.userField, creds.user);
+      await randomDelay();
+
+      await humanType(this.page, selectors.passField, creds.pass);
+      await randomDelay();
+
+      await humanClick(this.page, selectors.submitButton);
+      await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 });
+
+      console.log('✓ Login iGreen realizado');
+    } catch (error) {
+      throw new Error(`Falha no login iGreen: ${error.message}`);
+    }
+  }
+
+  async uploadPDF(pdfPath, selectors, maxRetries = 3) {
+    for (let retry = 1; retry <= maxRetries; retry++) {
       try {
-        browser = await this.launchBrowser(proxy);
-        const page = await browser.newPage();
-        await page.setViewport({ width: 1366, height: 768 });
+        console.log(`> Upload PDF (tentativa ${retry}): ${path.basename(pdfPath)}`);
+        await this.page.goto(selectors.uploadUrl || selectors.url, { waitUntil: 'networkidle2' });
+        await randomDelay(2000);
 
-        // Login com retry interno
-        await withRetry(() => this.login(page), 3);
+        // Múltiplos seletores para input file
+        const fileSelectors = [
+          selectors.fileInput,
+          'input[type="file"]',
+          '#file-upload',
+          '[name="file"]',
+          '.upload-input'
+        ];
 
-        // Navega para faturas
-        await page.goto('https://equatorialpi.equatorialenergia.com.br/faturas', { waitUntil: 'networkidle2' });
-
-        // Seleciona mês de referência (ajuste selector conforme portal)
-        await page.evaluate((m) => {
-          const sel = document.querySelector('select[name="mesRef"], #mes-ref');
-          if (sel) sel.value = m;
-        }, month);
-        await page.click('#buscar, button[type="submit"]', { timeout: 5000 }).catch(() => {});
-        await page.waitForTimeout(3000);
-
-        // Procura link PDF
-        const pdfLink = await page.$eval('a[href*=".pdf"], .download-pdf', (el) => el.href).catch(() => null);
-        let pdfPath;
-
-        if (pdfLink) {
-          // Download direto
-          const pdfBuffer = await page.evaluate(async (href) => {
-            const response = await fetch(href);
-            return await response.arrayBuffer();
-          }, pdfLink);
-          pdfPath = cachePath;
-          await fsp.writeFile(pdfPath, Buffer.from(pdfBuffer));
-        } else {
-          // Gera PDF da tela
-          const tempPath = path.join(__dirname, `temp-${uuidv4()}.pdf`);
-          await page.pdf({
-            path: tempPath,
-            format: 'A4',
-            printBackground: true,
-            margin: { top: '20px', bottom: '20px' }
-          });
-          pdfPath = tempPath;
-          console.log('📄 PDF gerado via printToPDF');
+        let inputFound = false;
+        for (const selector of fileSelectors) {
+          try {
+            await this.page.waitForSelector(selector, { visible: true, timeout: 60000 });
+            await humanClick(this.page, selector);
+            await this.page.waitForTimeout(1000); // Aguardar file dialog
+            await this.page.setInputFiles(selector, pdfPath);
+            inputFound = true;
+            console.log(`✓ Input file encontrado: ${selector}`);
+            break;
+          } catch (e) {
+            console.log(`Selector ${selector} não encontrado, tentando próximo...`);
+          }
         }
 
-        await browser.close();
-        console.log(`✅ PDF baixado: ${pdfPath}`);
-        return pdfPath;
+        if (!inputFound) {
+          throw new Error('Nenhum input file encontrado');
+        }
 
+        await randomDelay(1000, 2000);
+        await humanClick(this.page, selectors.submitUpload);
+        await this.page.waitForSelector(selectors.successSelector || '.success', { timeout: 60000 });
+
+        console.log('✓ Upload realizado com sucesso!');
+        return true;
       } catch (error) {
-        console.log(`⚠️ Tentativa ${attempt + 1} falhou: ${error.message}`);
-        if (browser) await browser.close();
-        if (attempt === numProxies) throw error;
+        console.error(`Falha no upload (tentativa ${retry}): ${error.message}`);
+        if (retry === maxRetries) {
+          throw error;
+        }
+        await randomDelay(3000, 5000);
       }
     }
-    throw new Error('Falha após todos os proxies');
+  }
+
+  async close() {
+    if (this.page) await this.page.close();
+    if (this.browser) await this.browser.close();
   }
 }
 
-class iGreenUploader {
-  async upload(pdfPath, devolutivaId) {
-    const browser = await puppeteer.launch({
-      headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
+class AutomacaoV2 {
+  constructor(config) {
+    this.config = config;
+    this.proxies = config.proxies || [];
+    this.maxRetriesProxy = config.maxRetriesProxy || 3;
+    this.vpnRetries = 0;
+  }
+
+  async tryWithProxy(fn, proxyIndex = 0) {
+    const proxy = this.proxies[proxyIndex];
+    console.log(`Tentando com proxy: ${proxy || 'sem proxy'}`);
 
     try {
-      const page = await browser.newPage();
-      await page.goto(process.env.IGREEN_URL || 'https://igreen.com.br', { waitUntil: 'networkidle2' });
-
-      // Login iGreen (ajuste selectors)
-      await page.type('#usuario, input[name="email"], #email', process.env.IGREEN_USER);
-      await page.type('#senha, input[name="password"]', process.env.IGREEN_PASS);
-      await page.click('#login-btn, button[type="submit"]');
-      await page.waitForNavigation({ waitUntil: 'networkidle2' });
-
-      // Vai para devolutiva
-      await page.goto(`/devolutiva/${devolutivaId}/editar`);
-      await page.waitForSelector('form, #anexo-form');
-
-      // Upload arquivo
-      const fileInput = await page.$('input[type="file"], #anexo, #arquivo');
-      await fileInput.uploadFile(pdfPath);
-      await page.click('#upload-btn, #salvar, button[type="submit"]');
-      await page.waitForSelector('.success-msg, .alert-success', { timeout: 10000 });
-
-      console.log('✅ Upload realizado');
-    } finally {
-      await browser.close();
-    }
-  }
-}
-
-class AutomacaoFaturas {
-  constructor() {
-    this.scraper = new EquatorialScraper();
-    this.uploader = new iGreenUploader();
-    this.logs = [];
-    this.success = false;
-  }
-
-  log(msg) {
-    const timestamp = new Date().toISOString();
-    const logEntry = `${timestamp} - ${msg}`;
-    this.logs.push(logEntry);
-    console.log(logEntry);
-  }
-
-  async sendNotification(msg) {
-    const phone = process.env.PHONE_NOTIFY;
-    const apikey = process.env.CALLMEBOT_APIKEY;
-    if (!phone || !apikey) {
-      this.log('ℹ️ WhatsApp não configurado (PHONE_NOTIFY e CALLMEBOT_APIKEY)');
-      return;
-    }
-    try {
-      await sendWhatsApp(phone, apikey, msg);
-      this.log('📱 Notificação WhatsApp enviada');
-    } catch (e) {
-      this.log(`❌ WhatsApp falhou: ${e.message}`);
-    }
-  }
-
-  async generateReport(month) {
-    const report = {
-      success: this.success,
-      month,
-      logs: this.logs,
-      timestamp: new Date().toISOString()
-    };
-    const reportPath = path.join(__dirname, `relatorio-${month}.json`);
-    await fsp.writeFile(reportPath, JSON.stringify(report, null, 2));
-    this.log(`📊 Relatório salvo: ${reportPath}`);
-  }
-
-  async run(month, devolutivaId) {
-    if (!month.match(/^\d{4}-\d{2}$/)) {
-      throw new Error('Mês inválido. Use YYYY-MM');
-    }
-    if (!devolutivaId) {
-      throw new Error('Devolutiva ID obrigatória');
-    }
-
-    this.log(`🚀 Iniciando automação para fatura ${month} / devolutiva ${devolutivaId}`);
-    let pdfPath;
-
-    try {
-      pdfPath = await withRetry(() => this.scraper.scrape(month));
-
-      await withRetry(() => this.uploader.upload(pdfPath, devolutivaId));
-
-      this.success = true;
-      await this.sendNotification(`✅ Fatura ${month} automatizada com sucesso!`);
+      return await fn(proxy);
     } catch (error) {
-      this.success = false;
-      this.log(`💥 Erro final: ${error.message}`);
-      await this.sendNotification(`❌ Erro automação ${month}: ${error.message}`);
+      console.error(`Falha com proxy ${proxy}: ${error.message}`);
+      console.error(error.stack);
+      console.log('Sugestão:', suggestSolution(error.message));
 
-      // Salva PDF em failed se disponível
-      if (pdfPath && fs.existsSync(pdfPath)) {
-        const failedDir = path.join(__dirname, 'failed');
-        await fsp.mkdir(failedDir, { recursive: true });
-        const failedPath = path.join(failedDir, `${month}.pdf`);
-        await fsp.copyFile(pdfPath, failedPath);
-        this.log(`💾 PDF salvo em failed: ${failedPath}`);
+      if (proxyIndex + 1 < this.proxies.length) {
+        await randomDelay(5000);
+        return await this.tryWithProxy(fn, proxyIndex + 1);
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  async scrapeEquatorial() {
+    return await this.tryWithProxy(async (proxy) => {
+      const scraper = new EquatorialScraperV2({ proxy, headless: this.config.headless });
+      try {
+        await scraper.init();
+        await scraper.login(this.config.equatorial.creds, this.config.equatorial.selectors);
+        const pdfs = await scraper.downloadFaturas(this.config.equatorial.selectors, this.config.equatorial.numFaturas || 1);
+        return pdfs;
+      } finally {
+        await scraper.close();
+      }
+    });
+  }
+
+  async uploadToIGreen(pdfs) {
+    return await this.tryWithProxy(async (proxy) => {
+      const uploader = new iGreenUploaderV2({ proxy, headless: this.config.headless });
+      try {
+        await uploader.init();
+        await uploader.login(this.config.igreen.creds, this.config.igreen.selectors);
+
+        for (const pdf of pdfs) {
+          await uploader.uploadPDF(pdf, this.config.igreen.selectors);
+        }
+
+        return true;
+      } finally {
+        await uploader.close();
+      }
+    });
+  }
+
+  async run() {
+    try {
+      console.log('🚀 Iniciando Automatizador Faturas v2');
+
+      // Scraping
+      const pdfs = await this.scrapeEquatorial();
+      if (pdfs.length === 0) {
+        throw new Error('Nenhuma fatura válida baixada');
+      }
+
+      // Upload
+      await this.uploadToIGreen(pdfs);
+
+      console.log('🎉 Automação concluída com sucesso!');
+    } catch (error) {
+      console.error('❌ Erro crítico:', error.message);
+      console.error(error.stack);
+      console.log('Sugestão:', suggestSolution(error.message));
+
+      this.vpnRetries++;
+      if (this.vpnRetries >= 3) {
+        console.log('🔄 FALHAS PERSISTENTES: Tente ativar VPN manualmente e execute novamente!');
       }
 
       throw error;
-    } finally {
-      await this.generateReport(month);
-
-      // Cleanup temp (não cache)
-      if (pdfPath && !pdfPath.includes('cache') && fs.existsSync(pdfPath)) {
-        await fsp.unlink(pdfPath).catch(() => {});
-        this.log('🧹 Temp PDF removido');
-      }
     }
   }
 }
 
-// CLI
+// Exemplo de uso / Configuração (AJUSTE AQUI!)
 if (require.main === module) {
-  const [, , month, devolutivaId] = process.argv;
-  if (!month || !devolutivaId) {
-    console.log('Usage: node automatizador-faturas.js <YYYY-MM> <devolutivaId>');
-    console.log('Ex: node automatizador-faturas.js 2024-01 12345');
-    process.exit(1);
-  }
+  const config = {
+    headless: false, // true para produção
+    proxies: [
+      // 'http://user:pass@ip:port',
+      // 'http://ip:port'
+    ],
+    equatorial: {
+      creds: { user: 'seu_usuario', pass: 'sua_senha' },
+      selectors: {
+        url: 'https://equatorial.com.br/login', // Ajuste URL
+        loginButton: '#btn-login',
+        userField: '#username',
+        passField: '#password',
+        submitButton: '#submit',
+        faturasUrl: 'https://equatorial.com.br/faturas',
+        downloadButton: '.download-pdf'
+      },
+      numFaturas: 1
+    },
+    igreen: {
+      creds: { user: 'user_igreen', pass: 'pass_igreen' },
+      selectors: {
+        url: 'https://igreen.com.br/login',
+        userField: '#email',
+        passField: '#senha',
+        submitButton: '#entrar',
+        uploadUrl: 'https://igreen.com.br/upload',
+        fileInput: '#arquivo',
+        submitUpload: '#upload-btn',
+        successSelector: '.mensagem-sucesso'
+      }
+    }
+  };
 
-  const automacao = new AutomacaoFaturas();
-  automacao.run(month, devolutivaId).catch((err) => {
-    console.error('FALHA TOTAL:', err.message);
-    process.exit(1);
-  });
+  new AutomacaoV2(config).run().catch(console.error);
 }
 
-module.exports = AutomacaoFaturas;
+module.exports = AutomacaoV2;
