@@ -3,6 +3,7 @@ import axios from 'axios';
 import admin from 'firebase-admin';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import proxyChain from 'proxy-chain';
 import fs from 'fs';
 import path from 'path';
 
@@ -157,6 +158,7 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
 // ==========================================
 async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, nascBanco = null, isAutomated = false) {
     let browser;
+    let proxyUrlToUse = null;
     const caminhoFaturaLocal = path.join('/tmp', `fatura_${Date.now()}.pdf`);
     let cpf = cpfBanco;
     let nascimento = nascBanco;
@@ -165,14 +167,21 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
     try {
         let puppeteerArgs = [...CHROME_ARGS];
         
-        // 🛡️ O TÚNEL SECRETO DIRETO E NATIVO (Sem Tradutor)
+        // 🛡️ O TÚNEL SECRETO + TRADUTOR DE PROXY (OBRIGATÓRIO PARA SITES HTTPS COMO A EQUATORIAL)
         if (process.env.PROXY_IP && process.env.PROXY_PORT && process.env.PROXY_USER) {
-            console.log(`[RPA] 🛡️ Preparando Túnel Seguro Nativo (C++ Engine)...`);
+            console.log(`[RPA] 🛡️ Preparando Túnel Seguro com Proxy Chain...`);
             
-            puppeteerArgs.push(`--proxy-server=http://${process.env.PROXY_IP}:${process.env.PROXY_PORT}`);
+            const safeUser = encodeURIComponent(process.env.PROXY_USER);
+            const safePass = encodeURIComponent(process.env.PROXY_PASS);
+            const rawProxyUrl = `http://${safeUser}:${safePass}@${process.env.PROXY_IP}:${process.env.PROXY_PORT}`;
+            
+            proxyUrlToUse = await proxyChain.anonymizeProxy(rawProxyUrl);
+            puppeteerArgs.push(`--proxy-server=${proxyUrlToUse}`);
             
             // Bypass para entrar na iGreen pela porta da frente rápida (NÃO usa proxy na iGreen)
             puppeteerArgs.push(`--proxy-bypass-list=*.igreenenergy.com.br,<-loopback>`);
+            
+            console.log(`[RPA] 🔑 Passaporte VIP validado com Tradutor! Regra de Bypass para a iGreen ativada.`);
         } else {
             console.log(`[RPA] ⚠️ Nenhum proxy detetado no Render. A rodar com IP nativo dos EUA.`);
         }
@@ -184,19 +193,10 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         });
         
         const page = await browser.newPage();
-
-        // 🔑 Autenticação Nativa do Chrome (Blindada)
-        if (process.env.PROXY_USER && process.env.PROXY_PASS) {
-            await page.authenticate({
-                username: process.env.PROXY_USER,
-                password: process.env.PROXY_PASS
-            });
-            console.log(`[RPA] 🔑 Passaporte VIP validado nativamente! Regra de Bypass para a iGreen ativada.`);
-        }
         
         await page.setExtraHTTPHeaders({ 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7' });
         
-        // 👁️ O GOLPE DE MESTRE: Monitor virtual de 4000 pixels (Para ver colunas escondidas)
+        // 👁️ O GOLPE DE MESTRE: Monitor virtual de 4000 pixels (Para ver colunas escondidas na iGreen)
         await page.setViewport({ width: 4000, height: 1080 });
 
         if (!cpf || !nascimento) {
@@ -256,7 +256,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller');
                 scrollers.forEach(s => s.scrollLeft = 9999);
             });
-            await new Promise(r => setTimeout(r, 2000)); // Espera a tabela processar o scroll e renderizar o CPF
+            await new Promise(r => setTimeout(r, 2000)); 
 
             const dadosExtraidos = await page.evaluate((busca) => {
                 const buscaLimpa = busca.toLowerCase().trim();
@@ -331,11 +331,10 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         let eqAcessado = false;
         for (let tentativa = 1; tentativa <= 3; tentativa++) {
             try {
-                // Mudado para 'domcontentloaded' e timeout maior (90s) para suportar Proxies mais lentos sem dar erro
                 await page.goto(EQUATORIAL_AL_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
-                await new Promise(r => setTimeout(r, 5000)); // Esperar o ecrã desenhar
+                await new Promise(r => setTimeout(r, 5000)); 
                 eqAcessado = true;
-                break; // Se deu certo, sai do loop
+                break; 
             } catch (err) {
                 console.log(`[RPA] O túnel oscilou (Tentativa ${tentativa}/3). Erro: ${err.message}`);
                 await new Promise(r => setTimeout(r, 5000));
@@ -360,7 +359,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
             if (clicouSair) {
                 console.log(`[RPA] 🧹 Memória antiga encontrada! Botão SAIR clicado. Aguardando limpeza...`);
-                await new Promise(r => setTimeout(r, 8000)); // Tempo para o site da Equatorial recarregar a sessão limpa
+                await new Promise(r => setTimeout(r, 8000)); 
             }
 
             await page.evaluate(() => {
@@ -373,6 +372,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
         console.log(`[RPA] Equatorial: Inserindo CPF para Login (Teclado Humano Nativo)...`);
         
+        // ⌨️ GOLPE DE MESTRE 4: Teclado Virtual Humano Fantasma
         let encontrouCpf = await page.evaluate(() => {
             const inputs = Array.from(document.querySelectorAll('input'));
             let cpfField = inputs.find(i => 
@@ -382,7 +382,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 (i.id && i.id.toLowerCase().includes('cpf'))
             );
             if (cpfField) {
-                cpfField.focus(); // Foca na caixa para o teclado virtual entrar em ação
+                cpfField.focus(); 
                 cpfField.click();
                 return true;
             }
@@ -390,7 +390,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         });
 
         if (encontrouCpf) {
-            // O robô "tecla" o CPF como uma pessoa (100ms de pausa entre cada número)
             await page.keyboard.type(cpf, { delay: 100 }); 
             await new Promise(r => setTimeout(r, 1000));
             
@@ -423,7 +422,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         });
 
         if (encontrouNasc) {
-            // Tecla a Data de Nascimento magicamente como humano
             await page.keyboard.type(nascimento, { delay: 100 });
             await new Promise(r => setTimeout(r, 1000));
             
@@ -645,6 +643,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         await new Promise(r => setTimeout(r, 5000)); 
         
         await browser.close();
+        if (proxyUrlToUse) await proxyChain.closeAnonymizedProxy(proxyUrlToUse, true).catch(()=>{});
         if(fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
 
         if(!isAutomated) await enviarMensagem(phone, TEXTOS.T_RESGATE_SUCESSO);
@@ -652,6 +651,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
     } catch (e) { 
         console.error("Erro RPA Devolutivas:", e.message);
         if(browser) await browser.close().catch(()=>{}); 
+        if (proxyUrlToUse) await proxyChain.closeAnonymizedProxy(proxyUrlToUse, true).catch(()=>{});
         if(fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
         if(!isAutomated) await enviarMensagem(phone, TEXTOS.T_RESGATE_FAIL);
     }
