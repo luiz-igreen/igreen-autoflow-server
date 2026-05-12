@@ -327,11 +327,13 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         let eqAcessado = false;
         for (let tentativa = 1; tentativa <= 3; tentativa++) {
             try {
-                await page.goto(EQUATORIAL_AL_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+                // Mudado para 'domcontentloaded' e timeout maior (90s) para suportar Proxies mais lentos sem dar erro
+                await page.goto(EQUATORIAL_AL_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
+                await new Promise(r => setTimeout(r, 5000)); // Esperar o ecrã desenhar
                 eqAcessado = true;
                 break; // Se deu certo, sai do loop
             } catch (err) {
-                console.log(`[RPA] O túnel oscilou (Tentativa ${tentativa}/3). Reconectando...`);
+                console.log(`[RPA] O túnel oscilou (Tentativa ${tentativa}/3). Erro: ${err.message}`);
                 await new Promise(r => setTimeout(r, 5000));
             }
         }
@@ -340,15 +342,27 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             throw new Error("O túnel do Proxy falhou repetidamente ao tentar abrir a Equatorial.");
         }
 
+        console.log(`[RPA] Verificando se há lixo de outro cliente (Botão SAIR)...`);
         try {
+            // 👁️ GOLPE DE MESTRE 2 (A SUA IDEIA GENIAL!): Clicar em SAIR se tiver memória de outro cliente
+            const clicouSair = await page.evaluate(() => {
+                const btnSair = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase().includes('SAIR') || el.textContent.toUpperCase().includes('X SAIR'));
+                if (btnSair) {
+                    btnSair.click();
+                    return true;
+                }
+                return false;
+            });
+
+            if (clicouSair) {
+                console.log(`[RPA] 🧹 Memória antiga encontrada! Botão SAIR clicado. Aguardando limpeza...`);
+                await new Promise(r => setTimeout(r, 8000)); // Tempo para o site da Equatorial recarregar a sessão limpa
+            }
+
             await page.evaluate(() => {
-                // 👁️ GOLPE DE MESTRE 2 (A SUA IDEIA GENIAL!): Clicar em SAIR se tiver memória de outro cliente
-                const btnSair = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase().includes('SAIR'));
-                if (btnSair) btnSair.click();
-                
                 const check = document.querySelector('input[type="checkbox"]'); if(check) check.click();
                 const btnEnviar = Array.from(document.querySelectorAll('button, div, span')).find(el => el.textContent.toUpperCase().includes('ENVIAR')); if(btnEnviar) btnEnviar.click();
-                const btnFechar = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase().includes('FECHAR')); if(btnFechar) btnFechar.click();
+                const btnFechar = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase() === 'FECHAR' || el.textContent.toUpperCase() === 'X'); if(btnFechar) btnFechar.click();
             });
             await new Promise(r => setTimeout(r, 2000));
         } catch(e) {}
@@ -824,4 +838,4 @@ app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindad
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});    
+});
