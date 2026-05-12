@@ -145,7 +145,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7'
         });
         
-        await page.setViewport({ width: 1920, height: 1080 });
+        await page.setViewport({ width: 5000, height: 1080 });
 
         if (!cpf || !nascimento) {
             console.log(`[RPA] ETAPA 1: Buscando CPF e Nascimento de ${termoBuscaIgreen} na iGreen...`);
@@ -364,12 +364,19 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             await new Promise(r => setTimeout(r, 5000)); 
             
             const pages = await browser.pages();
-            const paginaFatura = pages[pages.length - 1];
             
-            // Verifica se fomos bloqueados pelo Imperva antes de gerar o PDF
-            const bodyText = await paginaFatura.evaluate(() => document.body.innerText);
-            if (bodyText.includes("Access denied") || bodyText.includes("Error 16") || bodyText.includes("imperva")) {
-                 throw new Error("O Firewall da Equatorial (Imperva) bloqueou o acesso do robô à fatura.");
+            // O TOQUE DO MESTRE: Procura a aba exata do seu print (exibir-faturas)
+            const paginaFatura = pages.find(p => p.url().includes('exibir-faturas')) || pages[pages.length - 1];
+            
+            // TRAVA DE SEGURANÇA 1: Verifica se fomos bloqueados pelo Imperva antes de gerar o PDF
+            const bodyText = await paginaFatura.evaluate(() => document.body.innerText.toLowerCase());
+            if (bodyText.includes("access denied") || bodyText.includes("error 16") || bodyText.includes("imperva")) {
+                 throw new Error("⚠️ PAUSA DE SEGURANÇA: O Firewall da Equatorial bloqueou o acesso à fatura. Operação abortada.");
+            }
+            
+            // TRAVA DE SEGURANÇA EXTRA: Só imprime se a página realmente for a da fatura ou um visualizador PDF local
+            if (!paginaFatura.url().includes('exibir-faturas') && !paginaFatura.url().includes('blob') && !paginaFatura.url().includes('.pdf')) {
+                 throw new Error("⚠️ PAUSA DE SEGURANÇA: A tela não carregou a fatura corretamente. Operação abortada para proteger a iGreen.");
             }
             
             await paginaFatura.pdf({ path: caminhoFaturaLocal, format: 'A4', printBackground: true });
@@ -381,6 +388,18 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         }
 
         if (!pdfCapturado) throw new Error("Falha ao gerar o PDF. O site não baixou o ficheiro nem conseguiu renderizar a tela.");
+
+        // TRAVA DE SEGURANÇA 2 (O MESTRE EXIGIU): Verifica se o PDF é válido e pesado (e não uma página de erro disfarçada)
+        if (fs.existsSync(caminhoFaturaLocal)) {
+            const stats = fs.statSync(caminhoFaturaLocal);
+            // Menos de 15KB indica que o ficheiro está vazio ou é apenas um erro na tela
+            if (stats.size < 15000) {
+                fs.unlinkSync(caminhoFaturaLocal); // Apaga o ficheiro falso
+                throw new Error("⚠️ PAUSA DE SEGURANÇA: A fatura gerada é inválida ou foi bloqueada pela Equatorial. Operação abortada para não enviar erro à iGreen.");
+            }
+        } else {
+            throw new Error("⚠️ PAUSA DE SEGURANÇA: Fatura não encontrada. Operação abortada.");
+        }
 
         // ==============================================================
         // O COMPROMISSO DO MESTRE: DISPONIBILIZAR O PDF PARA VOCÊ VER!
@@ -396,7 +415,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         } catch (e) {}
 
         // ===============================================
-        // ETAPA 3: INJEÇÃO NA IGREEN (FORÇA BRUTA INVISÍVEL)
+        // ETAPA 3: INJEÇÃO NA IGREEN (SÓ ENTRA SE TIVER PASSADO AS TRAVAS)
         // ===============================================
         console.log(`[RPA] ETAPA 3: Injetando a Fatura na iGreen...`);
         
@@ -727,4 +746,4 @@ app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindad
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});
+});    
