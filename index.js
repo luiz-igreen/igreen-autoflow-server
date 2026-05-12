@@ -3,6 +3,7 @@ import axios from 'axios';
 import admin from 'firebase-admin';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import proxyChain from 'proxy-chain';
 import fs from 'fs';
 import path from 'path';
 
@@ -143,9 +144,7 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         const result = await axios.post(geminiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
         let textoResposta = result.data.candidates[0].content.parts[0].text;
         
-        // Limpar possíveis sujeiras da IA
         textoResposta = textoResposta.replace(/```json/g, '').replace(/```/g, '').trim();
-        
         console.log("[IA] Leitura concluída com sucesso!");
         return JSON.parse(textoResposta);
     } catch (error) {
@@ -159,6 +158,7 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
 // ==========================================
 async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, nascBanco = null, isAutomated = false) {
     let browser;
+    let proxyUrlToUse = null;
     const caminhoFaturaLocal = path.join('/tmp', `fatura_${Date.now()}.pdf`);
     let cpf = cpfBanco;
     let nascimento = nascBanco;
@@ -167,12 +167,15 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
     try {
         let puppeteerArgs = [...CHROME_ARGS];
         
-        // 🛡️ O TÚNEL SECRETO (PROXY) - Carregado a partir do Render
-        if (process.env.PROXY_IP && process.env.PROXY_PORT) {
-            console.log(`[RPA] 🛡️ Ativando Túnel de Proxy Residencial (${process.env.PROXY_IP})...`);
+        // 🛡️ O TÚNEL SECRETO + TRADUTOR DE PROXY
+        if (process.env.PROXY_IP && process.env.PROXY_PORT && process.env.PROXY_USER) {
+            console.log(`[RPA] 🛡️ Preparando Túnel Seguro com Proxy Chain...`);
+            const rawProxyUrl = `http://${process.env.PROXY_USER}:${process.env.PROXY_PASS}@${process.env.PROXY_IP}:${process.env.PROXY_PORT}`;
             
-            // CORREÇÃO: "http://" foi removido para evitar o erro net::ERR_PROXY_AUTH_UNSUPPORTED
-            puppeteerArgs.push(`--proxy-server=${process.env.PROXY_IP}:${process.env.PROXY_PORT}`);
+            // O tradutor converte a senha num túnel limpo para o Chrome não dar erro de Auth Unsupported
+            proxyUrlToUse = await proxyChain.anonymizeProxy(rawProxyUrl);
+            puppeteerArgs.push(`--proxy-server=${proxyUrlToUse}`);
+            console.log(`[RPA] 🔑 Passaporte VIP validado! Destino: Maceió, AL.`);
         } else {
             console.log(`[RPA] ⚠️ Nenhum proxy detetado no Render. A rodar com IP nativo dos EUA.`);
         }
@@ -184,21 +187,8 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         });
         
         const page = await browser.newPage();
-
-        // 🔑 AUTENTICAÇÃO DO PROXY (Passaporte Alagoano)
-        if (process.env.PROXY_USER && process.env.PROXY_PASS) {
-            await page.authenticate({
-                username: process.env.PROXY_USER,
-                password: process.env.PROXY_PASS
-            });
-            console.log(`[RPA] 🔑 Passaporte VIP validado com sucesso! O robô agora está em Maceió, AL.`);
-        }
         
-        // Anti-Detecção Extra
-        await page.setExtraHTTPHeaders({
-            'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7'
-        });
-        
+        await page.setExtraHTTPHeaders({ 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7' });
         await page.setViewport({ width: 1920, height: 1080 });
 
         if (!cpf || !nascimento) {
@@ -296,7 +286,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 const contentType = response.headers()['content-type'];
                 const contentDisposition = response.headers()['content-disposition'];
                 
-                // Evita capturar bloqueios do Imperva (Error 16 que é HTML)
                 if (response.status() === 200 && ((contentType && contentType.includes('application/pdf')) || 
                     (contentDisposition && contentDisposition.includes('.pdf')))) {
                     const buffer = await response.buffer();
@@ -341,7 +330,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         }, cpf, nascimento);
         
         console.log(`[RPA] Equatorial: Aguardando painel carregar...`);
-        await new Promise(r => setTimeout(r, 10000)); // Tempo extra para o Imperva analisar a nossa "capa"
+        await new Promise(r => setTimeout(r, 10000));
 
         console.log(`[RPA] Equatorial: Procurando a UC na tela para selecionar...`);
         const ucIdentificada = await page.evaluate(() => {
@@ -420,13 +409,11 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             const pages = await browser.pages();
             const paginaFatura = pages.find(p => p.url().includes('exibir-faturas')) || pages[pages.length - 1];
             
-            // TRAVA DE SEGURANÇA 1: Verifica se fomos bloqueados pelo Imperva antes de gerar o PDF
             const bodyText = await paginaFatura.evaluate(() => document.body.innerText.toLowerCase());
             if (bodyText.includes("access denied") || bodyText.includes("error 16") || bodyText.includes("imperva")) {
                  throw new Error("⚠️ PAUSA DE SEGURANÇA: O Firewall da Equatorial bloqueou o acesso à fatura. Operação abortada.");
             }
             
-            // TRAVA DE SEGURANÇA EXTRA: Só imprime se a página realmente for a da fatura ou um visualizador PDF local
             if (!paginaFatura.url().includes('exibir-faturas') && !paginaFatura.url().includes('blob') && !paginaFatura.url().includes('.pdf')) {
                  throw new Error("⚠️ PAUSA DE SEGURANÇA: A tela não carregou a fatura corretamente. Operação abortada para proteger a iGreen.");
             }
@@ -441,21 +428,16 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
         if (!pdfCapturado) throw new Error("Falha ao gerar o PDF. O site não baixou o ficheiro nem conseguiu renderizar a tela.");
 
-        // TRAVA DE SEGURANÇA 2 (O MESTRE EXIGIU): Verifica se o PDF é válido e pesado (e não uma página de erro disfarçada)
         if (fs.existsSync(caminhoFaturaLocal)) {
             const stats = fs.statSync(caminhoFaturaLocal);
-            // Menos de 15KB indica que o ficheiro está vazio ou é apenas um erro na tela
             if (stats.size < 15000) {
-                fs.unlinkSync(caminhoFaturaLocal); // Apaga o ficheiro falso
+                fs.unlinkSync(caminhoFaturaLocal);
                 throw new Error("⚠️ PAUSA DE SEGURANÇA: A fatura gerada é inválida ou foi bloqueada pela Equatorial. Operação abortada para não enviar erro à iGreen.");
             }
         } else {
             throw new Error("⚠️ PAUSA DE SEGURANÇA: Fatura não encontrada. Operação abortada.");
         }
 
-        // ==============================================================
-        // O COMPROMISSO DO MESTRE: DISPONIBILIZAR O PDF PARA VOCÊ VER!
-        // ==============================================================
         try {
             const pdfProvaPath = path.join('/tmp', 'ultima_fatura.pdf');
             fs.copyFileSync(caminhoFaturaLocal, pdfProvaPath);
@@ -466,9 +448,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             console.log(`======================================================\n`);
         } catch (e) {}
 
-        // ===============================================
-        // ETAPA 3: INJEÇÃO NA IGREEN (SÓ ENTRA SE TIVER PASSADO AS TRAVAS)
-        // ===============================================
         console.log(`[RPA] ETAPA 3: Injetando a Fatura na iGreen...`);
         
         await page.bringToFront();
@@ -527,7 +506,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
         console.log(`[RPA] INJEÇÃO DIRETA NO CÓDIGO HTML...`);
         
-        // Em vez de clicar, injeta o ficheiro no input invisível imediatamente!
         const inputUploads = await page.$$('input[type="file"]');
         if (inputUploads.length > 0) {
             console.log(`[RPA] ${inputUploads.length} inputs encontrados. Injetando PDF...`);
@@ -552,13 +530,15 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         await new Promise(r => setTimeout(r, 5000)); 
         
         await browser.close();
+        if (proxyUrlToUse) await proxyChain.closeAnonymizedProxy(proxyUrlToUse, true).catch(()=>{});
         if(fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
 
         if(!isAutomated) await enviarMensagem(phone, TEXTOS.T_RESGATE_SUCESSO);
         
     } catch (e) { 
         console.error("Erro RPA Devolutivas:", e.message);
-        if(browser) await browser.close(); 
+        if(browser) await browser.close().catch(()=>{}); 
+        if (proxyUrlToUse) await proxyChain.closeAnonymizedProxy(proxyUrlToUse, true).catch(()=>{});
         if(fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
         if(!isAutomated) await enviarMensagem(phone, TEXTOS.T_RESGATE_FAIL);
     }
