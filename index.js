@@ -170,7 +170,9 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         // 🛡️ O TÚNEL SECRETO (PROXY) - Carregado a partir do Render
         if (process.env.PROXY_IP && process.env.PROXY_PORT) {
             console.log(`[RPA] 🛡️ Ativando Túnel de Proxy Residencial (${process.env.PROXY_IP})...`);
-            puppeteerArgs.push(`--proxy-server=http://${process.env.PROXY_IP}:${process.env.PROXY_PORT}`);
+            
+            // CORREÇÃO: "http://" foi removido para evitar o erro net::ERR_PROXY_AUTH_UNSUPPORTED
+            puppeteerArgs.push(`--proxy-server=${process.env.PROXY_IP}:${process.env.PROXY_PORT}`);
         } else {
             console.log(`[RPA] ⚠️ Nenhum proxy detetado no Render. A rodar com IP nativo dos EUA.`);
         }
@@ -746,54 +748,4 @@ app.post('/webhook/igreen', async (req, res) => {
             } else { await enviarMensagem(phone, "⚠️ Envie a foto do VERSO."); }
             break;
         }
-    }
-});
-
-// ==========================================
-// ROTA PÚBLICA DE PROVAS (A PEDIDO DO MESTRE)
-// ==========================================
-app.get('/ultima-fatura', (req, res) => {
-    const file = path.join('/tmp', 'ultima_fatura.pdf');
-    if (fs.existsSync(file)) {
-        res.contentType('application/pdf');
-        res.sendFile(path.resolve(file));
-    } else {
-        res.status(404).send(`
-            <h2 style="font-family: sans-serif; color: #333; text-align: center; margin-top: 50px;">
-                🕵️‍♂️ Nenhuma fatura foi capturada ainda!
-            </h2>
-            <p style="font-family: sans-serif; color: #666; text-align: center;">
-                Faça o teste de uma Devolutiva no WhatsApp primeiro. Quando o robô gerar o PDF na Equatorial, ele aparecerá aqui.
-            </p>
-        `);
-    }
-});
-
-// ==========================================
-// HEALTH CHECK E INICIALIZAÇÃO
-// ==========================================
-const PORT = process.env.PORT || 10000;
-
-async function validateBrowser() {
-    try {
-        console.log("⏳ Iniciando Health Check do Navegador (Modo Docker)...");
-        const browser = await puppeteer.launch({
-            headless: true,
-            args: CHROME_ARGS, // O Health Check roda sem proxy para poupar os seus dados!
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath()
-        });
-        await browser.close();
-        console.log('✔ Browser health check passed! O contentor Docker está perfeito.');
-        return true;
-    } catch (error) {
-        console.error('❌ Browser initialization failed:', error.message);
-        process.exit(1); 
-    }
-}
-
-// ROTA DE SEGURANÇA PARA O RENDER
-app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindado!'));
-
-validateBrowser().then(() => {
-    app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});    
+    }    
