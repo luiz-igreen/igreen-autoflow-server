@@ -367,17 +367,66 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             await new Promise(r => setTimeout(r, 2000));
         } catch(e) {}
 
-        console.log(`[RPA] Equatorial: Inserindo CPF e Nascimento para Login...`);
+        console.log(`[RPA] Equatorial: Inserindo CPF (e Nascimento se existir) para Login...`);
         await page.evaluate((cpfBusca, nascBusca) => {
-            const inputs = document.querySelectorAll('input');
-            inputs.forEach(input => {
-                if (input.placeholder.toLowerCase().includes('cpf') || input.placeholder.toLowerCase().includes('cnpj')) input.value = cpfBusca;
-                if (input.placeholder.toLowerCase().includes('nascimento') || input.placeholder.toLowerCase().includes('data')) input.value = nascBusca;
-            });
-            const btnEntrar = Array.from(document.querySelectorAll('button')).find(b => b.textContent.toUpperCase().includes('ENTRAR'));
-            if(btnEntrar) btnEntrar.click();
+            const inputs = Array.from(document.querySelectorAll('input'));
+            
+            // Procura o campo de CPF (mesmo que diga apenas "Digite aqui")
+            let cpfField = inputs.find(i => 
+                (i.placeholder && i.placeholder.toLowerCase().includes('digite')) || 
+                (i.placeholder && i.placeholder.toLowerCase().includes('cpf')) ||
+                (i.previousElementSibling && i.previousElementSibling.textContent.toLowerCase().includes('cpf')) ||
+                (i.id && i.id.toLowerCase().includes('cpf'))
+            );
+            
+            // Procura o campo de Nascimento (se estiver logo na primeira tela)
+            let nascField = inputs.find(i => 
+                (i.placeholder && i.placeholder.toLowerCase().includes('nascimento')) || 
+                (i.placeholder && i.placeholder.toLowerCase().includes('data')) ||
+                (i.previousElementSibling && i.previousElementSibling.textContent.toLowerCase().includes('nascimento')) ||
+                (i.id && (i.id.toLowerCase().includes('nasc') || i.id.toLowerCase().includes('data')))
+            );
+
+            // Injeta o valor e dispara o evento de "teclado" para o site reconhecer a digitação
+            if (cpfField) {
+                cpfField.value = cpfBusca;
+                cpfField.dispatchEvent(new Event('input', { bubbles: true }));
+                cpfField.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            if (nascField) {
+                nascField.value = nascBusca;
+                nascField.dispatchEvent(new Event('input', { bubbles: true }));
+                nascField.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+
+            const btnEntrar = Array.from(document.querySelectorAll('button, a, div')).find(b => b.textContent.trim().toUpperCase() === 'ENTRAR' || b.textContent.trim().toUpperCase() === 'CONTINUAR');
+            if (btnEntrar) btnEntrar.click();
         }, cpf, nascimento);
         
+        await new Promise(r => setTimeout(r, 4000));
+
+        // 👁️ GOLPE DE MESTRE 3: Lidar com o Login em 2 Etapas (Data de Nascimento depois do CPF)
+        console.log(`[RPA] Equatorial: Verificando se exigiu 2ª etapa (Data de Nascimento)...`);
+        await page.evaluate((nascBusca) => {
+            const inputs = Array.from(document.querySelectorAll('input'));
+            let nascField = inputs.find(i => 
+                (i.placeholder && i.placeholder.toLowerCase().includes('nascimento')) || 
+                (i.placeholder && i.placeholder.toLowerCase().includes('data')) ||
+                (i.previousElementSibling && i.previousElementSibling.textContent.toLowerCase().includes('nascimento')) ||
+                (i.id && (i.id.toLowerCase().includes('nasc') || i.id.toLowerCase().includes('data')))
+            );
+            
+            // Se encontrou o campo de data e ele está visível na tela
+            if (nascField && nascField.offsetParent !== null) { 
+                nascField.value = nascBusca;
+                nascField.dispatchEvent(new Event('input', { bubbles: true }));
+                nascField.dispatchEvent(new Event('change', { bubbles: true }));
+                
+                const btnEntrar = Array.from(document.querySelectorAll('button, a, div')).find(b => b.textContent.trim().toUpperCase() === 'ENTRAR' || b.textContent.trim().toUpperCase() === 'CONTINUAR' || b.textContent.trim().toUpperCase() === 'ACESSAR');
+                if (btnEntrar) btnEntrar.click();
+            }
+        }, nascimento);
+
         console.log(`[RPA] Equatorial: Aguardando painel carregar...`);
         await new Promise(r => setTimeout(r, 10000));
 
