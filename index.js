@@ -3,7 +3,6 @@ import axios from 'axios';
 import admin from 'firebase-admin';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import proxyChain from 'proxy-chain';
 import fs from 'fs';
 import path from 'path';
 
@@ -79,7 +78,8 @@ const CHROME_ARGS = [
     "--disable-dev-shm-usage", 
     "--disable-gpu", 
     "--no-zygote", 
-    "--disable-blink-features=AutomationControlled"
+    "--disable-blink-features=AutomationControlled",
+    "--ignore-certificate-errors"
 ];
 
 // ==========================================
@@ -157,7 +157,6 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
 // ==========================================
 async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, nascBanco = null, isAutomated = false) {
     let browser;
-    let proxyUrlToUse = null;
     const caminhoFaturaLocal = path.join('/tmp', `fatura_${Date.now()}.pdf`);
     let cpf = cpfBanco;
     let nascimento = nascBanco;
@@ -166,18 +165,14 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
     try {
         let puppeteerArgs = [...CHROME_ARGS];
         
-        // 🛡️ O TÚNEL SECRETO + TRADUTOR DE PROXY
+        // 🛡️ O TÚNEL SECRETO DIRETO E NATIVO (Sem Tradutor)
         if (process.env.PROXY_IP && process.env.PROXY_PORT && process.env.PROXY_USER) {
-            console.log(`[RPA] 🛡️ Preparando Túnel Seguro com Proxy Chain...`);
-            const rawProxyUrl = `http://${process.env.PROXY_USER}:${process.env.PROXY_PASS}@${process.env.PROXY_IP}:${process.env.PROXY_PORT}`;
+            console.log(`[RPA] 🛡️ Preparando Túnel Seguro Nativo (C++ Engine)...`);
             
-            proxyUrlToUse = await proxyChain.anonymizeProxy(rawProxyUrl);
-            puppeteerArgs.push(`--proxy-server=${proxyUrlToUse}`);
+            puppeteerArgs.push(`--proxy-server=http://${process.env.PROXY_IP}:${process.env.PROXY_PORT}`);
             
-            // Bypass para entrar na iGreen pela porta da frente rápida
-            puppeteerArgs.push(`--proxy-bypass-list=*.igreenenergy.com.br`);
-            
-            console.log(`[RPA] 🔑 Passaporte VIP validado! Regra de Bypass para a iGreen ativada.`);
+            // Bypass para entrar na iGreen pela porta da frente rápida (NÃO usa proxy na iGreen)
+            puppeteerArgs.push(`--proxy-bypass-list=*.igreenenergy.com.br,<-loopback>`);
         } else {
             console.log(`[RPA] ⚠️ Nenhum proxy detetado no Render. A rodar com IP nativo dos EUA.`);
         }
@@ -189,6 +184,15 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         });
         
         const page = await browser.newPage();
+
+        // 🔑 Autenticação Nativa do Chrome (Blindada)
+        if (process.env.PROXY_USER && process.env.PROXY_PASS) {
+            await page.authenticate({
+                username: process.env.PROXY_USER,
+                password: process.env.PROXY_PASS
+            });
+            console.log(`[RPA] 🔑 Passaporte VIP validado nativamente! Regra de Bypass para a iGreen ativada.`);
+        }
         
         await page.setExtraHTTPHeaders({ 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7' });
         
@@ -641,7 +645,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         await new Promise(r => setTimeout(r, 5000)); 
         
         await browser.close();
-        if (proxyUrlToUse) await proxyChain.closeAnonymizedProxy(proxyUrlToUse, true).catch(()=>{});
         if(fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
 
         if(!isAutomated) await enviarMensagem(phone, TEXTOS.T_RESGATE_SUCESSO);
@@ -649,7 +652,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
     } catch (e) { 
         console.error("Erro RPA Devolutivas:", e.message);
         if(browser) await browser.close().catch(()=>{}); 
-        if (proxyUrlToUse) await proxyChain.closeAnonymizedProxy(proxyUrlToUse, true).catch(()=>{});
         if(fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
         if(!isAutomated) await enviarMensagem(phone, TEXTOS.T_RESGATE_FAIL);
     }
@@ -889,4 +891,4 @@ app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindad
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});    
+});
