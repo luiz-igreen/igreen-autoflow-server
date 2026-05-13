@@ -500,7 +500,18 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                         }
                     });
                     
-                    await new Promise(r => setTimeout(r, 8000));
+                    // 👁️ GOLPE DE MESTRE: Espera inteligente (Evita que o robô procure antes da página carregar)
+                    console.log(`[RPA] Equatorial: Aguardando o servidor da distribuidora carregar os débitos (Até 25s)...`);
+                    try {
+                        await pageEq.waitForFunction(() => {
+                            const txt = document.body.innerText.toLowerCase();
+                            return txt.includes('vencimento') || txt.includes('referente a') || txt.includes('pagamento') || txt.includes('r$');
+                        }, { timeout: 25000 });
+                        console.log(`[RPA] Equatorial: Débitos carregados com sucesso na tela!`);
+                        await new Promise(r => setTimeout(r, 3000)); // Tempo extra para os botões ocultos expandirem
+                    } catch (e) {
+                        console.log(`[RPA] ⚠️ Aviso: Faturas demoraram a aparecer ou o cliente não tem débitos.`);
+                    }
                 } else {
                     console.log(`[RPA] Equatorial: 🎯 Novo Layout detectado! As faturas já estão na tela, poupando tempo.`);
                 }
@@ -510,27 +521,42 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 const clicouFatura = await pageEq.evaluate(() => {
                     const todosElementos = Array.from(document.querySelectorAll('a, button, span, i, img, div, input, tr, td'));
                     
-                    // Passo 1 Humano: Procura o bloco da fatura EM ABERTO (Baseado na foto do Mestre)
+                    // Passo 1 Humano: Procura o bloco da fatura EM ABERTO
                     const linhaFatura = todosElementos.find(el => {
                         const txt = el.textContent.trim().toLowerCase();
                         
                         // 👁️ GOLPE DE MESTRE DA FOTO: 
-                        // Tem de ter "R$", tem de ter "Vencimento" (Aberto) e recusa o que tiver "Pagamento" (Pago).
-                        // O txt.length > 15 garante que ele pega a caixa grande inteira e não só uma palavrinha.
-                        return txt.includes('r$') && txt.includes('vencimento') && !txt.includes('pagamento') && el.offsetParent !== null && txt.length < 200 && txt.length > 15;
+                        // Tem de ter "R$", "Vencimento" e não pode ter "Pagamento".
+                        // Subimos o txt.length para < 250 para garantir que ele apanha a caixa "Mãe" inteira!
+                        return txt.includes('r$') && (txt.includes('vencimento') || txt.includes('referente a')) && !txt.includes('pagamento') && el.offsetParent !== null && txt.length < 250 && txt.length > 10;
                     });
 
                     if (linhaFatura) {
                         linhaFatura.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        
+                        // CLIQUE MASSIVO: Clica nela e nos filhos para forçar a abertura do cartão (Acerta sempre)
+                        const clicaveis = linhaFatura.querySelectorAll('span, p, b, div, strong');
+                        if (clicaveis.length > 0) {
+                            clicaveis.forEach(c => { try { c.click(); } catch(e){} });
+                        }
                         linhaFatura.click();
                         
                         if (linhaFatura.parentElement) {
                             linhaFatura.parentElement.click();
                         }
+                    } else {
+                        // FALLBACK: Se o layout antigo aparecer, tenta achar apenas "Referente a"
+                        const fallbackFatura = todosElementos.find(el => el.textContent.trim().toLowerCase().includes('referente a') && el.offsetParent !== null && el.textContent.length < 100);
+                        if (fallbackFatura) {
+                            fallbackFatura.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            fallbackFatura.click();
+                            if (fallbackFatura.parentElement) fallbackFatura.parentElement.click();
+                        }
                     }
 
+                    // Atraso estendido dentro da página: espera 2.5s o menu da fatura deslizar para baixo e abrir os botões
                     const start = new Date().getTime();
-                    while (new Date().getTime() < start + 1500);
+                    while (new Date().getTime() < start + 2500);
 
                     // Passo 2: O robô procura qualquer ícone que pareça uma impressora ou botão de download
                     const btnDireto = todosElementos.find(el => {
