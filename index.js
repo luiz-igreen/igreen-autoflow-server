@@ -480,63 +480,77 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 // Espera a nova tela da "Mãozinha" carregar a lista de débitos
                 await new Promise(r => setTimeout(r, 8000));
 
-                // 👁️ GOLPE DE MESTRE 6: Clicar sobre a PRIMEIRA FATURA (Passo 1 do Mestre)
-                console.log(`[RPA] Equatorial: Procurando e clicando na primeira fatura da lista...`);
+                // 👁️ GOLPE DE MESTRE 6: A "Rede de Arrasto" (Busca agressiva pela Fatura)
+                console.log(`[RPA] Equatorial: Rastreador ativado. Procurando o botão exato da Fatura...`);
                 
                 const clicouFatura = await pageEq.evaluate(() => {
-                    const elementos = Array.from(document.querySelectorAll('div, span, p, td, b, strong'));
-                    const faturas = elementos.filter(el => el.textContent.trim().toLowerCase().includes('referente a'));
+                    const todosElementos = Array.from(document.querySelectorAll('a, button, span, i, img, div, input'));
                     
-                    if (faturas.length > 0) {
-                        const primeiraFatura = faturas[0];
-                        primeiraFatura.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    // 1. Tenta achar o botão/ícone direto da fatura (Ícones de Impressora, PDF, ou texto Baixar)
+                    const btnDireto = todosElementos.find(el => {
+                        const txt = el.textContent.trim().toUpperCase();
+                        const title = (el.getAttribute('title') || '').toUpperCase();
+                        const classList = (el.getAttribute('class') || '').toUpperCase();
                         
-                        const linhaCompleta = primeiraFatura.closest('tr') || primeiraFatura.parentElement.parentElement || primeiraFatura.parentElement;
-                        if(linhaCompleta) linhaCompleta.click();
+                        const isText = txt === 'BAIXAR' || txt === 'IMPRIMIR' || txt === 'VER FATURA' || txt === 'PDF' || txt === 'VISUALIZAR' || txt.includes('2ª VIA') || txt.includes('2 VIA');
+                        const isTitle = title.includes('IMPRIMIR') || title.includes('DOWNLOAD') || title.includes('PDF') || title.includes('VISUALIZAR');
+                        const isIcon = classList.includes('FA-FILE-PDF') || classList.includes('FA-DOWNLOAD') || classList.includes('FA-PRINT') || classList.includes('PDF');
                         
-                        primeiraFatura.click();
-                        return true;
+                        return (isText || isTitle || isIcon) && el.offsetParent !== null; // Garante que está visível
+                    });
+
+                    if (btnDireto) {
+                        btnDireto.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        if (btnDireto.tagName === 'A') btnDireto.removeAttribute('target'); // Bloqueia aba invisível
+                        btnDireto.click();
+                        return 'BOTÃO_DIRETO';
                     }
+
+                    // 2. Se não tem botão direto, tenta selecionar a fatura (Radio box/Checkbox) e depois clica em Imprimir
+                    const btnSelecao = todosElementos.find(el => el.tagName === 'INPUT' && (el.type === 'radio' || el.type === 'checkbox') && el.offsetParent !== null);
+                    
+                    if (btnSelecao) {
+                        btnSelecao.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        btnSelecao.click(); // Seleciona a fatura
+                        
+                        // Agora procura o botão mestre de Imprimir na tela
+                        const btnImprimir = todosElementos.find(el => {
+                            const txt = el.textContent.trim().toUpperCase();
+                            return (txt.includes('IMPRIMIR') || txt.includes('GERAR') || txt.includes('VER FATURA')) && el.offsetParent !== null;
+                        });
+                        
+                        if (btnImprimir) {
+                            if (btnImprimir.tagName === 'A') btnImprimir.removeAttribute('target');
+                            btnImprimir.click();
+                            return 'SELECAO_E_IMPRIMIR';
+                        }
+                        return 'SÓ_SELECIONOU';
+                    }
+
                     return false;
                 });
 
                 if (clicouFatura) {
-                    console.log(`[RPA] Equatorial: Fatura selecionada! Aguardando 4 segundos (Passo 2 do Mestre)...`);
-                    await new Promise(r => setTimeout(r, 4000));
-
-                    console.log(`[RPA] Equatorial: Clicando em 'Ver Fatura' (Passo 3 do Mestre)...`);
-                    await pageEq.evaluate(() => {
-                        const botoes = Array.from(document.querySelectorAll('button, a, span, div'));
-                        const btnVerFatura = botoes.find(el => {
-                            const txt = el.textContent.toUpperCase();
-                            return (txt.includes('VER FATURA') || txt.includes('IMPRIMIR') || txt.includes('DOWNLOAD') || txt.includes('BAIXAR')) && el.offsetParent !== null;
-                        });
-                        if(btnVerFatura) {
-                            if (btnVerFatura.tagName === 'A') btnVerFatura.removeAttribute('target'); // Evita abrir numa aba invisível
-                            btnVerFatura.click();
-                        }
-                    });
-
-                    console.log(`[RPA] Equatorial: Aguardando a fatura aparecer (15s)...`);
+                    console.log(`[RPA] Equatorial: SUCESSO! Clique executado usando o método: ${clicouFatura}`);
+                    console.log(`[RPA] Equatorial: Aguardando o download ou a tela do PDF (15s)...`);
                     for (let i = 0; i < 15; i++) {
                         await new Promise(r => setTimeout(r, 1000)); 
                         if (fs.existsSync(caminhoFaturaLocal)) { pdfCapturado = true; break; }
                     }
                 } else {
-                    console.log(`[RPA] ⚠️ Fatura "Referente a" não encontrada na lista.`);
+                    console.log(`[RPA] ⚠️ Fatura não encontrada. O cliente pode não ter faturas em aberto ou o site mudou a posição dos botões.`);
                 }
                 
                 if (!pdfCapturado) {
-                    console.log(`[RPA] Fatura não baixou sozinha. Procurando Fatura Aberta na Tela (Passo 4 do Mestre)...`);
+                    console.log(`[RPA] O PDF não caiu na rede. Verificando se a fatura abriu na tela...`);
                     await new Promise(r => setTimeout(r, 6000)); 
                     
                     const abas = await browserEquatorial.pages();
                     for (let aba of abas) {
                         try {
                             const textoAba = await aba.evaluate(() => document.body.innerText.toLowerCase());
-                            // Se a aba tiver a cara de uma fatura, o robô fotografa em PDF
-                            if (textoAba.includes('total a pagar') || textoAba.includes('referente a') || textoAba.includes('conta de energia')) {
-                                console.log(`[RPA] 🎯 Fatura encontrada na tela! Tirando foto em PDF...`);
+                            if (textoAba.includes('total a pagar') || textoAba.includes('referente a') || textoAba.includes('conta de energia') || textoAba.includes('vencimento')) {
+                                console.log(`[RPA] 🎯 Fatura detectada aberta na tela! Batendo foto (PDF)...`);
                                 await aba.emulateMediaType('screen');
                                 await aba.pdf({ path: caminhoFaturaLocal, format: 'A4', printBackground: true });
                                 if (fs.existsSync(caminhoFaturaLocal)) { pdfCapturado = true; break; }
@@ -915,4 +929,4 @@ app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindad
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});    
+});
