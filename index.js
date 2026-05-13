@@ -3,7 +3,6 @@ import axios from 'axios';
 import admin from 'firebase-admin';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import proxyChain from 'proxy-chain';
 import fs from 'fs';
 import path from 'path';
 
@@ -290,7 +289,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             try {
                 let puppeteerArgsEq = [...CHROME_ARGS];
                 
-                // Conectando diretamente ao ZenRows sem passar pelo tradutor (proxy-chain)
+                // Conectando diretamente ao ZenRows nativamente
                 puppeteerArgsEq.push(`--proxy-server=http://${ZENROWS_PROXY}`);
                 puppeteerArgsEq.push(`--proxy-bypass-list=*.igreenenergy.com.br`);
 
@@ -328,7 +327,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 });
 
                 console.log(`[RPA] Abrindo o portal da Equatorial através do ZenRows...`);
-                // Timeout estendido para 120s para o proxy ZenRows processar os desafios anti-bot
                 await pageEq.goto(EQUATORIAL_AL_URL, { waitUntil: 'domcontentloaded', timeout: 120000 });
                 await new Promise(r => setTimeout(r, 8000)); 
 
@@ -543,13 +541,15 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     const stats = fs.statSync(caminhoFaturaLocal);
                     if (stats.size < 15000) {
                         fs.unlinkSync(caminhoFaturaLocal);
+                        pdfCapturado = false;
                         throw new Error("Fatura gerada é inválida ou foi bloqueada.");
                     }
                 } else {
+                    pdfCapturado = false;
                     throw new Error("Fatura não encontrada.");
                 }
 
-                console.log(`[RPA] 🎉 Operação no Motor 2 concluída com sucesso via ZenRows! Destruindo túnel...`);
+                console.log(`[RPA] 🎉 Operação no Motor 2 concluída com sucesso via ZenRows!`);
                 await browserEquatorial.close().catch(()=>{});
                 break; 
 
@@ -560,8 +560,8 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             }
         } 
 
-        if (!pdfCapturado) {
-            throw new Error("Falha repetida de conexão com o túnel do ZenRows ou bloqueio na Equatorial.");
+        if (!pdfCapturado || !fs.existsSync(caminhoFaturaLocal)) {
+            throw new Error("Falha ao capturar a fatura na Equatorial. O cliente possui faturas pendentes?");
         }
 
         try {
@@ -633,6 +633,8 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
         console.log(`[RPA] INJEÇÃO DIRETA NO CÓDIGO HTML...`);
         
+        await new Promise(r => setTimeout(r, 2000));
+
         const inputUploads = await pageIgreenFinal.$$('input[type="file"]');
         if (inputUploads.length > 0) {
             console.log(`[RPA] ${inputUploads.length} inputs encontrados. Injetando PDF...`);
@@ -904,4 +906,4 @@ app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindad
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});
+});    
