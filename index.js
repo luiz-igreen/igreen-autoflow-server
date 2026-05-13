@@ -277,40 +277,16 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         }
 
         // ==============================================================
-        // MOTOR 2: EQUATORIAL (Sistema de Rotação Implacável)
+        // MOTOR 2: EQUATORIAL (SEM PROXY - TENTATIVA DE ACESSO DIRETO)
         // ==============================================================
-        console.log(`[RPA] 👻 Preparando MOTOR 2 (Equatorial com Múltiplos Disfarces)...`);
-        
-        let baseProxyPass = process.env.PROXY_PASS || "";
-        // Limpa qualquer sessão antiga que tenha ficado presa na variável
-        baseProxyPass = baseProxyPass.split('_session-')[0].split('_lifetime-')[0];
-        if (!baseProxyPass.includes('_country-br')) {
-            baseProxyPass += '_country-br';
-        }
+        console.log(`[RPA] 👻 Preparando MOTOR 2 (Equatorial - Acesso Direto sem Proxy)...`);
 
         for (let tentativa = 1; tentativa <= 3; tentativa++) {
             console.log(`\n[RPA] ---> Iniciando Salto para Equatorial (Tentativa ${tentativa}/3) <---`);
             
             try {
+                // Não configuramos proxy aqui, vamos com a capa nativa do Puppeteer Stealth
                 let puppeteerArgsEq = [...CHROME_ARGS];
-                
-                if (process.env.PROXY_IP && process.env.PROXY_USER) {
-                    // GERADOR DE SESSÃO DINÂMICA: Muda de IP a cada tentativa falhada!
-                    const sessionID = Math.floor(Math.random() * 100000000);
-                    const passComSessao = `${baseProxyPass}_session-rpa${sessionID}`;
-                    
-                    const safeUser = encodeURIComponent(process.env.PROXY_USER);
-                    const safePass = encodeURIComponent(passComSessao);
-                    const rawProxyUrl = `http://${safeUser}:${safePass}@${process.env.PROXY_IP}:${process.env.PROXY_PORT}`;
-                    
-                    proxyUrlToUse = await proxyChain.anonymizeProxy(rawProxyUrl);
-                    puppeteerArgsEq.push(`--proxy-server=${proxyUrlToUse}`);
-                    
-                    // CORREÇÃO CRÍTICA AQUI: Apenas o bypass normal. A palavra "<-loopback>" foi REMOVIDA para não quebrar o proxy local.
-                    puppeteerArgsEq.push(`--proxy-bypass-list=*.igreenenergy.com.br`);
-                    
-                    console.log(`[RPA] 🛡️ Disfarce IP gerado para esta tentativa.`);
-                }
 
                 browserEquatorial = await puppeteer.launch({ 
                     headless: true, 
@@ -321,7 +297,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 const pageEq = await browserEquatorial.newPage();
                 await pageEq.setExtraHTTPHeaders({ 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7' });
                 
-                // Interceptador de PDF apenas para este Motor
                 const escutarPDF = async (response) => {
                     try {
                         const contentType = response.headers()['content-type'];
@@ -343,8 +318,15 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 });
 
                 console.log(`[RPA] Abrindo o portal da Equatorial...`);
+                // Vamos tentar o site antigo primeiro, sem proxy
                 await pageEq.goto(EQUATORIAL_AL_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
                 await new Promise(r => setTimeout(r, 5000)); 
+
+                // Verifica se fomos barrados logo à entrada
+                const bodyTextInicio = await pageEq.evaluate(() => document.body.innerText.toLowerCase());
+                if (bodyTextInicio.includes("access denied") || bodyTextInicio.includes("error 16") || bodyTextInicio.includes("imperva")) {
+                    throw new Error("Imperva bloqueou o acesso sem Proxy.");
+                }
 
                 console.log(`[RPA] Verificando se há lixo de outro cliente (Botão SAIR)...`);
                 const clicouSair = await pageEq.evaluate(() => {
@@ -415,7 +397,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 }
 
                 console.log(`[RPA] Equatorial: Aguardando painel carregar...`);
-                await new Promise(r => setTimeout(r, 10000));
+                await new Promise(r => setTimeout(r, 15000));
 
                 console.log(`[RPA] Equatorial: Procurando a UC na tela para selecionar...`);
                 const ucIdentificada = await pageEq.evaluate(() => {
@@ -468,8 +450,8 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     }
                 });
                 
-                console.log(`[RPA] Equatorial: Aguardando fatura na rede (10s)...`);
-                for (let i = 0; i < 10; i++) {
+                console.log(`[RPA] Equatorial: Aguardando fatura na rede (15s)...`);
+                for (let i = 0; i < 15; i++) {
                     await new Promise(r => setTimeout(r, 1000)); 
                     if (fs.existsSync(caminhoFaturaLocal)) { pdfCapturado = true; break; }
                 }
@@ -483,7 +465,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     
                     const bodyText = await paginaFatura.evaluate(() => document.body.innerText.toLowerCase());
                     if (bodyText.includes("access denied") || bodyText.includes("error 16") || bodyText.includes("imperva")) {
-                         throw new Error("Firewall da Equatorial bloqueou o acesso à fatura.");
+                         throw new Error("Firewall da Equatorial bloqueou o acesso à fatura sem proxy.");
                     }
                     
                     if (!paginaFatura.url().includes('exibir-faturas') && !paginaFatura.url().includes('blob') && !paginaFatura.url().includes('.pdf')) {
@@ -506,23 +488,19 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     throw new Error("Fatura não encontrada.");
                 }
 
-                // Se chegou até aqui sem dar erro, o PDF está na mão! Encerra o loop.
-                console.log(`[RPA] 🎉 Operação no Motor 2 concluída com sucesso! Destruindo túnel...`);
+                console.log(`[RPA] 🎉 Operação no Motor 2 concluída com sucesso! (Sem Proxy)`);
                 await browserEquatorial.close().catch(()=>{});
-                if (proxyUrlToUse) await proxyChain.closeAnonymizedProxy(proxyUrlToUse, true).catch(()=>{});
                 break; 
 
             } catch (err) {
-                console.log(`[RPA] ⚠️ O túnel ou extração falhou na casa atual: ${err.message}`);
-                // Em caso de erro, destroi TUDO para garantir que a próxima tentativa use uma SESSÃO NOVA
+                console.log(`[RPA] ⚠️ Tentativa sem proxy falhou: ${err.message}`);
                 if (browserEquatorial) await browserEquatorial.close().catch(()=>{});
-                if (proxyUrlToUse) await proxyChain.closeAnonymizedProxy(proxyUrlToUse, true).catch(()=>{});
                 await new Promise(r => setTimeout(r, 3000));
             }
-        } // FIM DO LOOP
+        } 
 
         if (!pdfCapturado) {
-            throw new Error("O túnel do Proxy falhou repetidamente em várias casas no Brasil. A Equatorial pode estar em manutenção.");
+            throw new Error("A Equatorial bloqueou as conexões diretas (Imperva). Precisamos de um Proxy do Brasil para contornar isso.");
         }
 
         try {
@@ -621,7 +599,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         });
         await new Promise(r => setTimeout(r, 5000)); 
         
-        // Destruição final do Motor 1
         if (browserIgreen) await browserIgreen.close().catch(()=>{});
         if (fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
 
@@ -854,7 +831,7 @@ async function validateBrowser() {
         console.log("⏳ Iniciando Health Check do Navegador (Modo Docker)...");
         const browser = await puppeteer.launch({
             headless: true,
-            args: CHROME_ARGS, // O Health Check roda sem proxy para poupar os seus dados!
+            args: CHROME_ARGS, 
             executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath()
         });
         await browser.close();
@@ -871,4 +848,4 @@ app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindad
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});    
+});
