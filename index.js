@@ -516,109 +516,95 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     console.log(`[RPA] Equatorial: 🎯 Novo Layout detectado! As faturas já estão na tela, poupando tempo.`);
                 }
 
-                console.log(`[RPA] Equatorial: Rastreador ativado. Procurando a linha da fatura e o botão...`);
+                console.log(`[RPA] Equatorial: Iniciando Análise Profunda e Mouse Real (Sniper)...`);
                 
-                const clicouFatura = await pageEq.evaluate(() => {
-                    const todosElementos = Array.from(document.querySelectorAll('a, button, span, i, img, div, input, tr, td'));
+                // PASSO 1: O Radar acha as Coordenadas X e Y da fatura na tela
+                const alvoFatura = await pageEq.evaluate(() => {
+                    const todosElementos = Array.from(document.querySelectorAll('div, span, p, a, tr, td, li'));
                     
-                    // Passo 1 Humano: Procura o bloco da fatura EM ABERTO
-                    let alvoFatura = null;
-
-                    // 👁️ GOLPE DE MESTRE - ESTRATÉGIA DE CÉLULAS SEPARADAS:
-                    // Como a Equatorial separou os textos, procuramos qualquer pedaço válido e clicamos na árvore toda!
-                    
-                    // 1. Tenta achar SÓ a caixinha do Vencimento (Apenas faturas em aberto têm isto)
-                    const celulaVencimento = todosElementos.find(el => {
+                    const celula = todosElementos.find(el => {
                         const txt = el.textContent.trim().toLowerCase();
-                        return txt.includes('vencimento') && !txt.includes('pagamento') && txt.length < 60 && el.offsetParent !== null;
+                        return txt.includes('r$') && txt.includes('vencimento') && !txt.includes('pagamento') && el.offsetParent !== null && txt.length > 10 && txt.length < 250;
                     });
 
-                    // 2. Tenta achar SÓ a caixinha do Dinheiro (R$) que não seja fatura paga
-                    const celulaDinheiro = todosElementos.find(el => {
-                        const txt = el.textContent.trim().toLowerCase();
-                        return txt.includes('r$') && txt.match(/\d+,\d{2}/) && !txt.includes('pagamento') && txt.length < 50 && el.offsetParent !== null;
-                    });
-
-                    // 3. Tenta achar a caixa "Mãe" inteira (caso o layout mude amanhã)
-                    const caixaInteira = todosElementos.find(el => {
-                        const txt = el.textContent.trim().toLowerCase();
-                        return txt.includes('r$') && (txt.includes('vencimento') || txt.includes('referente a')) && !txt.includes('pagamento') && el.offsetParent !== null && txt.length < 250 && txt.length > 10;
-                    });
-
-                    // O robô atira na primeira coisa válida que encontrar da fatura!
-                    alvoFatura = celulaVencimento || celulaDinheiro || caixaInteira;
-
-                    if (alvoFatura) {
-                        alvoFatura.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        
-                        // CLIQUE MASSIVO: Clica na célula pequena, no pai dela e no avô (Garante a abertura do menu!)
-                        alvoFatura.click();
-                        if (alvoFatura.parentElement) {
-                            alvoFatura.parentElement.click();
-                            if (alvoFatura.parentElement.parentElement) {
-                                alvoFatura.parentElement.parentElement.click(); 
-                            }
-                        }
-                    } else {
-                        // FALLBACK: Se o layout antigo aparecer, tenta achar apenas "Referente a"
-                        const fallbackFatura = todosElementos.find(el => el.textContent.trim().toLowerCase().includes('referente a') && !el.textContent.trim().toLowerCase().includes('pagamento') && el.offsetParent !== null && el.textContent.length < 100);
-                        if (fallbackFatura) {
-                            fallbackFatura.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            fallbackFatura.click();
-                            if (fallbackFatura.parentElement) fallbackFatura.parentElement.click();
-                        }
+                    if (celula) {
+                        celula.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        // Pega a "caixa física" do elemento na tela para saber a posição exata
+                        const rect = celula.getBoundingClientRect();
+                        return { encontrou: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2), texto: celula.textContent.substring(0, 30) };
                     }
 
-                    // Atraso estendido dentro da página: espera 2.5s o menu da fatura deslizar para baixo e abrir os botões
-                    const start = new Date().getTime();
-                    while (new Date().getTime() < start + 2500);
-
-                    // Passo 2: O robô procura qualquer ícone que pareça uma impressora ou botão de download
-                    const btnDireto = todosElementos.find(el => {
-                        const txt = el.textContent.trim().toUpperCase();
-                        const title = (el.getAttribute('title') || '').toUpperCase();
-                        const classList = (el.getAttribute('class') || '').toUpperCase();
-                        
-                        const isText = txt === 'BAIXAR' || txt === 'IMPRIMIR' || txt === 'VER FATURA' || txt === 'PDF' || txt === 'VISUALIZAR' || txt.includes('2ª VIA');
-                        const isTitle = title.includes('IMPRIMIR') || title.includes('DOWNLOAD') || title.includes('PDF') || title.includes('VISUALIZAR');
-                        const isIcon = classList.includes('FA-FILE-PDF') || classList.includes('FA-DOWNLOAD') || classList.includes('FA-PRINT') || classList.includes('PDF') || classList.includes('PRINT');
-                        
-                        // Também tenta achar ícones SVG soltos (muito comum em layouts novos)
-                        const hasSvg = el.querySelector('svg') !== null;
-                        
-                        return (isText || isTitle || isIcon || (hasSvg && (title.includes('IMPRIMIR') || txt.includes('IMPRIMIR')))) && el.offsetParent !== null; 
-                    });
-
-                    if (btnDireto) {
-                        btnDireto.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        if (btnDireto.tagName === 'A') btnDireto.removeAttribute('target'); 
-                        btnDireto.click();
-                        return 'BOTÃO_ENCONTRADO_E_CLICADO';
+                    const celulaAntiga = todosElementos.find(el => el.textContent.trim().toLowerCase().includes('referente a') && !el.textContent.trim().toLowerCase().includes('pagamento') && el.offsetParent !== null && el.textContent.length < 100);
+                    if (celulaAntiga) {
+                        celulaAntiga.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        const rect = celulaAntiga.getBoundingClientRect();
+                        return { encontrou: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2), texto: 'Layout Antigo' };
                     }
 
-                    const btnSelecao = todosElementos.find(el => el.tagName === 'INPUT' && (el.type === 'radio' || el.type === 'checkbox') && el.offsetParent !== null);
-                    if (btnSelecao) {
-                        btnSelecao.click();
-                        const btnImprimir = todosElementos.find(el => el.textContent.trim().toUpperCase().includes('IMPRIMIR') && el.offsetParent !== null);
-                        if (btnImprimir) {
-                            if (btnImprimir.tagName === 'A') btnImprimir.removeAttribute('target');
-                            btnImprimir.click();
-                            return 'SELECAO_CHECKBOX_E_IMPRIMIR';
-                        }
-                    }
-
-                    return false;
+                    return { encontrou: false };
                 });
 
-                if (clicouFatura) {
-                    console.log(`[RPA] Equatorial: SUCESSO! Fatura selecionada. Método: ${clicouFatura}`);
+                if (alvoFatura.encontrou) {
+                    console.log(`[RPA] Equatorial: Fatura localizada na tela. Usando MOUSE FÍSICO nas coordenadas X:${Math.round(alvoFatura.x)} Y:${Math.round(alvoFatura.y)}`);
+                    
+                    // MOUSE REAL: O robô move o mouse mecânico e clica fisicamente
+                    await pageEq.mouse.move(alvoFatura.x, alvoFatura.y);
+                    await new Promise(r => setTimeout(r, 500));
+                    await pageEq.mouse.click(alvoFatura.x, alvoFatura.y);
+                    
+                    // Clique Duplo por segurança, ligeiramente mais acima
+                    await new Promise(r => setTimeout(r, 500));
+                    await pageEq.mouse.click(alvoFatura.x, alvoFatura.y - 10);
+
+                    console.log(`[RPA] Equatorial: Clique físico feito! Aguardando a animação abrir o botão (4s)...`);
+                    await new Promise(r => setTimeout(r, 4000));
+
+                    console.log(`[RPA] Equatorial: Procurando o botão de Impressora/Download...`);
+                    // PASSO 2: O Radar acha as Coordenadas X e Y do botão de Impressora
+                    const alvoBotao = await pageEq.evaluate(() => {
+                        const todos = Array.from(document.querySelectorAll('*'));
+                        const btn = todos.find(el => {
+                            const txt = el.textContent.trim().toUpperCase();
+                            const title = (el.getAttribute('title') || '').toUpperCase();
+                            const classList = (el.getAttribute('class') || '').toUpperCase();
+                            
+                            const isText = txt === 'BAIXAR' || txt === 'IMPRIMIR' || txt === 'VER FATURA' || txt === 'PDF' || txt === 'VISUALIZAR' || txt.includes('2ª VIA');
+                            const isTitle = title.includes('IMPRIMIR') || title.includes('DOWNLOAD') || title.includes('PDF') || title.includes('VISUALIZAR');
+                            const isIcon = classList.includes('FA-FILE-PDF') || classList.includes('FA-DOWNLOAD') || classList.includes('FA-PRINT') || classList.includes('PDF') || classList.includes('PRINT');
+                            const hasSvg = el.querySelector('svg') !== null;
+                            
+                            return (isText || isTitle || isIcon || (hasSvg && (title.includes('IMPRIMIR') || txt.includes('IMPRIMIR')))) && el.offsetParent !== null; 
+                        });
+
+                        if (btn) {
+                            btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            if (btn.tagName === 'A') btn.removeAttribute('target'); 
+                            const rect = btn.getBoundingClientRect();
+                            return { encontrou: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2) };
+                        }
+                        return { encontrou: false };
+                    });
+
+                    if (alvoBotao.encontrou) {
+                        console.log(`[RPA] Equatorial: Ícone/Botão localizado! Movendo o mouse e clicando...`);
+                        await pageEq.mouse.move(alvoBotao.x, alvoBotao.y);
+                        await new Promise(r => setTimeout(r, 500));
+                        await pageEq.mouse.click(alvoBotao.x, alvoBotao.y);
+                    } else {
+                        console.log(`[RPA] Equatorial: Botão invisível. Injetando clique DOM massivo...`);
+                        await pageEq.evaluate(() => {
+                            const btns = Array.from(document.querySelectorAll('button, a, i, svg')).filter(e => e.offsetParent !== null);
+                            btns.forEach(b => { try { b.click(); } catch(e){} });
+                        });
+                    }
+
                     console.log(`[RPA] Equatorial: Aguardando fatura na rede (15s)...`);
                     for (let i = 0; i < 15; i++) {
                         await new Promise(r => setTimeout(r, 1000)); 
                         if (fs.existsSync(caminhoFaturaLocal)) { pdfCapturado = true; break; }
                     }
                 } else {
-                    console.log(`[RPA] ⚠️ Fatura não encontrada. O cliente pode não ter faturas em aberto ou o site mudou a posição dos botões.`);
+                    console.log(`[RPA] ⚠️ Fatura não encontrada pelo radar de coordenadas.`);
                 }
                 
                 if (!pdfCapturado) {
