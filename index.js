@@ -447,24 +447,23 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 // Espera a nova tela da "Mãozinha" carregar a lista de débitos
                 await new Promise(r => setTimeout(r, 8000));
 
-                // 👁️ GOLPE DE MESTRE 6: Clicar sobre o Valor da Conta (R$) na nova interface
-                console.log(`[RPA] Equatorial: Procurando e clicando no valor da fatura (R$)...`);
+                // 👁️ GOLPE DE MESTRE 6: Clicar sobre a PRIMEIRA FATURA (Referente a...)
+                console.log(`[RPA] Equatorial: Procurando e clicando na primeira fatura da lista...`);
                 await pageEq.evaluate(() => {
-                    const elementos = Array.from(document.querySelectorAll('div, span, td, p, button, a, strong, b'));
-                    const valores = elementos.filter(el => {
-                        const txt = el.textContent.trim();
-                        // Procura "R$" acompanhado de números e garante que não é um texto gigante do site
-                        return txt.includes('R$') && /\d/.test(txt) && txt.length < 25;
-                    });
+                    const elementos = Array.from(document.querySelectorAll('div, span, p, td, b, strong'));
+                    // Encontra todos os elementos que contêm o texto "Referente a"
+                    const faturas = elementos.filter(el => el.textContent.trim().toLowerCase().includes('referente a'));
 
-                    if (valores.length > 0) {
-                        const alvo = valores[0]; // A primeira (mais recente)
-                        alvo.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        alvo.click();
+                    if (faturas.length > 0) {
+                        const primeiraFatura = faturas[0]; // A primeira fatura da lista
+                        primeiraFatura.scrollIntoView({ behavior: 'smooth', block: 'center' });
                         
-                        // Também clica no contêiner pai para garantir que o evento do site é acionado com precisão
-                        const pai = alvo.closest('tr') || alvo.parentElement;
-                        if(pai) pai.click();
+                        // Sobe na árvore de elementos para clicar na "linha inteira" (card da fatura)
+                        const linhaCompleta = primeiraFatura.closest('tr') || primeiraFatura.parentElement.parentElement || primeiraFatura.parentElement;
+                        if(linhaCompleta) linhaCompleta.click();
+                        
+                        // Clica também diretamente no texto para garantir
+                        primeiraFatura.click();
                         return true;
                     }
                     return false;
@@ -879,4 +878,4 @@ app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindad
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});    
+});
