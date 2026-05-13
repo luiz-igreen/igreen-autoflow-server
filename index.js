@@ -3,7 +3,6 @@ import axios from 'axios';
 import admin from 'firebase-admin';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import proxyChain from 'proxy-chain';
 import fs from 'fs';
 import path from 'path';
 
@@ -159,7 +158,6 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
 async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, nascBanco = null, isAutomated = false) {
     let browserIgreen = null;
     let browserEquatorial = null;
-    let proxyUrlToUse = null;
     const caminhoFaturaLocal = path.join('/tmp', `fatura_${Date.now()}.pdf`);
     let cpf = cpfBanco;
     let nascimento = nascBanco;
@@ -285,6 +283,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             console.log(`\n[RPA] ---> Iniciando Salto para Equatorial (Tentativa ${tentativa}/3) <---`);
             
             try {
+                // Removemos o código do Proxy completamente. O robô vai usar a sua internet nativa.
                 let puppeteerArgsEq = [...CHROME_ARGS];
 
                 browserEquatorial = await puppeteer.launch({ 
@@ -413,7 +412,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     });
                     if (linkEq) {
                         linkEq.click();
-                        // Tenta clicar no elemento pai também para garantir (às vezes o evento está no "card")
                         if(linkEq.parentElement) linkEq.parentElement.click();
                     }
                 });
@@ -430,7 +428,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     });
                     if (elemUc) { 
                         elemUc.click(); 
-                        if(elemUc.parentElement) elemUc.parentElement.click(); // Clica na linha inteira da UC
+                        if(elemUc.parentElement) elemUc.parentElement.click(); 
                         return elemUc.textContent.trim(); 
                     }
                     return null;
@@ -662,7 +660,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         console.error("Erro RPA Devolutivas:", e.message);
         if (browserIgreen) await browserIgreen.close().catch(()=>{}); 
         if (browserEquatorial) await browserEquatorial.close().catch(()=>{}); 
-        if (proxyUrlToUse) await proxyChain.closeAnonymizedProxy(proxyUrlToUse, true).catch(()=>{});
         if (fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
         if(!isAutomated) await enviarMensagem(phone, TEXTOS.T_RESGATE_FAIL);
     }
