@@ -31,7 +31,7 @@ const IGREEN_PASS = process.env.IGREEN_PASS;
 
 const APP_ID = 'igreen-autoflow-v4';
 
-// CREDENCIAIS ZENROWS (WEB UNLOCKER) - A brilhante contribuição da sua outra IA!
+// CREDENCIAIS ZENROWS (WEB UNLOCKER)
 const ZENROWS_KEY = 'f826d9e653539c8a72d1c2a7610dfd1641c00a60';
 const ZENROWS_PROXY = 'proxy.zenrows.com:8001';
 
@@ -158,12 +158,11 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
 }
 
 // ==========================================
-// MÓDULO 2: EXTRATOR RPA TOTAL (ARQUITETURA DE DOIS MOTORES + ZENROWS)
+// MÓDULO 2: EXTRATOR RPA TOTAL (ARQUITETURA DE DOIS MOTORES + ZENROWS NATIVO)
 // ==========================================
 async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, nascBanco = null, isAutomated = false) {
     let browserIgreen = null;
     let browserEquatorial = null;
-    let proxyUrlToUse = null;
     const caminhoFaturaLocal = path.join('/tmp', `fatura_${Date.now()}.pdf`);
     let cpf = cpfBanco;
     let nascimento = nascBanco;
@@ -281,9 +280,9 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         }
 
         // ==============================================================
-        // MOTOR 2: EQUATORIAL (USANDO O ZENROWS WEB UNLOCKER)
+        // MOTOR 2: EQUATORIAL (USANDO O ZENROWS DE FORMA NATIVA E DIRETA)
         // ==============================================================
-        console.log(`[RPA] 👻 Preparando MOTOR 2 (Equatorial com ZenRows Unlocker)...`);
+        console.log(`[RPA] 👻 Preparando MOTOR 2 (Equatorial com ZenRows Nativo)...`);
 
         for (let tentativa = 1; tentativa <= 3; tentativa++) {
             console.log(`\n[RPA] ---> Iniciando Salto para Equatorial (Tentativa ${tentativa}/3) <---`);
@@ -291,10 +290,8 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             try {
                 let puppeteerArgsEq = [...CHROME_ARGS];
                 
-                // Embrulha o ZenRows no Proxy-Chain para evitar erros ERR_PROXY_AUTH_UNSUPPORTED do Chrome
-                const rawProxyUrl = `http://${ZENROWS_KEY}:@${ZENROWS_PROXY}`;
-                proxyUrlToUse = await proxyChain.anonymizeProxy(rawProxyUrl);
-                puppeteerArgsEq.push(`--proxy-server=${proxyUrlToUse}`);
+                // Conectando diretamente ao ZenRows sem passar pelo tradutor (proxy-chain)
+                puppeteerArgsEq.push(`--proxy-server=http://${ZENROWS_PROXY}`);
                 puppeteerArgsEq.push(`--proxy-bypass-list=*.igreenenergy.com.br`);
 
                 browserEquatorial = await puppeteer.launch({ 
@@ -304,6 +301,10 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 });
                 
                 const pageEq = await browserEquatorial.newPage();
+                
+                // Autenticação nativa do Chrome para o ZenRows (Sem senha, como eles pedem!)
+                await pageEq.authenticate({ username: ZENROWS_KEY, password: '' });
+                
                 await pageEq.setExtraHTTPHeaders({ 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7' });
                 
                 const escutarPDF = async (response) => {
@@ -550,13 +551,11 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
                 console.log(`[RPA] 🎉 Operação no Motor 2 concluída com sucesso via ZenRows! Destruindo túnel...`);
                 await browserEquatorial.close().catch(()=>{});
-                if (proxyUrlToUse) await proxyChain.closeAnonymizedProxy(proxyUrlToUse, true).catch(()=>{});
                 break; 
 
             } catch (err) {
                 console.log(`[RPA] ⚠️ O túnel ou extração falhou via ZenRows: ${err.message}`);
                 if (browserEquatorial) await browserEquatorial.close().catch(()=>{});
-                if (proxyUrlToUse) await proxyChain.closeAnonymizedProxy(proxyUrlToUse, true).catch(()=>{});
                 await new Promise(r => setTimeout(r, 3000));
             }
         } 
@@ -666,7 +665,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         console.error("Erro RPA Devolutivas:", e.message);
         if (browserIgreen) await browserIgreen.close().catch(()=>{}); 
         if (browserEquatorial) await browserEquatorial.close().catch(()=>{}); 
-        if (proxyUrlToUse) await proxyChain.closeAnonymizedProxy(proxyUrlToUse, true).catch(()=>{});
         if (fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
         if(!isAutomated) await enviarMensagem(phone, TEXTOS.T_RESGATE_FAIL);
     }
