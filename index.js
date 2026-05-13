@@ -396,11 +396,31 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 console.log(`[RPA] Equatorial: Aguardando painel carregar...`);
                 await new Promise(r => setTimeout(r, 15000));
 
-                console.log(`[RPA] Equatorial: Procurando a UC na tela para selecionar...`);
-                const ucIdentificada = await pageEq.evaluate(() => {
+                // Fecha qualquer pop-up intrusivo antes de clicar nas coisas
+                await pageEq.evaluate(() => {
                     const btnFechar = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase() === 'FECHAR' || el.textContent.toUpperCase() === 'X');
                     if(btnFechar) btnFechar.click(); 
+                });
+                await new Promise(r => setTimeout(r, 1000));
 
+                // 👁️ GOLPE DE MESTRE 7 (O SEU ACHADO!): Clicar no Link/Logo da Equatorial para liberar o menu
+                console.log(`[RPA] Equatorial: Procurando e clicando no link/acesso da distribuidora intermediária...`);
+                await pageEq.evaluate(() => {
+                    const elementos = Array.from(document.querySelectorAll('a, button, span, div, h2, h3, p'));
+                    const linkEq = elementos.find(el => {
+                        const txt = el.textContent.trim().toUpperCase();
+                        return (txt === 'EQUATORIAL ALAGOAS' || txt === 'ALAGOAS' || txt === 'ACESSAR' || txt === 'IR PARA O PORTAL' || txt.includes('EQUATORIAL')) && el.offsetParent !== null && txt.length < 35;
+                    });
+                    if (linkEq) {
+                        linkEq.click();
+                        // Tenta clicar no elemento pai também para garantir (às vezes o evento está no "card")
+                        if(linkEq.parentElement) linkEq.parentElement.click();
+                    }
+                });
+                await new Promise(r => setTimeout(r, 5000));
+
+                console.log(`[RPA] Equatorial: Procurando a UC na tela para selecionar...`);
+                const ucIdentificada = await pageEq.evaluate(() => {
                     const elementos = Array.from(document.querySelectorAll('span, div, p, a, li, option, td, h3, h4'));
                     const elemUc = elementos.find(el => {
                         const txt = el.textContent.trim();
@@ -408,7 +428,11 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                         const soNumeros = txt.replace(/\D/g, '');
                         return soNumeros.length >= 8 && soNumeros.length <= 15 && txt === soNumeros;
                     });
-                    if (elemUc) { elemUc.click(); return elemUc.textContent.trim(); }
+                    if (elemUc) { 
+                        elemUc.click(); 
+                        if(elemUc.parentElement) elemUc.parentElement.click(); // Clica na linha inteira da UC
+                        return elemUc.textContent.trim(); 
+                    }
                     return null;
                 });
 
@@ -418,9 +442,9 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     await salvarNoBanco(cpf, phone, { UC_ATUALIZADA_EQUATORIAL: ucIdentificada, UC: ucIdentificada });
                 }
                 
-                await new Promise(r => setTimeout(r, 4000));
+                await new Promise(r => setTimeout(r, 5000));
 
-                // 👁️ GOLPE DE MESTRE 5: Novo Menu "AGÊNCIA WEB" -> "Emitir segunda via" (CRIADO POR SI!)
+                // 👁️ GOLPE DE MESTRE 5: Novo Menu "AGÊNCIA WEB" -> "Emitir segunda via"
                 console.log(`[RPA] Equatorial: Abrindo menu AGÊNCIA WEB...`);
                 await pageEq.evaluate(() => {
                     const menuAgencia = Array.from(document.querySelectorAll('a, span, div, li, p')).find(el => el.textContent.trim().toUpperCase() === 'AGÊNCIA WEB');
@@ -878,4 +902,4 @@ app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindad
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});
+});    
