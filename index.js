@@ -277,7 +277,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         }
 
         // ==============================================================
-        // MOTOR 2: EQUATORIAL (SEM PROXY - TENTATIVA DE ACESSO DIRETO)
+        // MOTOR 2: EQUATORIAL (SEM PROXY E COM NOVO MENU DO MESTRE)
         // ==============================================================
         console.log(`[RPA] 👻 Preparando MOTOR 2 (Equatorial - Acesso Direto sem Proxy)...`);
 
@@ -322,7 +322,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 await pageEq.goto(EQUATORIAL_AL_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
                 await new Promise(r => setTimeout(r, 5000)); 
 
-                // Verifica se fomos barrados logo à entrada
+                // Verifica se fomos barrados logo à entrada pelo Imperva
                 const bodyTextInicio = await pageEq.evaluate(() => document.body.innerText.toLowerCase());
                 if (bodyTextInicio.includes("access denied") || bodyTextInicio.includes("error 16") || bodyTextInicio.includes("imperva")) {
                     throw new Error("Imperva bloqueou o acesso sem Proxy.");
@@ -423,10 +423,29 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 
                 await new Promise(r => setTimeout(r, 4000));
 
-                console.log(`[RPA] Equatorial: Acessando Segunda Via...`);
+                // 👁️ GOLPE DE MESTRE 5: Novo Menu "AGÊNCIA WEB" -> "Emitir segunda via" (CRIADO POR SI!)
+                console.log(`[RPA] Equatorial: Abrindo menu AGÊNCIA WEB...`);
                 await pageEq.evaluate(() => {
-                    const btn2via = Array.from(document.querySelectorAll('span, a, div, button')).find(el => el.textContent.toLowerCase().includes('segunda via') || el.textContent.toLowerCase().includes('faturas'));
-                    if(btn2via) btn2via.click();
+                    const menuAgencia = Array.from(document.querySelectorAll('a, span, div, li, p')).find(el => el.textContent.trim().toUpperCase() === 'AGÊNCIA WEB');
+                    if(menuAgencia) {
+                        menuAgencia.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+                        menuAgencia.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+                        menuAgencia.click(); // Força abertura se for clique
+                    }
+                });
+                await new Promise(r => setTimeout(r, 2000));
+
+                console.log(`[RPA] Equatorial: Clicando em Emitir Segunda Via...`);
+                await pageEq.evaluate(() => {
+                    const links = Array.from(document.querySelectorAll('a, span, div, button, li'));
+                    const btn2via = links.find(el => el.textContent.trim().toLowerCase().includes('emitir segunda via'));
+                    if(btn2via) {
+                        btn2via.click();
+                    } else {
+                        // Fallback de segurança
+                        const btnAlternativo = links.find(el => el.textContent.trim().toLowerCase() === 'segunda via');
+                        if (btnAlternativo) btnAlternativo.click();
+                    }
                 });
                 await new Promise(r => setTimeout(r, 5000));
 
