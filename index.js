@@ -277,7 +277,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         }
 
         // ==============================================================
-        // MOTOR 2: EQUATORIAL (SEM PROXY E COM NOVO MENU DO MESTRE)
+        // MOTOR 2: EQUATORIAL (SEM PROXY - TENTATIVA DE ACESSO DIRETO)
         // ==============================================================
         console.log(`[RPA] 👻 Preparando MOTOR 2 (Equatorial - Acesso Direto sem Proxy)...`);
 
@@ -285,7 +285,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             console.log(`\n[RPA] ---> Iniciando Salto para Equatorial (Tentativa ${tentativa}/3) <---`);
             
             try {
-                // Não configuramos proxy aqui, vamos com a capa nativa do Puppeteer Stealth
                 let puppeteerArgsEq = [...CHROME_ARGS];
 
                 browserEquatorial = await puppeteer.launch({ 
@@ -318,11 +317,9 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 });
 
                 console.log(`[RPA] Abrindo o portal da Equatorial...`);
-                // Vamos tentar o site antigo primeiro, sem proxy
                 await pageEq.goto(EQUATORIAL_AL_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
                 await new Promise(r => setTimeout(r, 5000)); 
 
-                // Verifica se fomos barrados logo à entrada pelo Imperva
                 const bodyTextInicio = await pageEq.evaluate(() => document.body.innerText.toLowerCase());
                 if (bodyTextInicio.includes("access denied") || bodyTextInicio.includes("error 16") || bodyTextInicio.includes("imperva")) {
                     throw new Error("Imperva bloqueou o acesso sem Proxy.");
@@ -430,7 +427,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     if(menuAgencia) {
                         menuAgencia.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
                         menuAgencia.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-                        menuAgencia.click(); // Força abertura se for clique
+                        menuAgencia.click(); 
                     }
                 });
                 await new Promise(r => setTimeout(r, 2000));
@@ -442,26 +439,45 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     if(btn2via) {
                         btn2via.click();
                     } else {
-                        // Fallback de segurança
                         const btnAlternativo = links.find(el => el.textContent.trim().toLowerCase() === 'segunda via');
                         if (btnAlternativo) btnAlternativo.click();
                     }
                 });
-                await new Promise(r => setTimeout(r, 5000));
+                
+                // Espera a nova tela da "Mãozinha" carregar a lista de débitos
+                await new Promise(r => setTimeout(r, 8000));
 
-                console.log(`[RPA] Equatorial: Clicando na fatura mais recente (Ícone R$ ou Baixar)...`);
+                // 👁️ GOLPE DE MESTRE 6: Clicar sobre o Valor da Conta (R$) na nova interface
+                console.log(`[RPA] Equatorial: Procurando e clicando no valor da fatura (R$)...`);
                 await pageEq.evaluate(() => {
-                    const btnBaixar = Array.from(document.querySelectorAll('span, td, div, button, a')).find(el => el.textContent.includes('R$') || el.textContent.toLowerCase().includes('baixar'));
-                    if(btnBaixar) btnBaixar.click();
-                });
-                await new Promise(r => setTimeout(r, 2000));
+                    const elementos = Array.from(document.querySelectorAll('div, span, td, p, button, a, strong, b'));
+                    const valores = elementos.filter(el => {
+                        const txt = el.textContent.trim();
+                        // Procura "R$" acompanhado de números e garante que não é um texto gigante do site
+                        return txt.includes('R$') && /\d/.test(txt) && txt.length < 25;
+                    });
 
-                console.log(`[RPA] Equatorial: Solicitando VER FATURA...`);
+                    if (valores.length > 0) {
+                        const alvo = valores[0]; // A primeira (mais recente)
+                        alvo.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        alvo.click();
+                        
+                        // Também clica no contêiner pai para garantir que o evento do site é acionado com precisão
+                        const pai = alvo.closest('tr') || alvo.parentElement;
+                        if(pai) pai.click();
+                        return true;
+                    }
+                    return false;
+                });
+                await new Promise(r => setTimeout(r, 3000));
+
+                // Fallback de segurança caso a Equatorial abra um popup a perguntar
+                console.log(`[RPA] Equatorial: Verificando popup de confirmação (se existir)...`);
                 await pageEq.evaluate(() => {
                     const botoes = Array.from(document.querySelectorAll('button, a, span'));
                     const btnVerFatura = botoes.find(el => {
                         const txt = el.textContent.toUpperCase();
-                        return (txt.includes('VER FATURA') || txt.includes('IMPRIMIR') || txt.includes('DOWNLOAD')) && el.offsetParent !== null;
+                        return (txt.includes('VER FATURA') || txt.includes('IMPRIMIR') || txt.includes('DOWNLOAD') || txt.includes('BAIXAR')) && el.offsetParent !== null;
                     });
                     if(btnVerFatura) {
                         if (btnVerFatura.tagName === 'A') btnVerFatura.removeAttribute('target');
@@ -480,15 +496,11 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     await new Promise(r => setTimeout(r, 5000)); 
                     
                     const pages = await browserEquatorial.pages();
-                    const paginaFatura = pages.find(p => p.url().includes('exibir-faturas')) || pages[pages.length - 1];
+                    const paginaFatura = pages.find(p => p.url().includes('exibir-faturas') || p.url().includes('emitir-segunda-via')) || pages[pages.length - 1];
                     
                     const bodyText = await paginaFatura.evaluate(() => document.body.innerText.toLowerCase());
                     if (bodyText.includes("access denied") || bodyText.includes("error 16") || bodyText.includes("imperva")) {
                          throw new Error("Firewall da Equatorial bloqueou o acesso à fatura sem proxy.");
-                    }
-                    
-                    if (!paginaFatura.url().includes('exibir-faturas') && !paginaFatura.url().includes('blob') && !paginaFatura.url().includes('.pdf')) {
-                         throw new Error("A tela não carregou a fatura corretamente.");
                     }
                     
                     await paginaFatura.pdf({ path: caminhoFaturaLocal, format: 'A4', printBackground: true });
@@ -867,4 +879,4 @@ app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindad
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});
+});    
