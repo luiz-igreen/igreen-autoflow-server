@@ -428,15 +428,47 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 });
                 await new Promise(r => setTimeout(r, 5000));
 
-                console.log(`[RPA] Equatorial: Procurando a UC na tela para selecionar...`);
+                console.log(`[RPA] Equatorial: Procurando a Conta Contrato na tela para selecionar...`);
                 const ucIdentificada = await pageEq.evaluate(() => {
-                    const elementos = Array.from(document.querySelectorAll('span, div, p, a, li, option, td, h3, h4'));
+                    const elementos = Array.from(document.querySelectorAll('span, div, p, a, li, option, td, h3, h4, b, strong, select'));
+                    
+                    // 1. NOVO LAYOUT: Tenta achar via dropdown (<select>) (Baseado na foto do Mestre)
+                    const selectUc = document.querySelector('select');
+                    if (selectUc && selectUc.value && selectUc.value.match(/\d{8,15}/)) {
+                        return selectUc.value.replace(/\D/g, '');
+                    }
+
+                    // 2. NOVO LAYOUT: Procura pelo texto "Selecione sua Conta Contrato" e extrai o número próximo
+                    const labelSelect = elementos.find(el => el.textContent.toLowerCase().includes('selecione sua conta contrato') && el.offsetParent !== null);
+                    if (labelSelect) {
+                        const container = labelSelect.parentElement || labelSelect.parentElement.parentElement;
+                        if (container) {
+                             const txtContainer = container.textContent.trim();
+                             const matchNumber = txtContainer.match(/\d{8,15}/);
+                             if (matchNumber) return matchNumber[0];
+                        }
+                    }
+
+                    // 3. LAYOUT ANTIGO (MANTIDO): Tenta achar a palavra "Conta Contrato" e clica nela
+                    const elemTexto = elementos.find(el => {
+                        const txt = el.textContent.trim().toLowerCase();
+                        return (txt.includes('conta contrato') || txt.includes('uc:') || txt.includes('contrato:')) && txt.match(/\d{8,15}/) && el.offsetParent !== null;
+                    });
+
+                    if (elemTexto) {
+                        elemTexto.click();
+                        if(elemTexto.parentElement) elemTexto.parentElement.click();
+                        return elemTexto.textContent.replace(/\D/g, ''); // Devolve só os números
+                    }
+
+                    // 4. LAYOUT ANTIGO (MANTIDO): Fallback, Procura só um número solto
                     const elemUc = elementos.find(el => {
                         const txt = el.textContent.trim();
                         if (txt.includes('/') || txt.includes('-') || txt.includes('.')) return false;
                         const soNumeros = txt.replace(/\D/g, '');
                         return soNumeros.length >= 8 && soNumeros.length <= 15 && txt === soNumeros;
                     });
+                    
                     if (elemUc) { 
                         elemUc.click(); 
                         if(elemUc.parentElement) elemUc.parentElement.click(); 
@@ -446,96 +478,115 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 });
 
                 if (ucIdentificada) {
-                    console.log(`[RPA] Equatorial: A UC [${ucIdentificada}] apareceu na tela e foi clicada!`);
+                    console.log(`[RPA] Equatorial: A Conta Contrato [${ucIdentificada}] foi vista e selecionada!`);
                     ucExtraidaEquatorial = ucIdentificada;
                     await salvarNoBanco(cpf, phone, { UC_ATUALIZADA_EQUATORIAL: ucIdentificada, UC: ucIdentificada });
                 }
                 
                 await new Promise(r => setTimeout(r, 5000));
 
-                // 👁️ GOLPE DE MESTRE 5: Novo Menu "AGÊNCIA WEB" -> "Emitir segunda via"
-                console.log(`[RPA] Equatorial: Abrindo menu AGÊNCIA WEB...`);
-                await pageEq.evaluate(() => {
-                    const menuAgencia = Array.from(document.querySelectorAll('a, span, div, li, p')).find(el => el.textContent.trim().toUpperCase() === 'AGÊNCIA WEB');
-                    if(menuAgencia) {
-                        menuAgencia.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-                        menuAgencia.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-                        menuAgencia.click(); 
-                    }
+                // Verifica se as faturas já estão na tela (Novo Layout Dashboard)
+                console.log(`[RPA] Equatorial: Verificando se as faturas já estão visíveis na tela atual...`);
+                let faturasNaTela = await pageEq.evaluate(() => {
+                    const faturas = Array.from(document.querySelectorAll('span, div, p, td, b, strong')).filter(el => el.textContent.trim().toLowerCase().includes('referente a') && el.offsetParent !== null);
+                    return faturas.length > 0;
                 });
-                await new Promise(r => setTimeout(r, 2000));
 
-                console.log(`[RPA] Equatorial: Clicando em Emitir Segunda Via...`);
-                await pageEq.evaluate(() => {
-                    const links = Array.from(document.querySelectorAll('a, span, div, button, li'));
-                    const btn2via = links.find(el => el.textContent.trim().toLowerCase().includes('emitir segunda via'));
-                    if(btn2via) {
-                        btn2via.click();
-                    } else {
-                        const btnAlternativo = links.find(el => el.textContent.trim().toLowerCase() === 'segunda via');
-                        if (btnAlternativo) btnAlternativo.click();
-                    }
-                });
-                
-                // Espera a nova tela da "Mãozinha" carregar a lista de débitos
-                await new Promise(r => setTimeout(r, 8000));
+                if (!faturasNaTela) {
+                    // 👁️ GOLPE DE MESTRE 5: Novo Menu "AGÊNCIA WEB" -> "Emitir segunda via" (Caminho Antigo Mantido)
+                    console.log(`[RPA] Equatorial: Abrindo menu AGÊNCIA WEB (Layout Antigo)...`);
+                    await pageEq.evaluate(() => {
+                        const menuAgencia = Array.from(document.querySelectorAll('a, span, div, li, p')).find(el => el.textContent.trim().toUpperCase() === 'AGÊNCIA WEB');
+                        if(menuAgencia) {
+                            menuAgencia.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+                            menuAgencia.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+                            menuAgencia.click(); 
+                        }
+                    });
+                    await new Promise(r => setTimeout(r, 2000));
+
+                    console.log(`[RPA] Equatorial: Clicando em Emitir Segunda Via...`);
+                    await pageEq.evaluate(() => {
+                        const links = Array.from(document.querySelectorAll('a, span, div, button, li'));
+                        const btn2via = links.find(el => el.textContent.trim().toLowerCase().includes('emitir segunda via'));
+                        if(btn2via) {
+                            btn2via.click();
+                        } else {
+                            const btnAlternativo = links.find(el => el.textContent.trim().toLowerCase() === 'segunda via');
+                            if (btnAlternativo) btnAlternativo.click();
+                        }
+                    });
+                    
+                    // Espera a tela antiga carregar a lista de débitos
+                    await new Promise(r => setTimeout(r, 8000));
+                } else {
+                    console.log(`[RPA] Equatorial: 🎯 Novo Layout detectado! As faturas já estão na tela, poupando tempo.`);
+                }
 
                 // 👁️ GOLPE DE MESTRE 6: A "Rede de Arrasto" (Busca agressiva pela Fatura)
-                console.log(`[RPA] Equatorial: Rastreador ativado. Procurando o botão exato da Fatura...`);
+                console.log(`[RPA] Equatorial: Rastreador ativado. Procurando a linha da fatura e o botão...`);
                 
                 const clicouFatura = await pageEq.evaluate(() => {
-                    const todosElementos = Array.from(document.querySelectorAll('a, button, span, i, img, div, input'));
+                    const todosElementos = Array.from(document.querySelectorAll('a, button, span, i, img, div, input, tr, td'));
                     
-                    // 1. Tenta achar o botão/ícone direto da fatura (Ícones de Impressora, PDF, ou texto Baixar)
+                    // Passo 1 Humano: Tenta clicar na linha inteira da fatura primeiro para a "selecionar"
+                    const linhaFatura = todosElementos.find(el => el.textContent.trim().toLowerCase().includes('referente a') && el.offsetParent !== null);
+                    if (linhaFatura) {
+                        linhaFatura.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        linhaFatura.click(); // Clica na palavra "Referente a"
+                        
+                        if (linhaFatura.parentElement) {
+                            linhaFatura.parentElement.click(); // Clica na mini-caixa
+                            if (linhaFatura.parentElement.parentElement) {
+                                linhaFatura.parentElement.parentElement.click(); // NOVO LAYOUT: Clica no bloco/card inteiro (O Bloco Amarelo/Vermelho da foto)
+                            }
+                        }
+
+                        const trPai = linhaFatura.closest('tr');
+                        if (trPai) trPai.click(); // LAYOUT ANTIGO: Clica na linha da tabela
+                    }
+
+                    // Espera 1 segundo invisível dentro do navegador
+                    const start = new Date().getTime();
+                    while (new Date().getTime() < start + 1500);
+
+                    // Passo 2 Humano: Agora procura o botão de Imprimir/Baixar que deve ter aparecido
                     const btnDireto = todosElementos.find(el => {
                         const txt = el.textContent.trim().toUpperCase();
                         const title = (el.getAttribute('title') || '').toUpperCase();
                         const classList = (el.getAttribute('class') || '').toUpperCase();
                         
-                        const isText = txt === 'BAIXAR' || txt === 'IMPRIMIR' || txt === 'VER FATURA' || txt === 'PDF' || txt === 'VISUALIZAR' || txt.includes('2ª VIA') || txt.includes('2 VIA');
+                        const isText = txt === 'BAIXAR' || txt === 'IMPRIMIR' || txt === 'VER FATURA' || txt === 'PDF' || txt === 'VISUALIZAR' || txt.includes('2ª VIA');
                         const isTitle = title.includes('IMPRIMIR') || title.includes('DOWNLOAD') || title.includes('PDF') || title.includes('VISUALIZAR');
                         const isIcon = classList.includes('FA-FILE-PDF') || classList.includes('FA-DOWNLOAD') || classList.includes('FA-PRINT') || classList.includes('PDF');
                         
-                        return (isText || isTitle || isIcon) && el.offsetParent !== null; // Garante que está visível
+                        return (isText || isTitle || isIcon) && el.offsetParent !== null; 
                     });
 
                     if (btnDireto) {
                         btnDireto.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        if (btnDireto.tagName === 'A') btnDireto.removeAttribute('target'); // Bloqueia aba invisível
+                        if (btnDireto.tagName === 'A') btnDireto.removeAttribute('target'); 
                         btnDireto.click();
-                        return 'BOTÃO_DIRETO';
+                        return 'BOTÃO_ENCONTRADO_E_CLICADO';
                     }
 
-                    // 2. Se não tem botão direto, tenta selecionar a fatura (Radio box/Checkbox) e depois clica em Imprimir
+                    // Passo 3: Se não achou botão, tenta clicar na checkbox
                     const btnSelecao = todosElementos.find(el => el.tagName === 'INPUT' && (el.type === 'radio' || el.type === 'checkbox') && el.offsetParent !== null);
-                    
                     if (btnSelecao) {
-                        btnSelecao.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        btnSelecao.click(); // Seleciona a fatura
-                        
-                        // Agora procura o botão mestre de Imprimir na tela
-                        const btnImprimir = todosElementos.find(el => {
-                            const txt = el.textContent.trim().toUpperCase();
-                            return (txt.includes('IMPRIMIR') || txt.includes('GERAR') || txt.includes('VER FATURA')) && el.offsetParent !== null;
-                        });
-                        
+                        btnSelecao.click();
+                        const btnImprimir = todosElementos.find(el => el.textContent.trim().toUpperCase().includes('IMPRIMIR') && el.offsetParent !== null);
                         if (btnImprimir) {
                             if (btnImprimir.tagName === 'A') btnImprimir.removeAttribute('target');
                             btnImprimir.click();
-                            return 'SELECAO_E_IMPRIMIR';
+                            return 'SELECAO_CHECKBOX_E_IMPRIMIR';
                         }
-                        return 'SÓ_SELECIONOU';
                     }
 
                     return false;
                 });
 
                 if (clicouFatura) {
-                    console.log(`[RPA] Equatorial: SUCESSO! Clique executado usando o método: ${clicouFatura}`);
-                    console.log(`[RPA] Equatorial: Aguardando o download ou a tela do PDF (15s)...`);
-                    for (let i = 0; i < 15; i++) {
-                        await new Promise(r => setTimeout(r, 1000)); 
-                        if (fs.existsSync(caminhoFaturaLocal)) { pdfCapturado = true; break; }
+                    console.log(`[RPA] Equatorial: SUCESSO! Fatura selecionada. Método: ${clicouFatura}`);
                     }
                 } else {
                     console.log(`[RPA] ⚠️ Fatura não encontrada. O cliente pode não ter faturas em aberto ou o site mudou a posição dos botões.`);
@@ -929,4 +980,4 @@ app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindad
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});
+});    
