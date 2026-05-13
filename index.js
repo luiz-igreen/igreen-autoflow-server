@@ -510,25 +510,29 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 const clicouFatura = await pageEq.evaluate(() => {
                     const todosElementos = Array.from(document.querySelectorAll('a, button, span, i, img, div, input, tr, td'));
                     
-                    const linhaFatura = todosElementos.find(el => el.textContent.trim().toLowerCase().includes('referente a') && el.offsetParent !== null);
+                    // Passo 1 Humano: Procura o bloco da fatura EM ABERTO (Baseado na foto do Mestre)
+                    const linhaFatura = todosElementos.find(el => {
+                        const txt = el.textContent.trim().toLowerCase();
+                        
+                        // 👁️ GOLPE DE MESTRE DA FOTO: 
+                        // Tem de ter "R$", tem de ter "Vencimento" (Aberto) e recusa o que tiver "Pagamento" (Pago).
+                        // O txt.length > 15 garante que ele pega a caixa grande inteira e não só uma palavrinha.
+                        return txt.includes('r$') && txt.includes('vencimento') && !txt.includes('pagamento') && el.offsetParent !== null && txt.length < 200 && txt.length > 15;
+                    });
+
                     if (linhaFatura) {
                         linhaFatura.scrollIntoView({ behavior: 'smooth', block: 'center' });
                         linhaFatura.click();
                         
                         if (linhaFatura.parentElement) {
                             linhaFatura.parentElement.click();
-                            if (linhaFatura.parentElement.parentElement) {
-                                linhaFatura.parentElement.parentElement.click(); 
-                            }
                         }
-
-                        const trPai = linhaFatura.closest('tr');
-                        if (trPai) trPai.click(); 
                     }
 
                     const start = new Date().getTime();
                     while (new Date().getTime() < start + 1500);
 
+                    // Passo 2: O robô procura qualquer ícone que pareça uma impressora ou botão de download
                     const btnDireto = todosElementos.find(el => {
                         const txt = el.textContent.trim().toUpperCase();
                         const title = (el.getAttribute('title') || '').toUpperCase();
@@ -536,9 +540,12 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                         
                         const isText = txt === 'BAIXAR' || txt === 'IMPRIMIR' || txt === 'VER FATURA' || txt === 'PDF' || txt === 'VISUALIZAR' || txt.includes('2ª VIA');
                         const isTitle = title.includes('IMPRIMIR') || title.includes('DOWNLOAD') || title.includes('PDF') || title.includes('VISUALIZAR');
-                        const isIcon = classList.includes('FA-FILE-PDF') || classList.includes('FA-DOWNLOAD') || classList.includes('FA-PRINT') || classList.includes('PDF');
+                        const isIcon = classList.includes('FA-FILE-PDF') || classList.includes('FA-DOWNLOAD') || classList.includes('FA-PRINT') || classList.includes('PDF') || classList.includes('PRINT');
                         
-                        return (isText || isTitle || isIcon) && el.offsetParent !== null; 
+                        // Também tenta achar ícones SVG soltos (muito comum em layouts novos)
+                        const hasSvg = el.querySelector('svg') !== null;
+                        
+                        return (isText || isTitle || isIcon || (hasSvg && (title.includes('IMPRIMIR') || txt.includes('IMPRIMIR')))) && el.offsetParent !== null; 
                     });
 
                     if (btnDireto) {
