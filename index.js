@@ -480,14 +480,15 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 // Espera a nova tela da "Mãozinha" carregar a lista de débitos
                 await new Promise(r => setTimeout(r, 8000));
 
-                // 👁️ GOLPE DE MESTRE 6: Clicar sobre a PRIMEIRA FATURA (Referente a...)
+                // 👁️ GOLPE DE MESTRE 6: Clicar sobre a PRIMEIRA FATURA (Passo 1 do Mestre)
                 console.log(`[RPA] Equatorial: Procurando e clicando na primeira fatura da lista...`);
-                await pageEq.evaluate(() => {
+                
+                const clicouFatura = await pageEq.evaluate(() => {
                     const elementos = Array.from(document.querySelectorAll('div, span, p, td, b, strong'));
                     const faturas = elementos.filter(el => el.textContent.trim().toLowerCase().includes('referente a'));
-
+                    
                     if (faturas.length > 0) {
-                        const primeiraFatura = faturas[0]; 
+                        const primeiraFatura = faturas[0];
                         primeiraFatura.scrollIntoView({ behavior: 'smooth', block: 'center' });
                         
                         const linhaCompleta = primeiraFatura.closest('tr') || primeiraFatura.parentElement.parentElement || primeiraFatura.parentElement;
@@ -498,44 +499,53 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     }
                     return false;
                 });
-                await new Promise(r => setTimeout(r, 3000));
 
-                // Fallback de segurança para popups de download
-                await pageEq.evaluate(() => {
-                    const botoes = Array.from(document.querySelectorAll('button, a, span'));
-                    const btnVerFatura = botoes.find(el => {
-                        const txt = el.textContent.toUpperCase();
-                        return (txt.includes('VER FATURA') || txt.includes('IMPRIMIR') || txt.includes('DOWNLOAD') || txt.includes('BAIXAR')) && el.offsetParent !== null;
+                if (clicouFatura) {
+                    console.log(`[RPA] Equatorial: Fatura selecionada! Aguardando 4 segundos (Passo 2 do Mestre)...`);
+                    await new Promise(r => setTimeout(r, 4000));
+
+                    console.log(`[RPA] Equatorial: Clicando em 'Ver Fatura' (Passo 3 do Mestre)...`);
+                    await pageEq.evaluate(() => {
+                        const botoes = Array.from(document.querySelectorAll('button, a, span, div'));
+                        const btnVerFatura = botoes.find(el => {
+                            const txt = el.textContent.toUpperCase();
+                            return (txt.includes('VER FATURA') || txt.includes('IMPRIMIR') || txt.includes('DOWNLOAD') || txt.includes('BAIXAR')) && el.offsetParent !== null;
+                        });
+                        if(btnVerFatura) {
+                            if (btnVerFatura.tagName === 'A') btnVerFatura.removeAttribute('target'); // Evita abrir numa aba invisível
+                            btnVerFatura.click();
+                        }
                     });
-                    if(btnVerFatura) {
-                        if (btnVerFatura.tagName === 'A') btnVerFatura.removeAttribute('target');
-                        btnVerFatura.click();
+
+                    console.log(`[RPA] Equatorial: Aguardando a fatura aparecer (15s)...`);
+                    for (let i = 0; i < 15; i++) {
+                        await new Promise(r => setTimeout(r, 1000)); 
+                        if (fs.existsSync(caminhoFaturaLocal)) { pdfCapturado = true; break; }
                     }
-                });
-                
-                console.log(`[RPA] Equatorial: Aguardando fatura na rede (15s)...`);
-                for (let i = 0; i < 15; i++) {
-                    await new Promise(r => setTimeout(r, 1000)); 
-                    if (fs.existsSync(caminhoFaturaLocal)) { pdfCapturado = true; break; }
+                } else {
+                    console.log(`[RPA] ⚠️ Fatura "Referente a" não encontrada na lista.`);
                 }
                 
                 if (!pdfCapturado) {
-                    console.log(`[RPA] Ativando o Gerador de PDF de Tela...`);
-                    await new Promise(r => setTimeout(r, 5000)); 
+                    console.log(`[RPA] Fatura não baixou sozinha. Procurando Fatura Aberta na Tela (Passo 4 do Mestre)...`);
+                    await new Promise(r => setTimeout(r, 6000)); 
                     
-                    const pages = await browserEquatorial.pages();
-                    const paginaFatura = pages.find(p => p.url().includes('exibir-faturas') || p.url().includes('emitir-segunda-via')) || pages[pages.length - 1];
-                    
-                    const bodyText = await paginaFatura.evaluate(() => document.body.innerText.toLowerCase());
-                    if (bodyText.includes("access denied") || bodyText.includes("error 16") || bodyText.includes("imperva")) {
-                         throw new Error("Firewall da Equatorial bloqueou o acesso à fatura usando ZenRows.");
+                    const abas = await browserEquatorial.pages();
+                    for (let aba of abas) {
+                        try {
+                            const textoAba = await aba.evaluate(() => document.body.innerText.toLowerCase());
+                            // Se a aba tiver a cara de uma fatura, o robô fotografa em PDF
+                            if (textoAba.includes('total a pagar') || textoAba.includes('referente a') || textoAba.includes('conta de energia')) {
+                                console.log(`[RPA] 🎯 Fatura encontrada na tela! Tirando foto em PDF...`);
+                                await aba.emulateMediaType('screen');
+                                await aba.pdf({ path: caminhoFaturaLocal, format: 'A4', printBackground: true });
+                                if (fs.existsSync(caminhoFaturaLocal)) { pdfCapturado = true; break; }
+                            }
+                        } catch(e){}
                     }
-                    
-                    await paginaFatura.pdf({ path: caminhoFaturaLocal, format: 'A4', printBackground: true });
-                    if (fs.existsSync(caminhoFaturaLocal)) pdfCapturado = true;
                 }
 
-                if (!pdfCapturado) throw new Error("Falha ao gerar o PDF.");
+                if (!pdfCapturado) throw new Error("A fatura não apareceu na tela após os cliques.");
 
                 if (fs.existsSync(caminhoFaturaLocal)) {
                     const stats = fs.statSync(caminhoFaturaLocal);
@@ -552,7 +562,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 console.log(`[RPA] 🎉 Operação no Motor 2 concluída com sucesso via ZenRows!`);
                 await browserEquatorial.close().catch(()=>{});
                 break; 
-
             } catch (err) {
                 console.log(`[RPA] ⚠️ O túnel ou extração falhou via ZenRows: ${err.message}`);
                 if (browserEquatorial) await browserEquatorial.close().catch(()=>{});
