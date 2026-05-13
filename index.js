@@ -522,31 +522,46 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     const todosElementos = Array.from(document.querySelectorAll('a, button, span, i, img, div, input, tr, td'));
                     
                     // Passo 1 Humano: Procura o bloco da fatura EM ABERTO
-                    const linhaFatura = todosElementos.find(el => {
+                    let alvoFatura = null;
+
+                    // 👁️ GOLPE DE MESTRE - ESTRATÉGIA DE CÉLULAS SEPARADAS:
+                    // Como a Equatorial separou os textos, procuramos qualquer pedaço válido e clicamos na árvore toda!
+                    
+                    // 1. Tenta achar SÓ a caixinha do Vencimento (Apenas faturas em aberto têm isto)
+                    const celulaVencimento = todosElementos.find(el => {
                         const txt = el.textContent.trim().toLowerCase();
-                        
-                        // 👁️ GOLPE DE MESTRE DA FOTO: 
-                        // Tem de ter "R$", "Vencimento" e não pode ter "Pagamento".
-                        // Subimos o txt.length para < 250 para garantir que ele apanha a caixa "Mãe" inteira!
+                        return txt.includes('vencimento') && !txt.includes('pagamento') && txt.length < 60 && el.offsetParent !== null;
+                    });
+
+                    // 2. Tenta achar SÓ a caixinha do Dinheiro (R$) que não seja fatura paga
+                    const celulaDinheiro = todosElementos.find(el => {
+                        const txt = el.textContent.trim().toLowerCase();
+                        return txt.includes('r$') && txt.match(/\d+,\d{2}/) && !txt.includes('pagamento') && txt.length < 50 && el.offsetParent !== null;
+                    });
+
+                    // 3. Tenta achar a caixa "Mãe" inteira (caso o layout mude amanhã)
+                    const caixaInteira = todosElementos.find(el => {
+                        const txt = el.textContent.trim().toLowerCase();
                         return txt.includes('r$') && (txt.includes('vencimento') || txt.includes('referente a')) && !txt.includes('pagamento') && el.offsetParent !== null && txt.length < 250 && txt.length > 10;
                     });
 
-                    if (linhaFatura) {
-                        linhaFatura.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    // O robô atira na primeira coisa válida que encontrar da fatura!
+                    alvoFatura = celulaVencimento || celulaDinheiro || caixaInteira;
+
+                    if (alvoFatura) {
+                        alvoFatura.scrollIntoView({ behavior: 'smooth', block: 'center' });
                         
-                        // CLIQUE MASSIVO: Clica nela e nos filhos para forçar a abertura do cartão (Acerta sempre)
-                        const clicaveis = linhaFatura.querySelectorAll('span, p, b, div, strong');
-                        if (clicaveis.length > 0) {
-                            clicaveis.forEach(c => { try { c.click(); } catch(e){} });
-                        }
-                        linhaFatura.click();
-                        
-                        if (linhaFatura.parentElement) {
-                            linhaFatura.parentElement.click();
+                        // CLIQUE MASSIVO: Clica na célula pequena, no pai dela e no avô (Garante a abertura do menu!)
+                        alvoFatura.click();
+                        if (alvoFatura.parentElement) {
+                            alvoFatura.parentElement.click();
+                            if (alvoFatura.parentElement.parentElement) {
+                                alvoFatura.parentElement.parentElement.click(); 
+                            }
                         }
                     } else {
                         // FALLBACK: Se o layout antigo aparecer, tenta achar apenas "Referente a"
-                        const fallbackFatura = todosElementos.find(el => el.textContent.trim().toLowerCase().includes('referente a') && el.offsetParent !== null && el.textContent.length < 100);
+                        const fallbackFatura = todosElementos.find(el => el.textContent.trim().toLowerCase().includes('referente a') && !el.textContent.trim().toLowerCase().includes('pagamento') && el.offsetParent !== null && el.textContent.length < 100);
                         if (fallbackFatura) {
                             fallbackFatura.scrollIntoView({ behavior: 'smooth', block: 'center' });
                             fallbackFatura.click();
