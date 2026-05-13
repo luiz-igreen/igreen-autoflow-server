@@ -3,6 +3,7 @@ import axios from 'axios';
 import admin from 'firebase-admin';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import proxyChain from 'proxy-chain';
 import fs from 'fs';
 import path from 'path';
 
@@ -13,36 +14,38 @@ const app = express();
 app.use(express.json());
 
 // ==========================================
-// CONFIGURAÇÕES GERAIS E CHAVES
+// CONFIGURAÇÕES GERAIS E CHAVES (Organização da IA)
 // ==========================================
-const ZAPI_INSTANCE = process.env.ZAPI_INSTANCE;
-const ZAPI_TOKEN = process.env.ZAPI_TOKEN;
-const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN; 
+const CONFIG = {
+    ZAPI: {
+        INSTANCE: process.env.ZAPI_INSTANCE,
+        TOKEN: process.env.ZAPI_TOKEN,
+        CLIENT_TOKEN: process.env.ZAPI_CLIENT_TOKEN,
+    },
+    GEMINI: {
+        API_KEY: process.env.GEMINI_API_KEY,
+    },
+    IGREEN: {
+        LOGIN_URL: 'https://escritorio.igreenenergy.com.br',
+        MAPA_URL: 'https://escritorio.igreenenergy.com.br/mapa-clientes',
+        USER: process.env.IGREEN_USER,
+        PASS: process.env.IGREEN_PASS,
+    },
+    EQUATORIAL_AL_URL: 'https://al.equatorialenergia.com.br/siteantigo',
+    APP_ID: 'igreen-autoflow-v4',
+    PORT: process.env.PORT || 10000,
+};
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY; 
+const CHROME_ARGS = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--no-zygote',
+    '--disable-blink-features=AutomationControlled',
+    '--ignore-certificate-errors',
+];
 
-const IGREEN_LOGIN_URL = "https://escritorio.igreenenergy.com.br"; 
-const IGREEN_MAPA_URL = "https://escritorio.igreenenergy.com.br/mapa-clientes";
-const EQUATORIAL_AL_URL = "https://al.equatorialenergia.com.br/siteantigo";
-
-const IGREEN_USER = process.env.IGREEN_USER;
-const IGREEN_PASS = process.env.IGREEN_PASS;
-
-const APP_ID = 'igreen-autoflow-v4';
-
-try {
-    const firebaseConfig = process.env.FIREBASE_CONFIG ? JSON.parse(process.env.FIREBASE_CONFIG) : null;
-    if (firebaseConfig && admin.apps.length === 0) {
-        admin.initializeApp({ credential: admin.credential.cert(firebaseConfig) });
-        console.log("✅ Banco de Dados Cloud ligado!");
-    }
-} catch (e) { console.error("Erro DB:", e.message); }
-
-const memoriaEstado = new Map();
-
-// ==========================================
-// TEXTOS DA OPERAÇÃO (HUMANIZADOS)
-// ==========================================
 const TEXTOS = {
     T_MENU: "👋 Olá! Bem-vindo ao *Atendimento Inteligente iGreen*. \n\nComo posso ajudar hoje? Escolha uma das opções abaixo enviando apenas o número:\n\n" +
             "1️⃣ *Novo Cadastro* (Analisar fatura e preparar o seu desconto)\n" +
@@ -72,55 +75,73 @@ const TEXTOS = {
     T_DOCS_RECEBIDOS: "✅ Documentos recebidos com sucesso! \nAs imagens foram anexadas ao seu perfil com segurança. Muito obrigado! 🙏"
 };
 
-const CHROME_ARGS = [
-    "--no-sandbox", 
-    "--disable-setuid-sandbox", 
-    "--disable-dev-shm-usage", 
-    "--disable-gpu", 
-    "--no-zygote", 
-    "--disable-blink-features=AutomationControlled",
-    "--ignore-certificate-errors"
-];
+const memoriaEstado = new Map();
 
 // ==========================================
-// FUNÇÕES AUXILIARES E IA
+// FUNÇÕES UTILITÁRIAS E SERVIÇOS
 // ==========================================
-async function enviarMensagem(phone, message) {
-    const numLimpo = String(phone).replace(/\D/g, ''); 
-    try { 
-        await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, 
-        { phone: numLimpo, message: String(message) }, 
-        { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN, 'Content-Type': 'application/json' } }); 
-    } catch (e) { console.error(`[Z-API] Erro:`, e.message); }
+let db;
+async function initFirebase() {
+    try {
+        const firebaseConfig = process.env.FIREBASE_CONFIG ? JSON.parse(process.env.FIREBASE_CONFIG) : null;
+        if (firebaseConfig && admin.apps.length === 0) {
+            admin.initializeApp({ credential: admin.credential.cert(firebaseConfig) });
+            db = admin.firestore();
+            console.log('✅ Banco de Dados Cloud ligado!');
+        }
+    } catch (error) {
+        console.error('Erro ao inicializar Firebase:', error.message);
+    }
 }
 
-async function buscarNoBanco(docId) {
-    if (admin.apps.length > 0) {
+const Utils = {
+    limparDadosVazios(dados) {
+        if (!dados || typeof dados !== 'object') return {};
+        return Object.fromEntries(Object.entries(dados).filter(([_, v]) => v !== "" && v !== "Não extraído" && v !== "0" && v !== null && v !== undefined));
+    },
+    formatPhone(phone) {
+        return String(phone).replace(/\D/g, '');
+    },
+    logError(context, error) {
+        console.error(`❌ [${context}] Erro:`, error.message);
+    },
+};
+
+const ZapiService = {
+    async enviarMensagem(phone, message) {
         try {
-            const db = admin.firestore();
-            const doc = await db.collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').doc(docId).get();
+            if (!CONFIG.ZAPI.INSTANCE || !CONFIG.ZAPI.TOKEN) return;
+            await axios.post(`https://api.z-api.io/instances/${CONFIG.ZAPI.INSTANCE}/token/${CONFIG.ZAPI.TOKEN}/send-text`, {
+                phone: Utils.formatPhone(phone),
+                message: String(message),
+            }, {
+                headers: { 'Client-Token': CONFIG.ZAPI.CLIENT_TOKEN, 'Content-Type': 'application/json' },
+            });
+        } catch (error) {
+            Utils.logError('ZapiService', error);
+        }
+    },
+};
+
+const FirebaseService = {
+    async buscarNoBanco(docId) {
+        if (!db) return null;
+        try {
+            const doc = await db.collection('artifacts').doc(CONFIG.APP_ID).collection('public').doc('data').collection('leads').doc(docId).get();
             return doc.exists ? doc.data() : null;
-        } catch (e) { return null; }
-    }
-    return null;
-}
-
-function limparDadosVazios(dados) {
-    return Object.fromEntries(Object.entries(dados).filter(([_, v]) => v !== "" && v !== "Não extraído" && v !== "0" && v !== null && v !== undefined));
-}
-
-async function salvarNoBanco(docId, phone, dadosExtras) {
-    if (admin.apps.length > 0) {
+        } catch (error) { return null; }
+    },
+    async salvarNoBanco(docId, phone, dadosExtras) {
+        if (!db) return;
         try {
-            const db = admin.firestore();
-            const dadosLimpos = limparDadosVazios(dadosExtras); 
-            await db.collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').doc(docId).set(
-                { ...dadosLimpos, TELEFONE_REMETENTE: phone, DATA_ULTIMA_ATUALIZACAO: admin.firestore.FieldValue.serverTimestamp() }, 
-                { merge: true } 
+            const dadosLimpos = Utils.limparDadosVazios(dadosExtras);
+            await db.collection('artifacts').doc(CONFIG.APP_ID).collection('public').doc('data').collection('leads').doc(docId).set(
+                { ...dadosLimpos, TELEFONE_REMETENTE: phone, DATA_ULTIMA_ATUALIZACAO: admin.firestore.FieldValue.serverTimestamp() },
+                { merge: true }
             );
-        } catch (e) { console.error("Erro Firebase:", e.message); }
-    }
-}
+        } catch (error) { Utils.logError('FirebaseService.salvar', error); }
+    },
+};
 
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     try {
@@ -128,7 +149,7 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         const response = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
         const base64Data = Buffer.from(response.data, 'binary').toString('base64');
 
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${CONFIG.GEMINI.API_KEY}`;
         const promptText = `Analise esta fatura de energia. Extraia os dados em formato JSON exato. Chaves necessárias: "NOME_CLIENTE", "CPF", "DATA_NASCIMENTO", "UC", "VENCIMENTO", "VALOR". Retorne APENAS o JSON, sem marcações ou blocos de código markdown.`;
 
         const payload = {
@@ -147,13 +168,13 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         console.log("[IA] Leitura concluída com sucesso!");
         return JSON.parse(textoResposta);
     } catch (error) {
-        console.error("[IA] Erro na análise Gemini:", error.response?.data || error.message);
+        Utils.logError('analisarFaturaGemini', error);
         throw new Error("Falha ao ler fatura.");
     }
 }
 
 // ==========================================
-// MÓDULO 2: EXTRATOR RPA TOTAL (ARQUITETURA DE DOIS MOTORES)
+// MÓDULO 2: EXTRATOR RPA TOTAL (O CÉREBRO RECUPERADO)
 // ==========================================
 async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, nascBanco = null, isAutomated = false) {
     let browserIgreen = null;
@@ -165,9 +186,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
     let pdfCapturado = false;
 
     try {
-        // ==============================================================
-        // MOTOR 1: IGREEN (Conexão Direta, Nativa e Rápida)
-        // ==============================================================
+        // --- MOTOR 1: IGREEN (Conexão Direta, Nativa e Rápida) ---
         console.log(`[RPA] 🚀 Arrancando MOTOR 1 (iGreen - Sem Proxy)...`);
         browserIgreen = await puppeteer.launch({ 
             headless: true, 
@@ -181,12 +200,12 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         if (!cpf || !nascimento) {
             console.log(`[RPA] ETAPA 1: Buscando dados de ${termoBuscaIgreen} na iGreen...`);
             
-            await pageIgreen.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+            await pageIgreen.goto(CONFIG.IGREEN.LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
             try { await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Começar')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
             
             await pageIgreen.waitForSelector('input[type="email"]');
-            await pageIgreen.type('input[type="email"]', IGREEN_USER, { delay: 50 });
-            await pageIgreen.type('input[type="password"]', IGREEN_PASS, { delay: 50 });
+            await pageIgreen.type('input[type="email"]', CONFIG.IGREEN.USER, { delay: 50 });
+            await pageIgreen.type('input[type="password"]', CONFIG.IGREEN.PASS, { delay: 50 });
             
             await pageIgreen.evaluate(() => {
                 const botoes = Array.from(document.querySelectorAll('button'));
@@ -204,7 +223,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
             try { await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
 
-            await pageIgreen.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+            await pageIgreen.goto(CONFIG.IGREEN.MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
             await new Promise(r => setTimeout(r, 5000));
 
             await pageIgreen.evaluate(() => { document.body.style.zoom = "0.4"; });
@@ -274,16 +293,13 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             console.log(`[RPA] iGreen lida com sucesso! CPF: ${cpf} | Nasc: ${nascimento}`);
         }
 
-        // ==============================================================
-        // MOTOR 2: EQUATORIAL (SEM PROXY - TENTATIVA DE ACESSO DIRETO)
-        // ==============================================================
+        // --- MOTOR 2: EQUATORIAL (Acesso Direto SEM PROXY) ---
         console.log(`[RPA] 👻 Preparando MOTOR 2 (Equatorial - Acesso Direto sem Proxy)...`);
 
         for (let tentativa = 1; tentativa <= 3; tentativa++) {
             console.log(`\n[RPA] ---> Iniciando Salto para Equatorial (Tentativa ${tentativa}/3) <---`);
             
             try {
-                // Removemos o código do Proxy completamente. O robô vai usar a sua internet nativa.
                 let puppeteerArgsEq = [...CHROME_ARGS];
 
                 browserEquatorial = await puppeteer.launch({ 
@@ -316,7 +332,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 });
 
                 console.log(`[RPA] Abrindo o portal da Equatorial...`);
-                await pageEq.goto(EQUATORIAL_AL_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
+                await pageEq.goto(CONFIG.EQUATORIAL_AL_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
                 await new Promise(r => setTimeout(r, 5000)); 
 
                 const bodyTextInicio = await pageEq.evaluate(() => document.body.innerText.toLowerCase());
@@ -344,7 +360,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 await new Promise(r => setTimeout(r, 2000));
 
                 console.log(`[RPA] Equatorial: Inserindo CPF para Login (Teclado Humano Nativo)...`);
-                
                 let encontrouCpf = await pageEq.evaluate(() => {
                     const inputs = Array.from(document.querySelectorAll('input'));
                     let cpfField = inputs.find(i => 
@@ -360,7 +375,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 if (encontrouCpf) {
                     await pageEq.keyboard.type(cpf, { delay: 100 }); 
                     await new Promise(r => setTimeout(r, 1000));
-                    
                     await pageEq.evaluate(() => {
                         const btnEntrar = Array.from(document.querySelectorAll('button, a, div')).find(b => b.textContent.trim().toUpperCase() === 'ENTRAR' || b.textContent.trim().toUpperCase() === 'CONTINUAR');
                         if (btnEntrar) btnEntrar.click();
@@ -385,7 +399,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 if (encontrouNasc) {
                     await pageEq.keyboard.type(nascimento, { delay: 100 });
                     await new Promise(r => setTimeout(r, 1000));
-                    
                     await pageEq.evaluate(() => {
                         const btnEntrar = Array.from(document.querySelectorAll('button, a, div')).find(b => b.textContent.trim().toUpperCase() === 'ENTRAR' || b.textContent.trim().toUpperCase() === 'CONTINUAR' || b.textContent.trim().toUpperCase() === 'ACESSAR');
                         if (btnEntrar) btnEntrar.click();
@@ -402,7 +415,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 });
                 await new Promise(r => setTimeout(r, 1000));
 
-                // 👁️ GOLPE DE MESTRE 7 (O SEU ACHADO!): Clicar no Link/Logo da Equatorial para liberar o menu
+                // 👁️ GOLPE DE MESTRE 7: Clicar no Link/Logo da Equatorial para liberar o menu
                 console.log(`[RPA] Equatorial: Procurando e clicando no link/acesso da distribuidora intermediária...`);
                 await pageEq.evaluate(() => {
                     const elementos = Array.from(document.querySelectorAll('a, button, span, div, h2, h3, p'));
@@ -437,7 +450,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 if (ucIdentificada) {
                     console.log(`[RPA] Equatorial: A UC [${ucIdentificada}] apareceu na tela e foi clicada!`);
                     ucExtraidaEquatorial = ucIdentificada;
-                    await salvarNoBanco(cpf, phone, { UC_ATUALIZADA_EQUATORIAL: ucIdentificada, UC: ucIdentificada });
+                    await FirebaseService.salvarNoBanco(cpf, phone, { UC_ATUALIZADA_EQUATORIAL: ucIdentificada, UC: ucIdentificada });
                 }
                 
                 await new Promise(r => setTimeout(r, 5000));
@@ -466,25 +479,21 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     }
                 });
                 
-                // Espera a nova tela da "Mãozinha" carregar a lista de débitos
                 await new Promise(r => setTimeout(r, 8000));
 
                 // 👁️ GOLPE DE MESTRE 6: Clicar sobre a PRIMEIRA FATURA (Referente a...)
                 console.log(`[RPA] Equatorial: Procurando e clicando na primeira fatura da lista...`);
                 await pageEq.evaluate(() => {
                     const elementos = Array.from(document.querySelectorAll('div, span, p, td, b, strong'));
-                    // Encontra todos os elementos que contêm o texto "Referente a"
                     const faturas = elementos.filter(el => el.textContent.trim().toLowerCase().includes('referente a'));
 
                     if (faturas.length > 0) {
-                        const primeiraFatura = faturas[0]; // A primeira fatura da lista
+                        const primeiraFatura = faturas[0]; 
                         primeiraFatura.scrollIntoView({ behavior: 'smooth', block: 'center' });
                         
-                        // Sobe na árvore de elementos para clicar na "linha inteira" (card da fatura)
                         const linhaCompleta = primeiraFatura.closest('tr') || primeiraFatura.parentElement.parentElement || primeiraFatura.parentElement;
                         if(linhaCompleta) linhaCompleta.click();
                         
-                        // Clica também diretamente no texto para garantir
                         primeiraFatura.click();
                         return true;
                     }
@@ -492,8 +501,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 });
                 await new Promise(r => setTimeout(r, 3000));
 
-                // Fallback de segurança caso a Equatorial abra um popup a perguntar
-                console.log(`[RPA] Equatorial: Verificando popup de confirmação (se existir)...`);
+                // Fallback de segurança para popups de download
                 await pageEq.evaluate(() => {
                     const botoes = Array.from(document.querySelectorAll('button, a, span'));
                     const btnVerFatura = botoes.find(el => {
@@ -536,9 +544,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                         fs.unlinkSync(caminhoFaturaLocal);
                         throw new Error("Fatura gerada é inválida ou foi bloqueada.");
                     }
-                } else {
-                    throw new Error("Fatura não encontrada.");
-                }
+                } else { throw new Error("Fatura não encontrada."); }
 
                 console.log(`[RPA] 🎉 Operação no Motor 2 concluída com sucesso! (Sem Proxy)`);
                 await browserEquatorial.close().catch(()=>{});
@@ -551,22 +557,14 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             }
         } 
 
-        if (!pdfCapturado) {
-            throw new Error("A Equatorial bloqueou as conexões diretas (Imperva). Precisamos de um Proxy do Brasil para contornar isso.");
-        }
+        if (!pdfCapturado) throw new Error("A Equatorial bloqueou as conexões diretas (Imperva). Precisamos de um Proxy do Brasil para contornar isso.");
 
         try {
             const pdfProvaPath = path.join('/tmp', 'ultima_fatura.pdf');
             fs.copyFileSync(caminhoFaturaLocal, pdfProvaPath);
-            console.log(`\n======================================================`);
-            console.log(`[RPA] 📄 PROVA DO PDF: O robô guardou uma cópia da fatura.`);
-            console.log(`👉 https://igreen-autoflow-server-2.onrender.com/ultima-fatura 👈`);
-            console.log(`======================================================\n`);
         } catch (e) {}
 
-        // ==============================================================
-        // RETORNO AO MOTOR 1 (IGREEN) PARA FINALIZAR O SERVIÇO
-        // ==============================================================
+        // --- RETORNO AO MOTOR 1 (IGREEN) PARA FINALIZAR O SERVIÇO ---
         console.log(`[RPA] ⚡ Retornando ao MOTOR 1 (iGreen) para injetar o ficheiro...`);
         const pages = await browserIgreen.pages();
         const pageIgreenFinal = pages[pages.length - 1];
@@ -588,7 +586,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         await pageIgreenFinal.keyboard.press('Enter');
         
         console.log(`[RPA] ENTER pressionado na Devolutiva. Aguardando a tabela filtrar...`);
-        
         try { await pageIgreenFinal.waitForFunction((busca) => document.body.innerText.includes(busca), { timeout: 10000 }, cpf); } catch (e) {}
         await new Promise(r => setTimeout(r, 2000));
 
@@ -612,7 +609,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         await new Promise(r => setTimeout(r, 3000));
 
         console.log(`[RPA] Navegando pelos popups de Devolutiva...`);
-        
         for (let clique = 0; clique < 3; clique++) {
             await pageIgreenFinal.evaluate(() => { 
                 const botoes = Array.from(document.querySelectorAll('button, span, a, div'));
@@ -627,7 +623,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         }
 
         console.log(`[RPA] INJEÇÃO DIRETA NO CÓDIGO HTML...`);
-        
         const inputUploads = await pageIgreenFinal.$$('input[type="file"]');
         if (inputUploads.length > 0) {
             console.log(`[RPA] ${inputUploads.length} inputs encontrados. Injetando PDF...`);
@@ -654,14 +649,14 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         if (browserIgreen) await browserIgreen.close().catch(()=>{});
         if (fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
 
-        if(!isAutomated) await enviarMensagem(phone, TEXTOS.T_RESGATE_SUCESSO);
+        if(!isAutomated) await ZapiService.enviarMensagem(phone, TEXTOS.T_RESGATE_SUCESSO);
         
     } catch (e) { 
-        console.error("Erro RPA Devolutivas:", e.message);
+        Utils.logError("RPA Devolutivas", e);
         if (browserIgreen) await browserIgreen.close().catch(()=>{}); 
         if (browserEquatorial) await browserEquatorial.close().catch(()=>{}); 
         if (fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
-        if(!isAutomated) await enviarMensagem(phone, TEXTOS.T_RESGATE_FAIL);
+        if(!isAutomated) await ZapiService.enviarMensagem(phone, TEXTOS.T_RESGATE_FAIL);
     }
 }
 
@@ -670,30 +665,27 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 // ==========================================
 function iniciarMotorRecorrente() {
     setInterval(async () => {
-        if (admin.apps.length > 0) {
-            try {
-                const db = admin.firestore();
-                const snapshot = await db.collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads')
-                                        .where('STATUS_CADASTRO', '==', 'PENDENTE_MEDIA').get();
+        if (!db) return;
+        try {
+            const snapshot = await db.collection('artifacts').doc(CONFIG.APP_ID).collection('public').doc('data').collection('leads')
+                                    .where('STATUS_CADASTRO', '==', 'PENDENTE_MEDIA').get();
+            
+            snapshot.forEach(async (doc) => {
+                const lead = doc.data();
+                const ultimaVerificacao = lead.DATA_ULTIMA_ATUALIZACAO ? lead.DATA_ULTIMA_ATUALIZACAO.toDate() : new Date();
+                const diasPassados = Math.floor((new Date() - ultimaVerificacao) / (1000 * 60 * 60 * 24));
                 
-                snapshot.forEach(async (doc) => {
-                    const lead = doc.data();
-                    const ultimaVerificacao = lead.DATA_ULTIMA_ATUALIZACAO ? lead.DATA_ULTIMA_ATUALIZACAO.toDate() : new Date();
-                    const diasPassados = Math.floor((new Date() - ultimaVerificacao) / (1000 * 60 * 60 * 24));
-                    
-                    if (diasPassados >= 15) {
-                        fluxoResgateDevolutiva(lead.NOME_CLIENTE, lead.TELEFONE_REMETENTE, lead.CPF, lead.DATA_NASCIMENTO, true);
-                        await salvarNoBanco(doc.id, lead.TELEFONE_REMETENTE, { STATUS_CADASTRO: 'PENDENTE_MEDIA' }); 
-                    }
-                });
-            } catch (e) { console.error("Erro no Cron:", e.message); }
-        }
+                if (diasPassados >= 15) {
+                    fluxoResgateDevolutiva(lead.NOME_CLIENTE, lead.TELEFONE_REMETENTE, lead.CPF, lead.DATA_NASCIMENTO, true);
+                    await FirebaseService.salvarNoBanco(doc.id, lead.TELEFONE_REMETENTE, { STATUS_CADASTRO: 'PENDENTE_MEDIA' }); 
+                }
+            });
+        } catch (e) { Utils.logError("Cron Recorrente", e); }
     }, 86400000); 
 }
-iniciarMotorRecorrente();
 
 // ==========================================
-// LÓGICA DO WEBHOOK
+// LÓGICA DO WEBHOOK E ROTAS
 // ==========================================
 app.post('/webhook/igreen', async (req, res) => {
     res.status(200).send("OK");
@@ -709,152 +701,137 @@ app.post('/webhook/igreen', async (req, res) => {
 
     if (['0', 'cancelar', 'menu'].includes(txtL)) {
         memoriaEstado.set(phone, { STATUS_CADASTRO: 'NOVO' });
-        await enviarMensagem(phone, "🔄 Operação cancelada.\n\n" + TEXTOS.T_MENU);
+        await ZapiService.enviarMensagem(phone, "🔄 Operação cancelada.\n\n" + TEXTOS.T_MENU);
         return;
     }
 
     let mem = memoriaEstado.get(phone) || { STATUS_CADASTRO: 'NOVO' };
 
     if (mem.STATUS_CADASTRO === 'NOVO') {
-        if (txtL === '1') { memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA' }); await enviarMensagem(phone, TEXTOS.T01); return; }
-        if (txtL === '2') { memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA_SOH_BANCO' }); await enviarMensagem(phone, TEXTOS.T_GUARDAR_START); return; }
-        if (txtL === '3') { memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DADOS_DEVOLUTIVA' }); await enviarMensagem(phone, TEXTOS.T_RESGATE_START); return; }
-        if (txtL === '4') { memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_UC_DOC' }); await enviarMensagem(phone, TEXTOS.T_START_OPCAO_4); return; }
-        await enviarMensagem(phone, TEXTOS.T_MENU);
+        if (txtL === '1') { memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA' }); await ZapiService.enviarMensagem(phone, TEXTOS.T01); return; }
+        if (txtL === '2') { memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA_SOH_BANCO' }); await ZapiService.enviarMensagem(phone, TEXTOS.T_GUARDAR_START); return; }
+        if (txtL === '3') { memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DADOS_DEVOLUTIVA' }); await ZapiService.enviarMensagem(phone, TEXTOS.T_RESGATE_START); return; }
+        if (txtL === '4') { memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_UC_DOC' }); await ZapiService.enviarMensagem(phone, TEXTOS.T_START_OPCAO_4); return; }
+        await ZapiService.enviarMensagem(phone, TEXTOS.T_MENU);
         return;
     }
 
     switch (mem.STATUS_CADASTRO) {
         case 'AGUARDANDO_FATURA': {
             if (temMidia) {
-                await enviarMensagem(phone, TEXTOS.T02); 
+                await ZapiService.enviarMensagem(phone, TEXTOS.T02); 
                 try {
                     const dadosIA = await analisarFaturaGemini(mediaUrl, mimeType);
                     const docId = dadosIA.UC ? dadosIA.UC.replace(/\D/g, '') : `SEM_UC_${Date.now()}`;
-                    await salvarNoBanco(docId, phone, { ...dadosIA, LINK_FATURA: mediaUrl, STATUS_CADASTRO: "CONCLUIDO" });
-                    await enviarMensagem(phone, `✅ Tudo certo! Titular: ${dadosIA.NOME_CLIENTE}. Especialista entrará em contato.`);
+                    await FirebaseService.salvarNoBanco(docId, phone, { ...dadosIA, LINK_FATURA: mediaUrl, STATUS_CADASTRO: "CONCLUIDO" });
+                    await ZapiService.enviarMensagem(phone, `✅ Tudo certo! Titular: ${dadosIA.NOME_CLIENTE}. Especialista entrará em contato.`);
                     memoriaEstado.delete(phone); 
-                } catch (e) { await enviarMensagem(phone, "❌ Erro ao ler fatura."); }
-            } else { await enviarMensagem(phone, "⚠️ Aguardando foto/PDF da fatura."); }
+                } catch (e) { await ZapiService.enviarMensagem(phone, "❌ Erro ao ler fatura."); }
+            } else { await ZapiService.enviarMensagem(phone, "⚠️ Aguardando foto/PDF da fatura."); }
             break;
         }
-
         case 'AGUARDANDO_FATURA_SOH_BANCO': {
             if (temMidia) {
-                await enviarMensagem(phone, TEXTOS.T02); 
+                await ZapiService.enviarMensagem(phone, TEXTOS.T02); 
                 try {
                     const dadosIA = await analisarFaturaGemini(mediaUrl, mimeType);
                     const docId = dadosIA.UC ? dadosIA.UC.replace(/\D/g, '') : `SEM_UC_${Date.now()}`;
-                    await salvarNoBanco(docId, phone, { ...dadosIA, LINK_FATURA: mediaUrl, STATUS_CADASTRO: "AGUARDANDO_TELEFONE" });
+                    await FirebaseService.salvarNoBanco(docId, phone, { ...dadosIA, LINK_FATURA: mediaUrl, STATUS_CADASTRO: "AGUARDANDO_TELEFONE" });
                     memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_TELEFONE', docId });
-                    await enviarMensagem(phone, TEXTOS.T_PEDIR_TELEFONE.replace('${nome}', dadosIA.NOME_CLIENTE).replace('${uc}', dadosIA.UC));
-                } catch (e) { await enviarMensagem(phone, "❌ Erro na análise."); }
-            } else { await enviarMensagem(phone, "⚠️ Aguardando foto/PDF da fatura."); }
+                    await ZapiService.enviarMensagem(phone, TEXTOS.T_PEDIR_TELEFONE.replace('${nome}', dadosIA.NOME_CLIENTE).replace('${uc}', dadosIA.UC));
+                } catch (e) { await ZapiService.enviarMensagem(phone, "❌ Erro na análise."); }
+            } else { await ZapiService.enviarMensagem(phone, "⚠️ Aguardando foto/PDF da fatura."); }
             break;
         }
-
         case 'AGUARDANDO_TELEFONE': {
             if (textoIn.length >= 8) { 
-                await salvarNoBanco(mem.docId, phone, { TELEFONE: textoIn, STATUS_CADASTRO: "AGUARDANDO_EMAIL" });
+                await FirebaseService.salvarNoBanco(mem.docId, phone, { TELEFONE: textoIn, STATUS_CADASTRO: "AGUARDANDO_EMAIL" });
                 memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_EMAIL', docId: mem.docId });
-                await enviarMensagem(phone, TEXTOS.T_PEDIR_EMAIL);
-            } else { await enviarMensagem(phone, "⚠️ Digite um telefone válido."); }
+                await ZapiService.enviarMensagem(phone, TEXTOS.T_PEDIR_EMAIL);
+            } else { await ZapiService.enviarMensagem(phone, "⚠️ Digite um telefone válido."); }
             break;
         }
-
         case 'AGUARDANDO_EMAIL': {
             if (textoIn.includes('@')) { 
-                await salvarNoBanco(mem.docId, phone, { EMAIL: textoIn, STATUS_CADASTRO: "PENDENTE_DOCUMENTOS" });
-                await enviarMensagem(phone, TEXTOS.T_FIM_PRE_CADASTRO);
+                await FirebaseService.salvarNoBanco(mem.docId, phone, { EMAIL: textoIn, STATUS_CADASTRO: "PENDENTE_DOCUMENTOS" });
+                await ZapiService.enviarMensagem(phone, TEXTOS.T_FIM_PRE_CADASTRO);
                 memoriaEstado.delete(phone);
-            } else { await enviarMensagem(phone, "⚠️ Digite um e-mail válido."); }
+            } else { await ZapiService.enviarMensagem(phone, "⚠️ Digite um e-mail válido."); }
             break;
         }
-
         case 'AGUARDANDO_DADOS_DEVOLUTIVA': {
             if (textoIn.length >= 3) {
-                await enviarMensagem(phone, TEXTOS.T_RESGATE_BUSCANDO);
+                await ZapiService.enviarMensagem(phone, TEXTOS.T_RESGATE_BUSCANDO);
                 memoriaEstado.delete(phone); 
-                
                 setTimeout(() => { fluxoResgateDevolutiva(textoIn, phone, null, null, false); }, 2000);
             } else {
-                await enviarMensagem(phone, "⚠️ Digite o Nome ou ID corretamente (mínimo de 3 caracteres).");
+                await ZapiService.enviarMensagem(phone, "⚠️ Digite o Nome ou ID corretamente (mínimo de 3 caracteres).");
             }
             break;
         }
-
         case 'AGUARDANDO_UC_DOC': {
             if (textoIn.length >= 4) { 
                 const ucLimpa = textoIn.replace(/\D/g, '');
-                const leadExistente = await buscarNoBanco(ucLimpa);
-                
+                const leadExistente = await FirebaseService.buscarNoBanco(ucLimpa);
                 if (leadExistente) {
                     if (!leadExistente.TELEFONE) {
                         memoriaEstado.set(phone, { STATUS_CADASTRO: 'OP4_PEDIR_TELEFONE', docId: ucLimpa });
-                        await enviarMensagem(phone, TEXTOS.T_OP4_FALTANDO_TEL);
+                        await ZapiService.enviarMensagem(phone, TEXTOS.T_OP4_FALTANDO_TEL);
                     } else if (!leadExistente.EMAIL) {
                         memoriaEstado.set(phone, { STATUS_CADASTRO: 'OP4_PEDIR_EMAIL', docId: ucLimpa });
-                        await enviarMensagem(phone, TEXTOS.T_OP4_FALTANDO_MAIL);
+                        await ZapiService.enviarMensagem(phone, TEXTOS.T_OP4_FALTANDO_MAIL);
                     } else {
                         memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: ucLimpa });
-                        await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
+                        await ZapiService.enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
                     }
                 } else {
                     memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: ucLimpa });
-                    await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
+                    await ZapiService.enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
                 }
-            } else { await enviarMensagem(phone, "⚠️ Digite a UC corretamente."); }
+            } else { await ZapiService.enviarMensagem(phone, "⚠️ Digite a UC corretamente."); }
             break;
         }
-
         case 'OP4_PEDIR_TELEFONE': {
             if (textoIn.length >= 8) {
-                await salvarNoBanco(mem.docId, phone, { TELEFONE: textoIn });
-                const leadAtualizadoTel = await buscarNoBanco(mem.docId);
-                
+                await FirebaseService.salvarNoBanco(mem.docId, phone, { TELEFONE: textoIn });
+                const leadAtualizadoTel = await FirebaseService.buscarNoBanco(mem.docId);
                 if (leadAtualizadoTel && !leadAtualizadoTel.EMAIL) {
                     memoriaEstado.set(phone, { STATUS_CADASTRO: 'OP4_PEDIR_EMAIL', docId: mem.docId });
-                    await enviarMensagem(phone, TEXTOS.T_OP4_FALTANDO_MAIL);
+                    await ZapiService.enviarMensagem(phone, TEXTOS.T_OP4_FALTANDO_MAIL);
                 } else {
                     memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: mem.docId });
-                    await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
+                    await ZapiService.enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
                 }
-            } else { await enviarMensagem(phone, "⚠️ Digite um telefone válido."); }
+            } else { await ZapiService.enviarMensagem(phone, "⚠️ Digite um telefone válido."); }
             break;
         }
-
         case 'OP4_PEDIR_EMAIL': {
             if (textoIn.includes('@')) {
-                await salvarNoBanco(mem.docId, phone, { EMAIL: textoIn });
+                await FirebaseService.salvarNoBanco(mem.docId, phone, { EMAIL: textoIn });
                 memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: mem.docId });
-                await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
-            } else { await enviarMensagem(phone, "⚠️ Digite um e-mail válido."); }
+                await ZapiService.enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE);
+            } else { await ZapiService.enviarMensagem(phone, "⚠️ Digite um e-mail válido."); }
             break;
         }
-
         case 'AGUARDANDO_DOC_FRENTE': {
             if (temMidia) {
-                await salvarNoBanco(mem.docId, phone, { LINK_DOC_FRENTE: mediaUrl });
+                await FirebaseService.salvarNoBanco(mem.docId, phone, { LINK_DOC_FRENTE: mediaUrl });
                 memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO', docId: mem.docId });
-                await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_VERSO);
-            } else { await enviarMensagem(phone, "⚠️ Envie a foto da FRENTE."); }
+                await ZapiService.enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_VERSO);
+            } else { await ZapiService.enviarMensagem(phone, "⚠️ Envie a foto da FRENTE."); }
             break;
         }
-
         case 'AGUARDANDO_DOC_VERSO': {
             if (temMidia) {
-                await salvarNoBanco(mem.docId, phone, { LINK_DOC_VERSO: mediaUrl, STATUS_CADASTRO: "CONCLUIDO_COM_DOCS" });
-                await enviarMensagem(phone, TEXTOS.T_DOCS_RECEBIDOS);
+                await FirebaseService.salvarNoBanco(mem.docId, phone, { LINK_DOC_VERSO: mediaUrl, STATUS_CADASTRO: "CONCLUIDO_COM_DOCS" });
+                await ZapiService.enviarMensagem(phone, TEXTOS.T_DOCS_RECEBIDOS);
                 memoriaEstado.delete(phone);
-            } else { await enviarMensagem(phone, "⚠️ Envie a foto do VERSO."); }
+            } else { await ZapiService.enviarMensagem(phone, "⚠️ Envie a foto do VERSO."); }
             break;
         }
     }
 });
 
-// ==========================================
-// ROTA PÚBLICA DE PROVAS (A PEDIDO DO MESTRE)
-// ==========================================
 app.get('/ultima-fatura', (req, res) => {
     const file = path.join('/tmp', 'ultima_fatura.pdf');
     if (fs.existsSync(file)) {
@@ -872,31 +849,23 @@ app.get('/ultima-fatura', (req, res) => {
     }
 });
 
-// ==========================================
-// HEALTH CHECK E INICIALIZAÇÃO
-// ==========================================
-const PORT = process.env.PORT || 10000;
+app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindado!'));
 
-async function validateBrowser() {
+async function initApp() {
+    await initFirebase();
+    iniciarMotorRecorrente();
+    
+    console.log("⏳ Iniciando Health Check do Navegador...");
     try {
-        console.log("⏳ Iniciando Health Check do Navegador (Modo Docker)...");
-        const browser = await puppeteer.launch({
-            headless: true,
-            args: CHROME_ARGS, 
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath()
-        });
+        const browser = await puppeteer.launch({ headless: true, args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() });
         await browser.close();
-        console.log('✔ Browser health check passed! O contentor Docker está perfeito.');
-        return true;
+        console.log('✔ Browser health check passed!');
     } catch (error) {
         console.error('❌ Browser initialization failed:', error.message);
         process.exit(1); 
     }
 }
 
-// ROTA DE SEGURANÇA PARA O RENDER
-app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindado!'));
-
-validateBrowser().then(() => {
-    app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});    
+initApp().then(() => {
+    app.listen(CONFIG.PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${CONFIG.PORT} via Docker (0.0.0.0)`));
+});
