@@ -18,7 +18,6 @@ app.use(express.json());
 const ZAPI_INSTANCE = process.env.ZAPI_INSTANCE;
 const ZAPI_TOKEN = process.env.ZAPI_TOKEN;
 const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN; 
-
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY; 
 
 const IGREEN_LOGIN_URL = "https://escritorio.igreenenergy.com.br"; 
@@ -27,12 +26,7 @@ const EQUATORIAL_AL_URL = "https://al.equatorialenergia.com.br/siteantigo";
 
 const IGREEN_USER = process.env.IGREEN_USER;
 const IGREEN_PASS = process.env.IGREEN_PASS;
-
 const APP_ID = 'igreen-autoflow-v4';
-
-// CREDENCIAIS ZENROWS (WEB UNLOCKER)
-const ZENROWS_KEY = 'f826d9e653539c8a72d1c2a7610dfd1641c00a60';
-const ZENROWS_PROXY = 'proxy.zenrows.com:8001';
 
 try {
     const firebaseConfig = process.env.FIREBASE_CONFIG ? JSON.parse(process.env.FIREBASE_CONFIG) : null;
@@ -157,7 +151,7 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
 }
 
 // ==========================================
-// MÓDULO 2: EXTRATOR RPA TOTAL (ARQUITETURA DE DOIS MOTORES + ZENROWS NATIVO)
+// MÓDULO 2: EXTRATOR RPA TOTAL (ARQUITETURA DE DOIS MOTORES)
 // ==========================================
 async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, nascBanco = null, isAutomated = false) {
     let browserIgreen = null;
@@ -279,20 +273,15 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         }
 
         // ==============================================================
-        // MOTOR 2: EQUATORIAL (USANDO O ZENROWS DE FORMA NATIVA E DIRETA)
+        // MOTOR 2: EQUATORIAL (SEM PROXY - TENTATIVA DE ACESSO DIRETO)
         // ==============================================================
-        console.log(`[RPA] 👻 Preparando MOTOR 2 (Equatorial com ZenRows Nativo)...`);
+        console.log(`[RPA] 👻 Preparando MOTOR 2 (Equatorial - Acesso Direto sem Proxy)...`);
 
         for (let tentativa = 1; tentativa <= 3; tentativa++) {
             console.log(`\n[RPA] ---> Iniciando Salto para Equatorial (Tentativa ${tentativa}/3) <---`);
             
             try {
                 let puppeteerArgsEq = [...CHROME_ARGS];
-                
-                // Conectando diretamente ao ZenRows nativamente
-                puppeteerArgsEq.push(`--proxy-server=http://${ZENROWS_PROXY}`);
-                puppeteerArgsEq.push(`--proxy-bypass-list=*.igreenenergy.com.br`);
-
                 browserEquatorial = await puppeteer.launch({ 
                     headless: true, 
                     args: puppeteerArgsEq,
@@ -300,10 +289,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 });
                 
                 const pageEq = await browserEquatorial.newPage();
-                
-                // Autenticação nativa do Chrome para o ZenRows (Sem senha, como eles pedem!)
-                await pageEq.authenticate({ username: ZENROWS_KEY, password: '' });
-                
                 await pageEq.setExtraHTTPHeaders({ 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7' });
                 
                 const escutarPDF = async (response) => {
@@ -326,13 +311,13 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     }
                 });
 
-                console.log(`[RPA] Abrindo o portal da Equatorial através do ZenRows...`);
-                await pageEq.goto(EQUATORIAL_AL_URL, { waitUntil: 'domcontentloaded', timeout: 120000 });
-                await new Promise(r => setTimeout(r, 8000)); 
+                console.log(`[RPA] Abrindo o portal da Equatorial...`);
+                await pageEq.goto(EQUATORIAL_AL_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
+                await new Promise(r => setTimeout(r, 5000)); 
 
                 const bodyTextInicio = await pageEq.evaluate(() => document.body.innerText.toLowerCase());
                 if (bodyTextInicio.includes("access denied") || bodyTextInicio.includes("error 16") || bodyTextInicio.includes("imperva")) {
-                    throw new Error("ZenRows falhou em contornar o Imperva nesta tentativa.");
+                    throw new Error("Imperva bloqueou o acesso sem Proxy.");
                 }
 
                 console.log(`[RPA] Verificando se há lixo de outro cliente (Botão SAIR)...`);
@@ -406,7 +391,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 console.log(`[RPA] Equatorial: Aguardando painel carregar...`);
                 await new Promise(r => setTimeout(r, 15000));
 
-                // Fecha qualquer pop-up intrusivo antes de clicar nas coisas
+                // Fecha qualquer pop-up intrusivo
                 await pageEq.evaluate(() => {
                     const btnFechar = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase() === 'FECHAR' || el.textContent.toUpperCase() === 'X');
                     if(btnFechar) btnFechar.click(); 
@@ -432,13 +417,13 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 const ucIdentificada = await pageEq.evaluate(() => {
                     const elementos = Array.from(document.querySelectorAll('span, div, p, a, li, option, td, h3, h4, b, strong, select'));
                     
-                    // 1. NOVO LAYOUT: Tenta achar via dropdown (<select>) (Baseado na foto do Mestre)
+                    // 1. NOVO LAYOUT
                     const selectUc = document.querySelector('select');
                     if (selectUc && selectUc.value && selectUc.value.match(/\d{8,15}/)) {
                         return selectUc.value.replace(/\D/g, '');
                     }
 
-                    // 2. NOVO LAYOUT: Procura pelo texto "Selecione sua Conta Contrato" e extrai o número próximo
+                    // 2. NOVO LAYOUT
                     const labelSelect = elementos.find(el => el.textContent.toLowerCase().includes('selecione sua conta contrato') && el.offsetParent !== null);
                     if (labelSelect) {
                         const container = labelSelect.parentElement || labelSelect.parentElement.parentElement;
@@ -449,7 +434,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                         }
                     }
 
-                    // 3. LAYOUT ANTIGO (MANTIDO): Tenta achar a palavra "Conta Contrato" e clica nela
+                    // 3. LAYOUT ANTIGO
                     const elemTexto = elementos.find(el => {
                         const txt = el.textContent.trim().toLowerCase();
                         return (txt.includes('conta contrato') || txt.includes('uc:') || txt.includes('contrato:')) && txt.match(/\d{8,15}/) && el.offsetParent !== null;
@@ -458,10 +443,10 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     if (elemTexto) {
                         elemTexto.click();
                         if(elemTexto.parentElement) elemTexto.parentElement.click();
-                        return elemTexto.textContent.replace(/\D/g, ''); // Devolve só os números
+                        return elemTexto.textContent.replace(/\D/g, '');
                     }
 
-                    // 4. LAYOUT ANTIGO (MANTIDO): Fallback, Procura só um número solto
+                    // 4. LAYOUT ANTIGO (Fallback)
                     const elemUc = elementos.find(el => {
                         const txt = el.textContent.trim();
                         if (txt.includes('/') || txt.includes('-') || txt.includes('.')) return false;
@@ -485,7 +470,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 
                 await new Promise(r => setTimeout(r, 5000));
 
-                // Verifica se as faturas já estão na tela (Novo Layout Dashboard)
                 console.log(`[RPA] Equatorial: Verificando se as faturas já estão visíveis na tela atual...`);
                 let faturasNaTela = await pageEq.evaluate(() => {
                     const faturas = Array.from(document.querySelectorAll('span, div, p, td, b, strong')).filter(el => el.textContent.trim().toLowerCase().includes('referente a') && el.offsetParent !== null);
@@ -493,7 +477,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 });
 
                 if (!faturasNaTela) {
-                    // 👁️ GOLPE DE MESTRE 5: Novo Menu "AGÊNCIA WEB" -> "Emitir segunda via" (Caminho Antigo Mantido)
                     console.log(`[RPA] Equatorial: Abrindo menu AGÊNCIA WEB (Layout Antigo)...`);
                     await pageEq.evaluate(() => {
                         const menuAgencia = Array.from(document.querySelectorAll('a, span, div, li, p')).find(el => el.textContent.trim().toUpperCase() === 'AGÊNCIA WEB');
@@ -517,40 +500,35 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                         }
                     });
                     
-                    // Espera a tela antiga carregar a lista de débitos
                     await new Promise(r => setTimeout(r, 8000));
                 } else {
                     console.log(`[RPA] Equatorial: 🎯 Novo Layout detectado! As faturas já estão na tela, poupando tempo.`);
                 }
 
-                // 👁️ GOLPE DE MESTRE 6: A "Rede de Arrasto" (Busca agressiva pela Fatura)
                 console.log(`[RPA] Equatorial: Rastreador ativado. Procurando a linha da fatura e o botão...`);
                 
                 const clicouFatura = await pageEq.evaluate(() => {
                     const todosElementos = Array.from(document.querySelectorAll('a, button, span, i, img, div, input, tr, td'));
                     
-                    // Passo 1 Humano: Tenta clicar na linha inteira da fatura primeiro para a "selecionar"
                     const linhaFatura = todosElementos.find(el => el.textContent.trim().toLowerCase().includes('referente a') && el.offsetParent !== null);
                     if (linhaFatura) {
                         linhaFatura.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        linhaFatura.click(); // Clica na palavra "Referente a"
+                        linhaFatura.click();
                         
                         if (linhaFatura.parentElement) {
-                            linhaFatura.parentElement.click(); // Clica na mini-caixa
+                            linhaFatura.parentElement.click();
                             if (linhaFatura.parentElement.parentElement) {
-                                linhaFatura.parentElement.parentElement.click(); // NOVO LAYOUT: Clica no bloco/card inteiro (O Bloco Amarelo/Vermelho da foto)
+                                linhaFatura.parentElement.parentElement.click(); 
                             }
                         }
 
                         const trPai = linhaFatura.closest('tr');
-                        if (trPai) trPai.click(); // LAYOUT ANTIGO: Clica na linha da tabela
+                        if (trPai) trPai.click(); 
                     }
 
-                    // Espera 1 segundo invisível dentro do navegador
                     const start = new Date().getTime();
                     while (new Date().getTime() < start + 1500);
 
-                    // Passo 2 Humano: Agora procura o botão de Imprimir/Baixar que deve ter aparecido
                     const btnDireto = todosElementos.find(el => {
                         const txt = el.textContent.trim().toUpperCase();
                         const title = (el.getAttribute('title') || '').toUpperCase();
@@ -570,7 +548,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                         return 'BOTÃO_ENCONTRADO_E_CLICADO';
                     }
 
-                    // Passo 3: Se não achou botão, tenta clicar na checkbox
                     const btnSelecao = todosElementos.find(el => el.tagName === 'INPUT' && (el.type === 'radio' || el.type === 'checkbox') && el.offsetParent !== null);
                     if (btnSelecao) {
                         btnSelecao.click();
@@ -587,6 +564,10 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
                 if (clicouFatura) {
                     console.log(`[RPA] Equatorial: SUCESSO! Fatura selecionada. Método: ${clicouFatura}`);
+                    console.log(`[RPA] Equatorial: Aguardando fatura na rede (15s)...`);
+                    for (let i = 0; i < 15; i++) {
+                        await new Promise(r => setTimeout(r, 1000)); 
+                        if (fs.existsSync(caminhoFaturaLocal)) { pdfCapturado = true; break; }
                     }
                 } else {
                     console.log(`[RPA] ⚠️ Fatura não encontrada. O cliente pode não ter faturas em aberto ou o site mudou a posição dos botões.`);
@@ -624,11 +605,11 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     throw new Error("Fatura não encontrada.");
                 }
 
-                console.log(`[RPA] 🎉 Operação no Motor 2 concluída com sucesso via ZenRows!`);
+                console.log(`[RPA] 🎉 Operação no Motor 2 concluída com sucesso!`);
                 await browserEquatorial.close().catch(()=>{});
                 break; 
             } catch (err) {
-                console.log(`[RPA] ⚠️ O túnel ou extração falhou via ZenRows: ${err.message}`);
+                console.log(`[RPA] ⚠️ O túnel ou extração falhou: ${err.message}`);
                 if (browserEquatorial) await browserEquatorial.close().catch(()=>{});
                 await new Promise(r => setTimeout(r, 3000));
             }
