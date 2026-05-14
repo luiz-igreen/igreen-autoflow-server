@@ -168,7 +168,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         // ==============================================================
         console.log(`[RPA] 🚀 Arrancando MOTOR 1 (iGreen - Sem Proxy)...`);
         browserIgreen = await puppeteer.launch({ 
-            headless: true, 
+            headless: "new", 
             args: CHROME_ARGS,
             executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() 
         });
@@ -283,7 +283,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             try {
                 let puppeteerArgsEq = [...CHROME_ARGS];
                 browserEquatorial = await puppeteer.launch({ 
-                    headless: true, 
+                    headless: "new", 
                     args: puppeteerArgsEq,
                     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() 
                 });
@@ -500,16 +500,15 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                         }
                     });
                     
-                    // 👁️ GOLPE DE MESTRE: Espera inteligente (Evita que o robô procure antes da página carregar)
+                    // Espera inteligente
                     console.log(`[RPA] Equatorial: Aguardando o servidor da distribuidora carregar os débitos (Até 25s)...`);
                     try {
                         await pageEq.waitForFunction(() => {
                             const txt = document.body.innerText.toLowerCase();
-                            // Espera ver qualquer coisa que pareça uma fatura ou dados da tela de fatura
                             return txt.match(/\d{2}\/\d{2}\/\d{4}/) || txt.includes('vencimento') || txt.includes('referente a') || txt.includes('pagamento') || txt.includes('r$');
                         }, { timeout: 25000 });
                         console.log(`[RPA] Equatorial: Débitos carregados com sucesso na tela!`);
-                        await new Promise(r => setTimeout(r, 3000)); // Tempo extra para os botões ocultos expandirem
+                        await new Promise(r => setTimeout(r, 3000)); 
                     } catch (e) {
                         console.log(`[RPA] ⚠️ Aviso: Faturas demoraram a aparecer ou o cliente não tem débitos.`);
                     }
@@ -517,27 +516,26 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     console.log(`[RPA] Equatorial: 🎯 Novo Layout detectado! As faturas já estão na tela, poupando tempo.`);
                 }
 
-                // 👁️ A SOLUÇÃO DEFINITIVA: O Filtro Mágico da Equatorial
+                // A SOLUÇÃO DEFINITIVA: O Filtro Mágico da Equatorial
                 console.log(`[RPA] Equatorial: Aplicando filtro 'Exibir apenas faturas não pagas'...`);
                 await pageEq.evaluate(() => {
                     const todos = Array.from(document.querySelectorAll('label, span, div, p'));
                     const toggle = todos.find(el => el.textContent.toLowerCase().includes('exibir apenas faturas não pagas'));
                     if (toggle) {
-                        toggle.click(); // Clica no texto
+                        toggle.click(); 
                         const checkbox = toggle.parentElement?.querySelector('input[type="checkbox"]');
-                        if (checkbox && !checkbox.checked) checkbox.click(); // Clica na caixinha
+                        if (checkbox && !checkbox.checked) checkbox.click(); 
                     }
                 });
-                await new Promise(r => setTimeout(r, 2500)); // Aguarda o site esconder as faturas velhas
+                await new Promise(r => setTimeout(r, 2500)); 
 
                 console.log(`[RPA] Equatorial: Iniciando Análise Profunda e Mouse Real (Sniper)...`);
                 
-                // PASSO 1: O Radar acha as Coordenadas X e Y da PRIMEIRA fatura que sobrar na tela!
+                // PASSO 1: O Radar acha as Coordenadas X e Y da PRIMEIRA fatura que sobrar na tela
                 const alvoFatura = await pageEq.evaluate(() => {
                     const todosElementos = Array.from(document.querySelectorAll('span, p, b, strong, div, td, tr'));
                     
-                    // 👁️ GOLPE DE MESTRE: A pedido do Mestre Luiz, excluímos as regras restritas de "R$" e "Vencimento".
-                    // Agora o robô procura a assinatura universal de uma conta: A DATA (Ex: 16/04/2026) ou a LINHA.
+                    // O robô procura a assinatura universal de uma conta: A DATA (Ex: 16/04/2026) ou a LINHA.
                     
                     // 1. Procura por qualquer Data (DD/MM/AAAA) solta na tela que não seja fatura paga
                     const celulaData = todosElementos.find(el => el.textContent.match(/\d{2}\/\d{2}\/\d{4}/) && el.offsetParent !== null && el.textContent.length < 40 && !el.textContent.toLowerCase().includes('pagamento'));
@@ -1017,7 +1015,7 @@ async function validateBrowser() {
     try {
         console.log("⏳ Iniciando Health Check do Navegador (Modo Docker)...");
         const browser = await puppeteer.launch({
-            headless: true,
+            headless: "new",
             args: CHROME_ARGS, 
             executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath()
         });
@@ -1035,4 +1033,4 @@ app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindad
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});    
+});
