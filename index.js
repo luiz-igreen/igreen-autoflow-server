@@ -296,7 +296,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             try {
                 let puppeteerArgsEq = [...CHROME_ARGS];
                 
-                // 🛡️ A CORREÇÃO DE MESTRE: Usar Proxy-Chain para forçar o IP Brasileiro
+                // 🛡️ Usar Proxy-Chain para forçar o IP Brasileiro
                 if (PROXY_IP && PROXY_PORT && PROXY_USER && PROXY_PASS) {
                     const rawProxyUrl = `http://${PROXY_USER}:${PROXY_PASS}@${PROXY_IP}:${PROXY_PORT}`;
                     proxyUrlForPuppeteer = await anonymizeProxy(rawProxyUrl);
@@ -340,7 +340,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 await pageEq.goto(EQUATORIAL_AL_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
                 await new Promise(r => setTimeout(r, 5000)); 
 
-                // 📸 Tira a foto exata do Imperva para Auditoria
                 try {
                     await pageEq.screenshot({ path: path.join('/tmp', 'debug_tela.png'), fullPage: true });
                 } catch(e) {}
@@ -423,7 +422,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 console.log(`[RPA] Equatorial: Aguardando painel carregar...`);
                 await new Promise(r => setTimeout(r, 15000));
 
-                // 📸 Tira foto do painel pós-login (substitui a foto do Imperva)
                 try {
                     await pageEq.screenshot({ path: path.join('/tmp', 'debug_tela.png'), fullPage: true });
                 } catch(e) {}
@@ -551,135 +549,169 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     console.log(`[RPA] Equatorial: 🎯 Novo Layout detectado! As faturas já estão na tela, poupando tempo.`);
                 }
 
-                console.log(`[RPA] Equatorial: Aplicando filtro 'Exibir apenas faturas não pagas'...`);
+                console.log(`[RPA] Equatorial: Removendo filtro para garantir que TODAS as faturas (pagas ou não) apareçam...`);
                 await pageEq.evaluate(() => {
                     const todos = Array.from(document.querySelectorAll('label, span, div, p'));
                     const toggle = todos.find(el => el.textContent.toLowerCase().includes('exibir apenas faturas não pagas'));
                     if (toggle) {
-                        toggle.click(); 
                         const checkbox = toggle.parentElement?.querySelector('input[type="checkbox"]');
-                        if (checkbox && !checkbox.checked) checkbox.click(); 
+                        if (checkbox && checkbox.checked) toggle.click(); 
                     }
                 });
                 await new Promise(r => setTimeout(r, 2500)); 
 
-                console.log(`[RPA] Equatorial: Iniciando Análise Profunda e Mouse Real (Sniper)...`);
+                console.log(`[RPA] Equatorial: Iniciando Varredura Multi-Faturas (Sniper em Loop)...`);
                 
-                const alvoFatura = await pageEq.evaluate(() => {
-                    const todosElementos = Array.from(document.querySelectorAll('span, p, b, strong, div, td, tr'));
+                for (let indiceFatura = 0; indiceFatura < 3; indiceFatura++) {
+                    console.log(`\n[RPA] Equatorial: Avaliando a fatura #${indiceFatura + 1} da lista...`);
                     
-                    const celulaData = todosElementos.find(el => el.textContent.match(/\d{2}\/\d{2}\/\d{4}/) && el.offsetParent !== null && el.textContent.length < 40 && !el.textContent.toLowerCase().includes('pagamento'));
+                    const alvoFatura = await pageEq.evaluate((index) => {
+                        const todosElementos = Array.from(document.querySelectorAll('span, p, b, strong, div, td, tr'));
+                        
+                        const linhasTabela = Array.from(document.querySelectorAll('tbody tr'));
+                        const linhasValidas = linhasTabela.filter(tr => tr.offsetParent !== null && tr.textContent.trim().length > 10);
 
-                    if (celulaData) {
-                        celulaData.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        const rect = celulaData.getBoundingClientRect();
-                        return { encontrou: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2), texto: 'Data Universal (DD/MM/YYYY)' };
-                    }
-                    
-                    const linhasTabela = Array.from(document.querySelectorAll('tbody tr'));
-                    const primeiraLinhaValida = linhasTabela.find(tr => tr.offsetParent !== null && tr.textContent.trim().length > 10 && !tr.textContent.toLowerCase().includes('pago'));
-
-                    if (primeiraLinhaValida) {
-                        primeiraLinhaValida.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        const rect = primeiraLinhaValida.getBoundingClientRect();
-                        return { encontrou: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2), texto: 'Primeira Linha da Tabela' };
-                    }
-
-                    const celulaValor = todosElementos.find(el => el.textContent.match(/\d+,\d{2}/) && el.offsetParent !== null && el.textContent.length < 20 && !el.textContent.toLowerCase().includes('pagamento'));
-                    
-                    if (celulaValor) {
-                        celulaValor.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        const rect = celulaValor.getBoundingClientRect();
-                        return { encontrou: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2), texto: 'Valor Numérico' };
-                    }
-
-                    return { encontrou: false };
-                });
-
-                if (alvoFatura.encontrou) {
-                    console.log(`[RPA] Equatorial: Fatura localizada [${alvoFatura.texto}]. Usando MOUSE FÍSICO nas coordenadas X:${Math.round(alvoFatura.x)} Y:${Math.round(alvoFatura.y)}`);
-                    
-                    await pageEq.mouse.move(alvoFatura.x, alvoFatura.y);
-                    await new Promise(r => setTimeout(r, 500));
-                    await pageEq.mouse.click(alvoFatura.x, alvoFatura.y);
-                    
-                    await new Promise(r => setTimeout(r, 500));
-                    await pageEq.mouse.click(alvoFatura.x, alvoFatura.y);
-
-                    console.log(`[RPA] Equatorial: Clique físico feito! Aguardando a animação abrir o botão (4s)...`);
-                    await new Promise(r => setTimeout(r, 4000));
-
-                    console.log(`[RPA] Equatorial: Procurando o botão de Impressora/Download...`);
-                    
-                    const alvoBotao = await pageEq.evaluate(() => {
-                        const todos = Array.from(document.querySelectorAll('*'));
-                        const btn = todos.find(el => {
-                            const txt = el.textContent.trim().toUpperCase();
-                            const title = (el.getAttribute('title') || '').toUpperCase();
-                            const classList = (el.getAttribute('class') || '').toUpperCase();
-                            
-                            const isText = txt === 'BAIXAR' || txt === 'IMPRIMIR' || txt === 'VER FATURA' || txt === 'PDF' || txt === 'VISUALIZAR' || txt.includes('2ª VIA') || txt.includes('2 VIA');
-                            const isTitle = title.includes('IMPRIMIR') || title.includes('DOWNLOAD') || title.includes('PDF') || title.includes('VISUALIZAR');
-                            const isIcon = classList.includes('FA-FILE-PDF') || classList.includes('FA-DOWNLOAD') || classList.includes('FA-PRINT') || classList.includes('PDF') || classList.includes('PRINT');
-                            const hasSvg = el.querySelector('svg') !== null;
-                            
-                            return (isText || isTitle || isIcon || (hasSvg && (title.includes('IMPRIMIR') || txt.includes('IMPRIMIR')))) && el.offsetParent !== null; 
-                        });
-
-                        if (btn) {
-                            btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            if (btn.tagName === 'A') btn.removeAttribute('target'); 
-                            
-                            try { btn.click(); } catch(e){}
-                            
-                            const rect = btn.getBoundingClientRect();
-                            return { encontrou: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2) };
+                        if (linhasValidas.length > index) {
+                            const linha = linhasValidas[index];
+                            linha.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            const rect = linha.getBoundingClientRect();
+                            return { encontrou: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2), texto: `Linha da Tabela ${index + 1}` };
                         }
+                        
+                        const celulasData = todosElementos.filter(el => el.textContent.match(/\d{2}\/\d{2}\/\d{4}/) && el.offsetParent !== null && el.textContent.length < 40);
+                        if (celulasData.length > index) {
+                            const celula = celulasData[index];
+                            celula.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            const rect = celula.getBoundingClientRect();
+                            return { encontrou: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2), texto: `Data Universal ${index + 1}` };
+                        }
+
+                        const celulasValor = todosElementos.filter(el => el.textContent.match(/\d+,\d{2}/) && el.offsetParent !== null && el.textContent.length < 20);
+                        if (celulasValor.length > index) {
+                            const celula = celulasValor[index];
+                            celula.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            const rect = celula.getBoundingClientRect();
+                            return { encontrou: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2), texto: `Valor Numérico ${index + 1}` };
+                        }
+
                         return { encontrou: false };
-                    });
+                    }, indiceFatura);
 
-                    if (alvoBotao.encontrou) {
-                        console.log(`[RPA] Equatorial: Ícone/Botão localizado! Movendo o mouse e clicando no alvo...`);
-                        await pageEq.mouse.move(alvoBotao.x, alvoBotao.y);
+                    if (alvoFatura.encontrou) {
+                        console.log(`[RPA] Equatorial: Fatura #${indiceFatura + 1} localizada [${alvoFatura.texto}]. Clicando para expandir...`);
+                        
+                        await pageEq.mouse.move(alvoFatura.x, alvoFatura.y);
                         await new Promise(r => setTimeout(r, 500));
-                        await pageEq.mouse.click(alvoBotao.x, alvoBotao.y);
-                    } else {
-                        console.log(`[RPA] Equatorial: Botão invisível ao radar. Disparando clique cego no bloco central...`);
-                        await pageEq.mouse.click(alvoFatura.x, alvoFatura.y + 60); 
-                        await pageEq.evaluate(() => {
-                            const btns = Array.from(document.querySelectorAll('button, a, i, svg')).filter(e => e.offsetParent !== null);
-                            btns.forEach(b => { try { b.click(); } catch(e){} });
-                        });
-                    }
+                        await pageEq.mouse.click(alvoFatura.x, alvoFatura.y);
+                        
+                        await new Promise(r => setTimeout(r, 500));
+                        await pageEq.mouse.click(alvoFatura.x, alvoFatura.y);
 
-                    console.log(`[RPA] Equatorial: Aguardando a rede interceptar o arquivo PDF (15s)...`);
-                    for (let i = 0; i < 15; i++) {
-                        await new Promise(r => setTimeout(r, 1000)); 
-                        if (fs.existsSync(caminhoFaturaLocal)) { pdfCapturado = true; break; }
+                        console.log(`[RPA] Equatorial: Aguardando a animação abrir os botões (4s)...`);
+                        await new Promise(r => setTimeout(r, 4000));
+
+                        console.log(`[RPA] Equatorial: Procurando o botão de Impressora/Download nesta fatura específica...`);
+                        
+                        const alvoBotao = await pageEq.evaluate(() => {
+                            const todos = Array.from(document.querySelectorAll('*'));
+                            const btn = todos.find(el => {
+                                const txt = el.textContent.trim().toUpperCase();
+                                const title = (el.getAttribute('title') || '').toUpperCase();
+                                const classList = (el.getAttribute('class') || '').toUpperCase();
+                                
+                                const isText = txt === 'BAIXAR' || txt === 'IMPRIMIR' || txt === 'VER FATURA' || txt === 'PDF' || txt === 'VISUALIZAR' || txt.includes('2ª VIA') || txt.includes('2 VIA');
+                                const isTitle = title.includes('IMPRIMIR') || title.includes('DOWNLOAD') || title.includes('PDF') || title.includes('VISUALIZAR');
+                                const isIcon = classList.includes('FA-FILE-PDF') || classList.includes('FA-DOWNLOAD') || classList.includes('FA-PRINT') || classList.includes('PDF') || classList.includes('PRINT');
+                                const hasSvg = el.querySelector('svg') !== null;
+                                
+                                return (isText || isTitle || isIcon || (hasSvg && (title.includes('IMPRIMIR') || txt.includes('IMPRIMIR')))) && el.offsetParent !== null; 
+                            });
+
+                            if (btn) {
+                                btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                if (btn.tagName === 'A') btn.removeAttribute('target'); 
+                                
+                                try { btn.click(); } catch(e){}
+                                
+                                const rect = btn.getBoundingClientRect();
+                                return { encontrou: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2) };
+                            }
+                            return { encontrou: false };
+                        });
+
+                        if (alvoBotao.encontrou) {
+                            console.log(`[RPA] Equatorial: Ícone/Botão localizado! Movendo o mouse e clicando no alvo...`);
+                            await pageEq.mouse.move(alvoBotao.x, alvoBotao.y);
+                            await new Promise(r => setTimeout(r, 500));
+                            await pageEq.mouse.click(alvoBotao.x, alvoBotao.y);
+                            
+                            console.log(`[RPA] Equatorial: Aguardando a rede interceptar o arquivo PDF (15s)...`);
+                            for (let i = 0; i < 15; i++) {
+                                await new Promise(r => setTimeout(r, 1000)); 
+                                if (fs.existsSync(caminhoFaturaLocal)) { break; }
+                            }
+                            
+                            if (fs.existsSync(caminhoFaturaLocal)) {
+                                console.log(`[RPA] 🎯 Sucesso! O PDF da fatura #${indiceFatura + 1} foi capturado pela rede.`);
+                                pdfCapturado = true;
+                                break; 
+                            } else {
+                                console.log(`[RPA] O PDF não caiu na rede. Vamos verificar se abriu numa nova aba de Leitor de PDF do Chrome...`);
+                            }
+                            
+                        } else {
+                            console.log(`[RPA] Equatorial: Nenhum botão de imprimir visível na fatura #${indiceFatura + 1}. Fechando e indo para a próxima...`);
+                            await pageEq.mouse.click(alvoFatura.x, alvoFatura.y + 60); 
+                            await pageEq.evaluate(() => {
+                                const btns = Array.from(document.querySelectorAll('button, a, i, svg')).filter(e => e.offsetParent !== null);
+                                btns.forEach(b => { try { b.click(); } catch(e){} });
+                            });
+                        }
+                    } else {
+                        console.log(`[RPA] Não foram encontradas mais faturas para testar.`);
+                        break; 
                     }
-                } else {
-                    console.log(`[RPA] ⚠️ Fatura não encontrada pelo radar universal (O cliente não tem pendências ou o site está muito lento).`);
-                }
-                
+                } // Fim do Loop FOR
+
+                // 🔥 CORREÇÃO MAGISTRAL: VERIFICA SE O PDF ABRIU NO LEITOR NATIVO DO CHROME (Como na sua foto)
                 if (!pdfCapturado) {
-                    console.log(`[RPA] O PDF não caiu na rede. Verificando se a fatura abriu na tela...`);
+                    console.log(`[RPA] O PDF não caiu na rede. Procurando por abas de visualizador de PDF (Câmera de Segurança Ativada)...`);
                     await new Promise(r => setTimeout(r, 6000)); 
                     
                     const abas = await browserEquatorial.pages();
                     for (let aba of abas) {
                         try {
-                            const textoAba = await aba.evaluate(() => document.body.innerText.toLowerCase());
-                            if (textoAba.includes('total a pagar') || textoAba.includes('referente a') || textoAba.includes('conta de energia') || textoAba.includes('vencimento')) {
-                                console.log(`[RPA] 🎯 Fatura detectada aberta na tela! Batendo foto (PDF)...`);
-                                await aba.emulateMediaType('screen');
-                                await aba.pdf({ path: caminhoFaturaLocal, format: 'A4', printBackground: true });
+                            const urlAba = aba.url();
+                            // Verifica se é um leitor de PDF (document.contentType ou embed PDF)
+                            const isPDF = await aba.evaluate(() => document.contentType === 'application/pdf' || document.querySelector('embed[type="application/pdf"]') !== null);
+                            
+                            if (isPDF || urlAba.toLowerCase().includes('.pdf')) {
+                                console.log(`[RPA] 🎯 GOLPE DE MESTRE: Leitor de PDF nativo detectado (como na foto)! Extraindo buffer...`);
+                                
+                                // O Robô faz o download do URL diretamente dentro da aba autenticada
+                                const bufferArray = await aba.evaluate(async (url) => {
+                                    const res = await fetch(url);
+                                    const buf = await res.arrayBuffer();
+                                    return Array.from(new Uint8Array(buf));
+                                }, urlAba);
+                                
+                                fs.writeFileSync(caminhoFaturaLocal, Buffer.from(bufferArray));
                                 if (fs.existsSync(caminhoFaturaLocal)) { pdfCapturado = true; break; }
+                            } else {
+                                // Fallback normal se não for um leitor de PDF mas sim uma página HTML
+                                const textoAba = await aba.evaluate(() => document.body.innerText.toLowerCase());
+                                if (textoAba.includes('total a pagar') || textoAba.includes('referente a') || textoAba.includes('conta de energia') || textoAba.includes('vencimento')) {
+                                    console.log(`[RPA] 🎯 Fatura HTML detectada aberta na tela! Batendo foto (PDF)...`);
+                                    await aba.emulateMediaType('screen');
+                                    await aba.pdf({ path: caminhoFaturaLocal, format: 'A4', printBackground: true });
+                                    if (fs.existsSync(caminhoFaturaLocal)) { pdfCapturado = true; break; }
+                                }
                             }
                         } catch(e){}
                     }
                 }
 
-                if (!pdfCapturado) throw new Error("A fatura não apareceu na tela após os cliques.");
+                if (!pdfCapturado) throw new Error("A fatura não apareceu na tela após os cliques e o leitor de PDF não foi acionado.");
 
                 if (fs.existsSync(caminhoFaturaLocal)) {
                     const stats = fs.statSync(caminhoFaturaLocal);
