@@ -60,9 +60,12 @@ const TEXTOS = {
     T02: "Recebemos o seu documento! 📄 A nossa assistente virtual está a analisar as informações neste exato momento. Só um instante...",
     
     T_RESGATE_START: "Opção 3️⃣ selecionada! ⚡ \nPara resolvermos a devolutiva, a nossa equipe vai buscar os seus dados no escritório, baixar a fatura atualizada na Distribuidora e anexar.\n\nPor favor, digite apenas o **Nome do Cliente ou ID**.\n\n*(Exemplo: 398172 ou Wellington Silva Nunes)*:",
-    T_RESGATE_BUSCANDO: "🔍 Iniciando a verificação em nosso sistema...\n\n1️⃣ Buscando CPF e Nascimento no relatório da iGreen...\n2️⃣ Acessando a Distribuidora Local...\n3️⃣ Baixando fatura atualizada e identificando a UC correta...\n4️⃣ Retornando à iGreen para anexar o documento...\n\nIsso pode levar alguns segundos, por favor, aguarde...",
-    T_RESGATE_SUCESSO: "✅ Sucesso Absoluto! A fatura atualizada foi resgatada e anexada na aba de Devolutivas do escritório iGreen. A sua pendência foi resolvida!",
-    T_RESGATE_FAIL: "⚠️ Ocorreu um erro genérico no processo.\n\nPor favor, verifique se o Nome ou ID digitado está correto e tente novamente mais tarde.",
+    T_RESGATE_BUSCANDO: "🔍 Iniciando a verificação em nosso sistema...\n\n1️⃣ Buscando CPF no relatório da iGreen...\n2️⃣ Acessando a Distribuidora...\n3️⃣ Baixando fatura e identificando a UC...\n4️⃣ Retornando à iGreen para anexar...\n\nIsso pode levar alguns segundos, por favor, aguarde...",
+    T_RESGATE_SUCESSO: "✅ Sucesso Absoluto! A fatura foi resgatada, processada no nosso Banco de Dados e anexada na aba de Devolutivas da iGreen. A pendência está resolvida!",
+    T_RESGATE_FAIL: "⚠️ Ocorreu um erro genérico no processo. Tente novamente.",
+    
+    // 💡 NOVO TEXTO: PLANO B (FALLBACK DA DEVOLUTIVA)
+    T_FALHA_EQUATORIAL_PEDE_FATURA: "⚠️ *Distribuidora Inacessível*\n\nNão foi possível baixar a fatura automaticamente no site da distribuidora (bloqueio ou site indisponível).\n\nMas não se preocupe! Para resolvermos a devolutiva agora mesmo, por favor, **envie aqui a foto ou o arquivo PDF da fatura do cliente**:",
 
     T_GUARDAR_START: "Opção 2️⃣ selecionada! 💾 \n*Módulo de Pré-Cadastro* ativado!\nPor favor, envie a foto ou PDF da sua *Fatura de Energia*.",
     T_PEDIR_TELEFONE: "✅ Fatura analisada e salva!\n👤 Titular: ${nome}\n⚡ UC: ${uc}\n\nPara completarmos o seu pré-cadastro, digite o **Número de Telefone (com DDD)** do titular:",
@@ -157,6 +160,111 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
     }
 }
 
+// =================================================================================
+// 🚀 INJEÇÃO MANUAL (O PLANO B) - Vai à iGreen anexar a fatura enviada pelo Whatsapp
+// =================================================================================
+async function injetarFaturaManualIgreen(cpf, mediaUrl, phone) {
+    let browserIgreen = null;
+    const localPath = path.join('/tmp', `fatura_manual_${Date.now()}.pdf`);
+    try {
+        await enviarMensagem(phone, "📥 Baixando e analisando o seu arquivo (Atualizando Banco de Dados e Fila iGreen)...");
+        
+        // 1. Fazer o download do PDF/Imagem enviado
+        const response = await axios({ url: mediaUrl, method: 'GET', responseType: 'stream' });
+        const writer = fs.createWriteStream(localPath);
+        response.data.pipe(writer);
+        await new Promise((resolve, reject) => { writer.on('finish', resolve); writer.on('error', reject); });
+        
+        await enviarMensagem(phone, "⚙️ Arquivo preparado! Iniciando a injeção silenciosa no escritório da iGreen...");
+
+        // 2. Ligar o Motor da iGreen
+        browserIgreen = await puppeteer.launch({ 
+            headless: "new", 
+            args: CHROME_ARGS,
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() 
+        });
+        const pageIgreen = await browserIgreen.newPage();
+        await pageIgreen.setViewport({ width: 4000, height: 1080 });
+        
+        // Login iGreen
+        await pageIgreen.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+        try { await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Começar')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
+        await pageIgreen.type('input[type="email"]', IGREEN_USER, { delay: 50 });
+        await pageIgreen.type('input[type="password"]', IGREEN_PASS, { delay: 50 });
+        await pageIgreen.evaluate(() => { const btnEntrar = Array.from(document.querySelectorAll('button')).find(b => b.textContent.toLowerCase().includes('entrar') || b.textContent.toLowerCase().includes('acessar')); if (btnEntrar) btnEntrar.click(); });
+        await Promise.race([ pageIgreen.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }), new Promise(resolve => setTimeout(resolve, 10000)) ]);
+        try { await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
+
+        // Ir para o Mapa e Procurar o CPF
+        await pageIgreen.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await new Promise(r => setTimeout(r, 5000));
+        await pageIgreen.evaluate(() => { document.body.style.zoom = "0.4"; });
+        
+        let searchInput = await pageIgreen.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
+        await searchInput.click({ clickCount: 3 });
+        await pageIgreen.keyboard.press('Backspace');
+        await searchInput.type(cpf, { delay: 100 }); 
+        await pageIgreen.keyboard.press('Enter');
+        await new Promise(r => setTimeout(r, 3000));
+
+        await pageIgreen.evaluate(() => { const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller'); scrollers.forEach(s => s.scrollLeft = 9999); });
+        await new Promise(r => setTimeout(r, 1500));
+        
+        await pageIgreen.evaluate((cpfBusca) => { 
+            const linhas = Array.from(document.querySelectorAll('tr, [role="row"], div[class*="MuiDataGrid-row"]')); 
+            const linhaExata = linhas.find(row => row.textContent.replace(/\D/g, '').includes(cpfBusca)); 
+            if(linhaExata) {
+                const btnTresPontinhos = Array.from(linhaExata.querySelectorAll('button, div')).find(el => el.textContent.trim() === '...'); 
+                if(btnTresPontinhos) btnTresPontinhos.click(); 
+            }
+        }, cpf);
+        
+        await new Promise(r => setTimeout(r, 2000));
+        await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('span, li, div')).find(el => el.textContent.includes('Devolutivas')); if(btn) btn.click(); });
+        await new Promise(r => setTimeout(r, 3000));
+
+        for (let clique = 0; clique < 3; clique++) {
+            await pageIgreen.evaluate(() => { 
+                const botoesAcao = Array.from(document.querySelectorAll('button, span, a, div')).filter(el => el.textContent.trim() === 'Realizar ação' || el.textContent.includes('Realizar ação'));
+                const btn = botoesAcao.filter(b => b.offsetParent !== null).pop() || botoesAcao[botoesAcao.length - 1]; 
+                if(btn) { btn.scrollIntoView({behavior: 'smooth', block: 'center'}); btn.click(); }
+            });
+            await new Promise(r => setTimeout(r, 3000));
+        }
+
+        // Injeção do PDF
+        const inputUploads = await pageIgreen.$$('input[type="file"]');
+        if (inputUploads.length > 0) {
+            for (let input of inputUploads) {
+                try {
+                    await input.uploadFile(localPath);
+                    await pageIgreen.evaluate((el) => el.dispatchEvent(new Event('change', { bubbles: true })), input);
+                } catch(e){}
+            }
+        } else {
+             throw new Error("O formulário de anexo da iGreen está bloqueado ou invisível.");
+        }
+        await new Promise(r => setTimeout(r, 3000));
+
+        // Salvar Devolutiva
+        await pageIgreen.evaluate(() => { 
+            const btnSalvar = Array.from(document.querySelectorAll('button')).find(el => el.textContent.toUpperCase().includes('ENVIAR') || el.textContent.toUpperCase().includes('SALVAR') || el.textContent.toUpperCase().includes('CONCLUIR')); 
+            if (btnSalvar) btnSalvar.click(); 
+        });
+        await new Promise(r => setTimeout(r, 5000));
+
+        await enviarMensagem(phone, TEXTOS.T_RESGATE_SUCESSO);
+        
+    } catch (e) {
+        console.error("Erro injeção manual:", e);
+        await enviarMensagem(phone, "⚠️ Erro ao tentar injetar a fatura. O portal da iGreen pode estar indisponível ou o seu login expirou.");
+    } finally {
+        if (browserIgreen) await browserIgreen.close().catch(()=>{});
+        if (fs.existsSync(localPath)) fs.unlinkSync(localPath).catch(()=>{});
+    }
+}
+
+
 // ==========================================
 // MÓDULO 2: EXTRATOR RPA TOTAL (ARQUITETURA DE DOIS MOTORES)
 // ==========================================
@@ -218,7 +326,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             let searchInput;
             try {
                 searchInput = await pageIgreen.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
-            } catch (erroSeletor) { throw new Error("A barra de Buscar não existe."); }
+            } catch (erroSeletor) { throw new Error("LINHA_CLIENTE_NAO_ENCONTRADA"); }
 
             await searchInput.click();
             await new Promise(r => setTimeout(r, 500));
@@ -296,15 +404,11 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             try {
                 let puppeteerArgsEq = [...CHROME_ARGS];
                 
-                // 🛡️ Usar Proxy-Chain para forçar o IP Brasileiro
                 if (PROXY_IP && PROXY_PORT && PROXY_USER && PROXY_PASS) {
                     const rawProxyUrl = `http://${PROXY_USER}:${PROXY_PASS}@${PROXY_IP}:${PROXY_PORT}`;
                     proxyUrlForPuppeteer = await anonymizeProxy(rawProxyUrl);
                     puppeteerArgsEq.push(`--proxy-server=${proxyUrlForPuppeteer}`);
-                    console.log(`[RPA] 🛡️ Disfarce Blindado Ativado (Proxy-Chain): ${PROXY_IP}`);
-                } else {
-                    console.log(`[RPA] ⚠️ Aviso: Variáveis de Proxy ausentes na Railway!`);
-                }
+                } 
 
                 browserEquatorial = await puppeteer.launch({ 
                     headless: "new", 
@@ -316,6 +420,9 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 const pageEq = await browserEquatorial.newPage();
                 await pageEq.setExtraHTTPHeaders({ 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7' });
 
+                const clientEq = await pageEq.target().createCDPSession();
+                await clientEq.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: '/tmp' });
+
                 const escutarPDF = async (response) => {
                     try {
                         const contentType = response.headers()['content-type'];
@@ -324,44 +431,28 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                             (contentDisposition && contentDisposition.includes('.pdf')))) {
                             const buffer = await response.buffer();
                             fs.writeFileSync(caminhoFaturaLocal, buffer);
-                            console.log(`[RPA] 🎯 ALVO ABATIDO! PDF interceptado e gravado com sucesso!`);
                         }
                     } catch(err) {}
                 };
 
                 pageEq.on('response', escutarPDF);
                 browserEquatorial.on('targetcreated', async (target) => {
-                    if (target.type() === 'page') {
-                        try { const novaAba = await target.page(); novaAba.on('response', escutarPDF); } catch (e) {}
-                    }
+                    if (target.type() === 'page') { try { const novaAba = await target.page(); novaAba.on('response', escutarPDF); } catch (e) {} }
                 });
 
-                console.log(`[RPA] Abrindo o portal da Equatorial...`);
                 await pageEq.goto(EQUATORIAL_AL_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
                 await new Promise(r => setTimeout(r, 5000)); 
-
-                try {
-                    await pageEq.screenshot({ path: path.join('/tmp', 'debug_tela.png'), fullPage: true });
-                } catch(e) {}
 
                 const bodyTextInicio = await pageEq.evaluate(() => document.body.innerText.toLowerCase());
                 if (bodyTextInicio.includes("access denied") || bodyTextInicio.includes("error 16") || bodyTextInicio.includes("imperva")) {
                     throw new Error("IMPERVA_BLOCK");
                 }
 
-                console.log(`[RPA] O Imperva foi derrotado! Estamos dentro da Equatorial!`);
-
-                console.log(`[RPA] Verificando se há lixo de outro cliente (Botão SAIR)...`);
-                const clicouSair = await pageEq.evaluate(() => {
+                await pageEq.evaluate(() => {
                     const btnSair = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase().includes('SAIR') || el.textContent.toUpperCase().includes('X SAIR'));
-                    if (btnSair) { btnSair.click(); return true; }
-                    return false;
+                    if (btnSair) btnSair.click(); 
                 });
-
-                if (clicouSair) {
-                    console.log(`[RPA] 🧹 Memória antiga encontrada! Botão SAIR clicado. Aguardando limpeza...`);
-                    await new Promise(r => setTimeout(r, 8000)); 
-                }
+                await new Promise(r => setTimeout(r, 4000)); 
 
                 await pageEq.evaluate(() => {
                     const check = document.querySelector('input[type="checkbox"]'); if(check) check.click();
@@ -369,17 +460,10 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     const btnFechar = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase() === 'FECHAR' || el.textContent.toUpperCase() === 'X'); if(btnFechar) btnFechar.click();
                 });
                 await new Promise(r => setTimeout(r, 2000));
-
-                console.log(`[RPA] Equatorial: Inserindo CPF para Login (Teclado Humano Nativo)...`);
                 
                 let encontrouCpf = await pageEq.evaluate(() => {
                     const inputs = Array.from(document.querySelectorAll('input'));
-                    let cpfField = inputs.find(i => 
-                        (i.placeholder && i.placeholder.toLowerCase().includes('digite')) || 
-                        (i.placeholder && i.placeholder.toLowerCase().includes('cpf')) ||
-                        (i.previousElementSibling && i.previousElementSibling.textContent.toLowerCase().includes('cpf')) ||
-                        (i.id && i.id.toLowerCase().includes('cpf'))
-                    );
+                    let cpfField = inputs.find(i => (i.placeholder && i.placeholder.toLowerCase().includes('cpf')) || (i.id && i.id.toLowerCase().includes('cpf')));
                     if (cpfField) { cpfField.focus(); cpfField.click(); return true; }
                     return false;
                 });
@@ -387,7 +471,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 if (encontrouCpf) {
                     await pageEq.keyboard.type(cpf, { delay: 100 }); 
                     await new Promise(r => setTimeout(r, 1000));
-                    
                     await pageEq.evaluate(() => {
                         const btnEntrar = Array.from(document.querySelectorAll('button, a, div')).find(b => b.textContent.trim().toUpperCase() === 'ENTRAR' || b.textContent.trim().toUpperCase() === 'CONTINUAR');
                         if (btnEntrar) btnEntrar.click();
@@ -396,15 +479,9 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 
                 await new Promise(r => setTimeout(r, 4000));
 
-                console.log(`[RPA] Equatorial: Verificando se exigiu 2ª etapa (Data de Nascimento)...`);
                 let encontrouNasc = await pageEq.evaluate(() => {
                     const inputs = Array.from(document.querySelectorAll('input'));
-                    let nascField = inputs.find(i => 
-                        (i.placeholder && i.placeholder.toLowerCase().includes('nascimento')) || 
-                        (i.placeholder && i.placeholder.toLowerCase().includes('data')) ||
-                        (i.previousElementSibling && i.previousElementSibling.textContent.toLowerCase().includes('nascimento')) ||
-                        (i.id && (i.id.toLowerCase().includes('nasc') || i.id.toLowerCase().includes('data')))
-                    );
+                    let nascField = inputs.find(i => (i.placeholder && i.placeholder.toLowerCase().includes('nascimento')) || (i.id && i.id.toLowerCase().includes('nasc')));
                     if (nascField && nascField.offsetParent !== null) { nascField.focus(); nascField.click(); return true; }
                     return false;
                 });
@@ -412,19 +489,13 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 if (encontrouNasc) {
                     await pageEq.keyboard.type(nascimento, { delay: 100 });
                     await new Promise(r => setTimeout(r, 1000));
-                    
                     await pageEq.evaluate(() => {
                         const btnEntrar = Array.from(document.querySelectorAll('button, a, div')).find(b => b.textContent.trim().toUpperCase() === 'ENTRAR' || b.textContent.trim().toUpperCase() === 'CONTINUAR' || b.textContent.trim().toUpperCase() === 'ACESSAR');
                         if (btnEntrar) btnEntrar.click();
                     });
                 }
 
-                console.log(`[RPA] Equatorial: Aguardando painel carregar...`);
                 await new Promise(r => setTimeout(r, 15000));
-
-                try {
-                    await pageEq.screenshot({ path: path.join('/tmp', 'debug_tela.png'), fullPage: true });
-                } catch(e) {}
 
                 await pageEq.evaluate(() => {
                     const btnFechar = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase() === 'FECHAR' || el.textContent.toUpperCase() === 'X');
@@ -432,218 +503,94 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 });
                 await new Promise(r => setTimeout(r, 1000));
 
-                console.log(`[RPA] Equatorial: Procurando e clicando no link/acesso da distribuidora intermediária...`);
                 await pageEq.evaluate(() => {
                     const elementos = Array.from(document.querySelectorAll('a, button, span, div, h2, h3, p'));
                     const linkEq = elementos.find(el => {
                         const txt = el.textContent.trim().toUpperCase();
                         return (txt === 'EQUATORIAL ALAGOAS' || txt === 'ALAGOAS' || txt === 'ACESSAR' || txt === 'IR PARA O PORTAL' || txt.includes('EQUATORIAL')) && el.offsetParent !== null && txt.length < 35;
                     });
-                    if (linkEq) {
-                        linkEq.click();
-                        if(linkEq.parentElement) linkEq.parentElement.click();
-                    }
+                    if (linkEq) { linkEq.click(); if(linkEq.parentElement) linkEq.parentElement.click(); }
                 });
                 await new Promise(r => setTimeout(r, 5000));
 
-                console.log(`[RPA] Equatorial: Procurando a Conta Contrato na tela para selecionar...`);
                 const ucIdentificada = await pageEq.evaluate(() => {
                     const elementos = Array.from(document.querySelectorAll('span, div, p, a, li, option, td, h3, h4, b, strong, select'));
-                    
-                    const selectUc = document.querySelector('select');
-                    if (selectUc && selectUc.value && selectUc.value.match(/\d{8,15}/)) {
-                        return selectUc.value.replace(/\D/g, '');
-                    }
-
-                    const labelSelect = elementos.find(el => el.textContent.toLowerCase().includes('selecione sua conta contrato') && el.offsetParent !== null);
-                    if (labelSelect) {
-                        const container = labelSelect.parentElement || labelSelect.parentElement.parentElement;
-                        if (container) {
-                             const txtContainer = container.textContent.trim();
-                             const matchNumber = txtContainer.match(/\d{8,15}/);
-                             if (matchNumber) return matchNumber[0];
-                        }
-                    }
-
-                    const elemTexto = elementos.find(el => {
-                        const txt = el.textContent.trim().toLowerCase();
-                        return (txt.includes('conta contrato') || txt.includes('uc:') || txt.includes('contrato:')) && txt.match(/\d{8,15}/) && el.offsetParent !== null;
-                    });
-
-                    if (elemTexto) {
-                        elemTexto.click();
-                        if(elemTexto.parentElement) elemTexto.parentElement.click();
-                        return elemTexto.textContent.replace(/\D/g, '');
-                    }
-
                     const elemUc = elementos.find(el => {
                         const txt = el.textContent.trim();
                         if (txt.includes('/') || txt.includes('-') || txt.includes('.')) return false;
                         const soNumeros = txt.replace(/\D/g, '');
                         return soNumeros.length >= 8 && soNumeros.length <= 15 && txt === soNumeros;
                     });
-                    
-                    if (elemUc) { 
-                        elemUc.click(); 
-                        if(elemUc.parentElement) elemUc.parentElement.click(); 
-                        return elemUc.textContent.trim(); 
-                    }
+                    if (elemUc) { elemUc.click(); if(elemUc.parentElement) elemUc.parentElement.click(); return elemUc.textContent.trim(); }
                     return null;
                 });
 
                 if (ucIdentificada) {
-                    console.log(`\n======================================================`);
-                    console.log(`[⚡ SUCESSO - CONTA CONTRATO ENCONTRADA]`);
-                    console.log(`🔌 Número UC/Instalação selecionado: ${ucIdentificada}`);
-                    console.log(`======================================================\n`);
                     ucExtraidaEquatorial = ucIdentificada;
                     await salvarNoBanco(cpf, phone, { UC_ATUALIZADA_EQUATORIAL: ucIdentificada, UC: ucIdentificada });
-                } else {
-                    console.log(`[RPA] ⚠️ Aviso: Nenhuma Conta Contrato identificada na tela.`);
                 }
                 
                 await new Promise(r => setTimeout(r, 5000));
 
-                console.log(`[RPA] Equatorial: Verificando se as faturas já estão visíveis na tela atual...`);
                 let faturasNaTela = await pageEq.evaluate(() => {
                     const faturas = Array.from(document.querySelectorAll('span, div, p, td, b, strong')).filter(el => el.textContent.trim().toLowerCase().includes('referente a') && el.offsetParent !== null);
                     return faturas.length > 0;
                 });
 
                 if (!faturasNaTela) {
-                    console.log(`[RPA] Equatorial: Abrindo menu AGÊNCIA WEB (Layout Antigo)...`);
                     await pageEq.evaluate(() => {
                         const menuAgencia = Array.from(document.querySelectorAll('a, span, div, li, p')).find(el => el.textContent.trim().toUpperCase() === 'AGÊNCIA WEB');
-                        if(menuAgencia) {
-                            menuAgencia.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-                            menuAgencia.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-                            menuAgencia.click(); 
-                        }
+                        if(menuAgencia) { menuAgencia.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); menuAgencia.click(); }
                     });
                     await new Promise(r => setTimeout(r, 2000));
 
-                    console.log(`[RPA] Equatorial: Clicando em Emitir Segunda Via...`);
                     await pageEq.evaluate(() => {
                         const links = Array.from(document.querySelectorAll('a, span, div, button, li'));
-                        const btn2via = links.find(el => el.textContent.trim().toLowerCase().includes('emitir segunda via'));
-                        if(btn2via) {
-                            btn2via.click();
-                        } else {
-                            const btnAlternativo = links.find(el => el.textContent.trim().toLowerCase() === 'segunda via');
-                            if (btnAlternativo) btnAlternativo.click();
-                        }
+                        const btn2via = links.find(el => el.textContent.trim().toLowerCase().includes('emitir segunda via') || el.textContent.trim().toLowerCase() === 'segunda via');
+                        if(btn2via) btn2via.click();
                     });
                     
-                    console.log(`[RPA] Equatorial: Aguardando o servidor da distribuidora carregar os débitos (Até 25s)...`);
-                    try {
-                        await pageEq.waitForFunction(() => {
-                            const txt = document.body.innerText.toLowerCase();
-                            return txt.match(/\d{2}\/\d{2}\/\d{4}/) || txt.includes('vencimento') || txt.includes('referente a') || txt.includes('pagamento') || txt.includes('r$');
-                        }, { timeout: 25000 });
-                        console.log(`[RPA] Equatorial: Débitos carregados com sucesso na tela!`);
-                        await new Promise(r => setTimeout(r, 3000)); 
-                    } catch (e) {
-                        console.log(`[RPA] ⚠️ Aviso: Faturas demoraram a aparecer ou o cliente não tem débitos.`);
-                    }
-                } else {
-                    console.log(`[RPA] Equatorial: 🎯 Novo Layout detectado! As faturas já estão na tela, poupando tempo.`);
-                }
+                    try { await pageEq.waitForFunction(() => document.body.innerText.toLowerCase().match(/\d{2}\/\d{2}\/\d{4}/), { timeout: 20000 }); } catch (e) {}
+                    await new Promise(r => setTimeout(r, 3000)); 
+                } 
 
-                console.log(`[RPA] Equatorial: Removendo filtro para garantir que TODAS as faturas (pagas ou não) apareçam...`);
                 await pageEq.evaluate(() => {
-                    const todos = Array.from(document.querySelectorAll('label, span, div, p'));
-                    const toggle = todos.find(el => el.textContent.toLowerCase().includes('exibir apenas faturas não pagas'));
-                    if (toggle) {
-                        const checkbox = toggle.parentElement?.querySelector('input[type="checkbox"]');
-                        if (checkbox && checkbox.checked) toggle.click(); 
-                    }
+                    const toggle = Array.from(document.querySelectorAll('label, span, div, p')).find(el => el.textContent.toLowerCase().includes('exibir apenas faturas não pagas'));
+                    if (toggle) { const checkbox = toggle.parentElement?.querySelector('input[type="checkbox"]'); if (checkbox && checkbox.checked) toggle.click(); }
                 });
                 await new Promise(r => setTimeout(r, 2500)); 
 
-                console.log(`[RPA] Equatorial: Iniciando Varredura Multi-Faturas (Sniper em Loop)...`);
-                
                 for (let indiceFatura = 0; indiceFatura < 3; indiceFatura++) {
-                    console.log(`\n[RPA] Equatorial: Avaliando a fatura #${indiceFatura + 1} da lista...`);
-                    
                     const alvoFatura = await pageEq.evaluate((index) => {
-                        const todosElementos = Array.from(document.querySelectorAll('span, p, b, strong, div, td, tr'));
-                        
-                        const linhasTabela = Array.from(document.querySelectorAll('tbody tr'));
-                        const linhasValidas = linhasTabela.filter(tr => tr.offsetParent !== null && tr.textContent.trim().length > 10);
-
-                        if (linhasValidas.length > index) {
-                            const linha = linhasValidas[index];
-                            linha.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            const rect = linha.getBoundingClientRect();
-                            return { encontrou: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2), texto: `Linha da Tabela ${index + 1}` };
+                        const linhasTabela = Array.from(document.querySelectorAll('tbody tr')).filter(tr => tr.offsetParent !== null && tr.textContent.trim().length > 10);
+                        if (linhasTabela.length > index) {
+                            linhasTabela[index].scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            const rect = linhasTabela[index].getBoundingClientRect();
+                            return { encontrou: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2) };
                         }
-                        
-                        const celulasData = todosElementos.filter(el => el.textContent.match(/\d{2}\/\d{2}\/\d{4}/) && el.offsetParent !== null && el.textContent.length < 40);
-                        if (celulasData.length > index) {
-                            const celula = celulasData[index];
-                            celula.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            const rect = celula.getBoundingClientRect();
-                            return { encontrou: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2), texto: `Data Universal ${index + 1}` };
-                        }
-
-                        const celulasValor = todosElementos.filter(el => el.textContent.match(/\d+,\d{2}/) && el.offsetParent !== null && el.textContent.length < 20);
-                        if (celulasValor.length > index) {
-                            const celula = celulasValor[index];
-                            celula.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            const rect = celula.getBoundingClientRect();
-                            return { encontrou: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2), texto: `Valor Numérico ${index + 1}` };
-                        }
-
                         return { encontrou: false };
                     }, indiceFatura);
 
                     if (alvoFatura.encontrou) {
-                        console.log(`[RPA] Equatorial: Fatura #${indiceFatura + 1} localizada [${alvoFatura.texto}]. Clicando para expandir...`);
-                        
-                        await pageEq.mouse.move(alvoFatura.x, alvoFatura.y);
+                        await pageEq.mouse.click(alvoFatura.x, alvoFatura.y);
                         await new Promise(r => setTimeout(r, 500));
                         await pageEq.mouse.click(alvoFatura.x, alvoFatura.y);
-                        
-                        await new Promise(r => setTimeout(r, 500));
-                        await pageEq.mouse.click(alvoFatura.x, alvoFatura.y);
-
-                        console.log(`[RPA] Equatorial: Aguardando a animação abrir os botões (4s)...`);
                         await new Promise(r => setTimeout(r, 4000));
 
-                        console.log(`[RPA] Equatorial: Procurando o botão de Impressora/Download nesta fatura específica...`);
-                        
                         const alvoBotao = await pageEq.evaluate(() => {
-                            const todos = Array.from(document.querySelectorAll('*'));
-                            const btn = todos.find(el => {
+                            const btn = Array.from(document.querySelectorAll('*')).find(el => {
                                 const txt = el.textContent.trim().toUpperCase();
                                 const title = (el.getAttribute('title') || '').toUpperCase();
                                 const classList = (el.getAttribute('class') || '').toUpperCase();
-                                
-                                const isText = txt === 'BAIXAR' || txt === 'IMPRIMIR' || txt === 'VER FATURA' || txt === 'PDF' || txt === 'VISUALIZAR' || txt.includes('2ª VIA') || txt.includes('2 VIA');
-                                const isTitle = title.includes('IMPRIMIR') || title.includes('DOWNLOAD') || title.includes('PDF') || title.includes('VISUALIZAR');
-                                const isIcon = classList.includes('FA-FILE-PDF') || classList.includes('FA-DOWNLOAD') || classList.includes('FA-PRINT') || classList.includes('PDF') || classList.includes('PRINT');
-                                const hasSvg = el.querySelector('svg') !== null;
-                                
-                                return (isText || isTitle || isIcon || (hasSvg && (title.includes('IMPRIMIR') || txt.includes('IMPRIMIR')))) && el.offsetParent !== null; 
+                                return (txt === 'BAIXAR' || txt === 'IMPRIMIR' || txt === 'VER FATURA' || txt === 'PDF' || title.includes('IMPRIMIR') || title.includes('DOWNLOAD') || classList.includes('FA-FILE-PDF')) && el.offsetParent !== null; 
                             });
 
                             if (btn) {
                                 btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                
-                                // 🔥 CORREÇÃO 2: PROIBIR A ABERTURA DE NOVA ABA QUE CEGA O ROBÔ
-                                if (btn.tagName === 'A') {
-                                    btn.removeAttribute('target'); 
-                                    btn.setAttribute('target', '_self');
-                                }
-                                
-                                // Eliminar comandos javascript que abrem abas fantasma
+                                if (btn.tagName === 'A') { btn.removeAttribute('target'); btn.setAttribute('target', '_self'); }
                                 const atualOnclick = btn.getAttribute('onclick') || '';
-                                if (atualOnclick.includes('window.open')) {
-                                    btn.setAttribute('onclick', atualOnclick.replace(/window\.open\(([^,]+)[^)]*\)/, 'window.location.href=$1'));
-                                }
-                                
+                                if (atualOnclick.includes('window.open')) { btn.setAttribute('onclick', atualOnclick.replace(/window\.open\(([^,]+)[^)]*\)/, 'window.location.href=$1')); }
                                 try { btn.click(); } catch(e){}
-                                
                                 const rect = btn.getBoundingClientRect();
                                 return { encontrou: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2) };
                             }
@@ -651,103 +598,49 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                         });
 
                         if (alvoBotao.encontrou) {
-                            console.log(`[RPA] Equatorial: Ícone/Botão localizado! Movendo o mouse e clicando no alvo...`);
-                            await pageEq.mouse.move(alvoBotao.x, alvoBotao.y);
-                            await new Promise(r => setTimeout(r, 500));
                             await pageEq.mouse.click(alvoBotao.x, alvoBotao.y);
-                            
-                            console.log(`[RPA] Equatorial: Aguardando a rede ou o sistema de downloads capturar o PDF (15s)...`);
                             for (let i = 0; i < 15; i++) {
                                 await new Promise(r => setTimeout(r, 1000)); 
-                                
-                                // 🔥 CORREÇÃO 3: ROUBAR O PDF DIRETAMENTE DOS ARQUIVOS BAIXADOS SILENCIOSAMENTE
                                 try {
                                     const arquivosTmp = fs.readdirSync('/tmp').filter(f => f.endsWith('.pdf'));
                                     for (let arq of arquivosTmp) {
-                                        if (arq !== path.basename(caminhoFaturaLocal) && arq !== 'ultima_fatura.pdf') {
-                                             fs.renameSync(path.join('/tmp', arq), caminhoFaturaLocal);
-                                             pdfCapturado = true;
-                                             console.log(`[RPA] 🎯 GOLPE DE MESTRE: O Chrome baixou o arquivo fisicamente. Roubo efetuado!`);
-                                             break;
-                                        }
+                                        if (arq !== path.basename(caminhoFaturaLocal) && arq !== 'ultima_fatura.pdf') { fs.renameSync(path.join('/tmp', arq), caminhoFaturaLocal); pdfCapturado = true; break; }
                                     }
                                 } catch(e){}
-
-                                if (pdfCapturado || fs.existsSync(caminhoFaturaLocal)) { 
-                                    pdfCapturado = true; 
-                                    break; 
+                                if (pdfCapturado || fs.existsSync(caminhoFaturaLocal)) { pdfCapturado = true; break; }
+                            }
+                            
+                            if (pdfCapturado) break; 
+                            
+                            try {
+                                const isPDF = await pageEq.evaluate(() => document.contentType === 'application/pdf' || document.querySelector('embed[type="application/pdf"]') !== null);
+                                if (isPDF || pageEq.url().toLowerCase().includes('.pdf')) {
+                                    const bufferArray = await pageEq.evaluate(async (url) => { const res = await fetch(url); const buf = await res.arrayBuffer(); return Array.from(new Uint8Array(buf)); }, pageEq.url());
+                                    fs.writeFileSync(caminhoFaturaLocal, Buffer.from(bufferArray));
+                                    pdfCapturado = true;
+                                    break;
                                 }
-                            }
-                            
-                            if (pdfCapturado) {
-                                console.log(`[RPA] 🎯 Sucesso absoluto com a fatura #${indiceFatura + 1}.`);
-                                break; 
-                            } else {
-                                console.log(`[RPA] O arquivo não caiu fisicamente. Verificando se a página virou um Leitor PDF...`);
-                                
-                                // 🔥 CORREÇÃO 4: SE A ABA ATUAL VIROU O LEITOR, EXTRAR DAQUI
-                                try {
-                                    const isPDF = await pageEq.evaluate(() => document.contentType === 'application/pdf' || document.querySelector('embed[type="application/pdf"]') !== null);
-                                    const urlAba = pageEq.url();
-                                    
-                                    if (isPDF || urlAba.toLowerCase().includes('.pdf')) {
-                                        console.log(`[RPA] 🎯 GOLPE DE MESTRE: A tela virou o Leitor Nativo! Extraindo buffer de dados...`);
-                                        const bufferArray = await pageEq.evaluate(async (url) => {
-                                            const res = await fetch(url);
-                                            const buf = await res.arrayBuffer();
-                                            return Array.from(new Uint8Array(buf));
-                                        }, urlAba);
-                                        
-                                        fs.writeFileSync(caminhoFaturaLocal, Buffer.from(bufferArray));
-                                        pdfCapturado = true;
-                                        break;
-                                    }
-                                } catch(e){}
-                            }
-                            
+                            } catch(e){}
                         } else {
-                            console.log(`[RPA] Equatorial: Nenhum botão de imprimir visível na fatura #${indiceFatura + 1}. Fechando e indo para a próxima...`);
                             await pageEq.mouse.click(alvoFatura.x, alvoFatura.y + 60); 
-                            await pageEq.evaluate(() => {
-                                const btns = Array.from(document.querySelectorAll('button, a, i, svg')).filter(e => e.offsetParent !== null);
-                                btns.forEach(b => { try { b.click(); } catch(e){} });
-                            });
+                            await pageEq.evaluate(() => { Array.from(document.querySelectorAll('button, a, i, svg')).filter(e => e.offsetParent !== null).forEach(b => { try { b.click(); } catch(e){} }); });
                         }
-                    } else {
-                        console.log(`[RPA] Não foram encontradas mais faturas para testar.`);
-                        break; 
-                    }
-                } // Fim do Loop FOR
+                    } else { break; }
+                }
 
-                // 🔥 CORREÇÃO MAGISTRAL: VERIFICA SE O PDF ABRIU NO LEITOR NATIVO DO CHROME (Como na sua foto)
                 if (!pdfCapturado) {
-                    console.log(`[RPA] O PDF não caiu na rede. Procurando por abas de visualizador de PDF (Câmera de Segurança Ativada)...`);
                     await new Promise(r => setTimeout(r, 6000)); 
-                    
                     const abas = await browserEquatorial.pages();
                     for (let aba of abas) {
                         try {
-                            const urlAba = aba.url();
-                            // Verifica se é um leitor de PDF (document.contentType ou embed PDF)
                             const isPDF = await aba.evaluate(() => document.contentType === 'application/pdf' || document.querySelector('embed[type="application/pdf"]') !== null);
-                            
-                            if (isPDF || urlAba.toLowerCase().includes('.pdf')) {
-                                console.log(`[RPA] 🎯 GOLPE DE MESTRE: Leitor de PDF nativo detectado (como na foto)! Extraindo buffer...`);
-                                
-                                // O Robô faz o download do URL diretamente dentro da aba autenticada
-                                const bufferArray = await aba.evaluate(async (url) => {
-                                    const res = await fetch(url);
-                                    const buf = await res.arrayBuffer();
-                                    return Array.from(new Uint8Array(buf));
-                                }, urlAba);
-                                
+                            if (isPDF || aba.url().toLowerCase().includes('.pdf')) {
+                                const bufferArray = await aba.evaluate(async (url) => { const res = await fetch(url); const buf = await res.arrayBuffer(); return Array.from(new Uint8Array(buf)); }, aba.url());
                                 fs.writeFileSync(caminhoFaturaLocal, Buffer.from(bufferArray));
                                 if (fs.existsSync(caminhoFaturaLocal)) { pdfCapturado = true; break; }
                             } else {
-                                // Fallback normal se não for um leitor de PDF mas sim uma página HTML
                                 const textoAba = await aba.evaluate(() => document.body.innerText.toLowerCase());
                                 if (textoAba.includes('total a pagar') || textoAba.includes('referente a') || textoAba.includes('conta de energia') || textoAba.includes('vencimento')) {
-                                    console.log(`[RPA] 🎯 Fatura HTML detectada aberta na tela! Batendo foto (PDF)...`);
                                     await aba.emulateMediaType('screen');
                                     await aba.pdf({ path: caminhoFaturaLocal, format: 'A4', printBackground: true });
                                     if (fs.existsSync(caminhoFaturaLocal)) { pdfCapturado = true; break; }
@@ -757,18 +650,8 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     }
                 }
 
-                if (!pdfCapturado) throw new Error("A fatura não apareceu na tela após os cliques e o leitor de PDF não foi acionado.");
-
-                if (fs.existsSync(caminhoFaturaLocal)) {
-                    const stats = fs.statSync(caminhoFaturaLocal);
-                    if (stats.size < 15000) {
-                        fs.unlinkSync(caminhoFaturaLocal);
-                        pdfCapturado = false;
-                        throw new Error("Fatura gerada é inválida ou foi bloqueada.");
-                    }
-                } else {
-                    pdfCapturado = false;
-                    throw new Error("Fatura não encontrada na pasta.");
+                if (!pdfCapturado || !fs.existsSync(caminhoFaturaLocal) || fs.statSync(caminhoFaturaLocal).size < 15000) {
+                    throw new Error("FALHA_PDF_EQUATORIAL");
                 }
 
                 console.log(`[RPA] 🎉 Operação no Motor 2 concluída com sucesso! PDF garantido.`);
@@ -776,12 +659,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 if (proxyUrlForPuppeteer) await closeAnonymizedProxy(proxyUrlForPuppeteer, true).catch(()=>{});
                 break; 
             } catch (err) {
-                if (err.message === "IMPERVA_BLOCK") {
-                     console.log(`[RPA] ⚠️ O Imperva bloqueou o acesso! O Túnel Proxy foi rejeitado ou a senha está errada.`);
-                } else {
-                     console.log(`[RPA] ⚠️ O túnel ou extração falhou nesta tentativa: ${err.message}`);
-                }
-                
                 if (browserEquatorial) await browserEquatorial.close().catch(()=>{});
                 if (proxyUrlForPuppeteer) await closeAnonymizedProxy(proxyUrlForPuppeteer, true).catch(()=>{});
                 await new Promise(r => setTimeout(r, 3000));
@@ -789,18 +666,10 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         } 
 
         if (!pdfCapturado || !fs.existsSync(caminhoFaturaLocal)) {
-            console.log(`\n🚫 ======================================================`);
-            console.log(`[OPERAÇÃO ABORTADA ANTES DA INJEÇÃO NA IGREEN]`);
-            console.log(`Motivo: O robô chegou até ao final da Equatorial, mas o PDF não foi baixado.`);
-            console.log(`Para proteger o seu escritório iGreen contra lixo ou erros, a automação foi travada aqui.`);
-            console.log(`======================================================🚫\n`);
             throw new Error("FALHA_PDF_EQUATORIAL");
         }
 
-        try {
-            const pdfProvaPath = path.join('/tmp', 'ultima_fatura.pdf');
-            fs.copyFileSync(caminhoFaturaLocal, pdfProvaPath);
-        } catch (e) {}
+        try { fs.copyFileSync(caminhoFaturaLocal, path.join('/tmp', 'ultima_fatura.pdf')); } catch (e) {}
 
         // ==============================================================
         // RETORNO AO MOTOR 1 (IGREEN) PARA FINALIZAR O SERVIÇO
@@ -812,28 +681,14 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
         try { await pageIgreenFinal.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não') || el.textContent.includes('Fechar')); if(btn) btn.click(); }); } catch(e){}
 
-        console.log(`[RPA] Procurando a barra de Buscar nas Devolutivas...`);
         let searchDevolutiva = await pageIgreenFinal.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
-        
-        await searchDevolutiva.click();
-        await new Promise(r => setTimeout(r, 500));
         await searchDevolutiva.click({ clickCount: 3 });
         await pageIgreenFinal.keyboard.press('Backspace');
-        await new Promise(r => setTimeout(r, 500));
-        
         await searchDevolutiva.type(cpf, { delay: 100 });
-        await new Promise(r => setTimeout(r, 500));
         await pageIgreenFinal.keyboard.press('Enter');
-        
-        console.log(`[RPA] ENTER pressionado na Devolutiva. Aguardando a tabela filtrar...`);
-        
-        try { await pageIgreenFinal.waitForFunction((busca) => document.body.innerText.includes(busca), { timeout: 10000 }, cpf); } catch (e) {}
         await new Promise(r => setTimeout(r, 2000));
 
-        await pageIgreenFinal.evaluate(() => {
-            const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller');
-            scrollers.forEach(s => s.scrollLeft = 9999);
-        });
+        await pageIgreenFinal.evaluate(() => { const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller'); scrollers.forEach(s => s.scrollLeft = 9999); });
         await new Promise(r => setTimeout(r, 1500));
 
         await pageIgreenFinal.evaluate((cpfBusca) => { 
@@ -849,42 +704,28 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         await pageIgreenFinal.evaluate(() => { const btn = Array.from(document.querySelectorAll('span, li, div')).find(el => el.textContent.includes('Devolutivas')); if(btn) btn.click(); });
         await new Promise(r => setTimeout(r, 3000));
 
-        console.log(`[RPA] Navegando pelos popups de Devolutiva...`);
-        
         for (let clique = 0; clique < 3; clique++) {
             await pageIgreenFinal.evaluate(() => { 
-                const botoes = Array.from(document.querySelectorAll('button, span, a, div'));
-                const botoesAcao = botoes.filter(el => el.textContent.trim() === 'Realizar ação' || el.textContent.includes('Realizar ação'));
+                const botoesAcao = Array.from(document.querySelectorAll('button, span, a, div')).filter(el => el.textContent.trim() === 'Realizar ação' || el.textContent.includes('Realizar ação'));
                 const btn = botoesAcao.filter(b => b.offsetParent !== null).pop() || botoesAcao[botoesAcao.length - 1]; 
-                if(btn) {
-                    btn.scrollIntoView({behavior: 'smooth', block: 'center'});
-                    btn.click(); 
-                }
+                if(btn) { btn.scrollIntoView({behavior: 'smooth', block: 'center'}); btn.click(); }
             });
             await new Promise(r => setTimeout(r, 3000));
         }
 
-        console.log(`[RPA] INJEÇÃO DIRETA NO CÓDIGO HTML...`);
-        
-        await new Promise(r => setTimeout(r, 2000));
-
         const inputUploads = await pageIgreenFinal.$$('input[type="file"]');
         if (inputUploads.length > 0) {
-            console.log(`[RPA] ${inputUploads.length} inputs encontrados. Injetando PDF...`);
             for (let input of inputUploads) {
                 try {
                     await input.uploadFile(caminhoFaturaLocal);
                     await pageIgreenFinal.evaluate((el) => el.dispatchEvent(new Event('change', { bubbles: true })), input);
                 } catch(e){}
             }
-            console.log(`[RPA] PDF Injetado com SUCESSO ABSOLUTO sem abrir janelas!`);
         } else {
              throw new Error("O formulário de anexo da iGreen está bloqueado ou invisível.");
         }
-        
         await new Promise(r => setTimeout(r, 3000));
 
-        console.log(`[RPA] Salvando a devolutiva na iGreen...`);
         await pageIgreenFinal.evaluate(() => { 
             const btnSalvar = Array.from(document.querySelectorAll('button')).find(el => el.textContent.toUpperCase().includes('ENVIAR') || el.textContent.toUpperCase().includes('SALVAR') || el.textContent.toUpperCase().includes('CONCLUIR')); 
             if (btnSalvar) btnSalvar.click(); 
@@ -900,19 +741,20 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         console.error("\n❌ [RPA ERRO FATAL]:", e.message);
         if (browserIgreen) await browserIgreen.close().catch(()=>{}); 
         if (browserEquatorial) await browserEquatorial.close().catch(()=>{}); 
-        if (fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
+        if (fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal).catch(()=>{});
         
         if(!isAutomated) {
-            if (e.message === "FALHA_PDF_EQUATORIAL") {
-                await enviarMensagem(phone, "⚠️ *Operação Interrompida na Equatorial*\n\nO robô extraiu os dados e chegou até ao painel da conta do cliente.\nNo entanto, *não foi possível capturar o PDF da fatura* (pode não haver faturas pendentes ou o site bloqueou o clique final).\n\nPara não sujar o sistema, a automação foi travada aqui e não enviou nada para a iGreen.");
-            } else if (e.message === "ERRO_LOGIN_IGREEN") {
+            // Se o erro foi no site da iGreen (Login ou Cliente não achado)
+            if (e.message === "ERRO_LOGIN_IGREEN") {
                 await enviarMensagem(phone, "⚠️ *Falha na iGreen*\n\nO robô não conseguiu fazer login no escritório virtual. Verifique se a senha está correta no painel do Render.");
             } else if (e.message === "LINHA_CLIENTE_NAO_ENCONTRADA") {
                 await enviarMensagem(phone, "⚠️ *Cliente Não Encontrado*\n\nO robô acedeu ao Mapa de Clientes da iGreen, mas a linha com o nome/ID procurado não existe na tabela.");
             } else if (e.message === "FALTAM_DADOS_ESSENCIAIS") {
                 await enviarMensagem(phone, "⚠️ *Dados Incompletos na iGreen*\n\nO robô achou o cliente, mas o CPF ou Data de Nascimento estão em branco no painel da iGreen. Sem isto, não conseguimos abrir a Equatorial.");
             } else {
-                await enviarMensagem(phone, TEXTOS.T_RESGATE_FAIL);
+                // SE O ERRO FOI NA EQUATORIAL OU NO PDF -> ATIVA O PLANO B IMEDIATAMENTE
+                memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA_DEVOLUTIVA_MANUAL', cpfAlvo: cpf });
+                await enviarMensagem(phone, TEXTOS.T_FALHA_EQUATORIAL_PEDE_FATURA);
             }
         }
     }
@@ -996,6 +838,30 @@ app.post('/webhook/igreen', async (req, res) => {
                     memoriaEstado.delete(phone); 
                 } catch (e) { await enviarMensagem(phone, "❌ Erro ao ler fatura."); }
             } else { await enviarMensagem(phone, "⚠️ Aguardando foto/PDF da fatura."); }
+            break;
+        }
+
+        // 🔥 O FLUXO DO PLANO B (AQUI RECEBEMOS O PDF MANUAL)
+        case 'AGUARDANDO_FATURA_DEVOLUTIVA_MANUAL': {
+            if (temMidia) {
+                const cpfAlvo = mem.cpfAlvo; // Recuperamos o CPF de quem estávamos a tentar salvar
+                memoriaEstado.delete(phone); // Limpamos a memória do celular
+                
+                // 1. Atualizar Cadastro e Banco de Dados (como você pediu!)
+                try {
+                    const dadosIA = await analisarFaturaGemini(mediaUrl, mimeType);
+                    const docId = dadosIA.UC ? dadosIA.UC.replace(/\D/g, '') : `SEM_UC_${Date.now()}`;
+                    await salvarNoBanco(docId, phone, { ...dadosIA, LINK_FATURA: mediaUrl, STATUS_CADASTRO: "CONCLUIDO" });
+                } catch (e) {
+                    console.log("[IA] Aviso: A IA não conseguiu ler o PDF perfeitamente para o Banco, mas o arquivo será injetado na iGreen na mesma.");
+                }
+
+                // 2. Acionar a injeção manual na iGreen (Devolutiva)
+                injetarFaturaManualIgreen(cpfAlvo, mediaUrl, phone);
+                
+            } else { 
+                await enviarMensagem(phone, "⚠️ Por favor, envie a foto ou arquivo PDF da fatura para resolvermos a devolutiva."); 
+            }
             break;
         }
 
