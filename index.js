@@ -353,5 +353,10 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             await pageIgreen.type('input[type="email"]', IGREEN_USER, { delay: 50 });
             await pageIgreen.type('input[type="password"]', IGREEN_PASS, { delay: 50 });
             
+            // 👇 ESTA FOI A LINHA CORRIGIDA (O código enviado cortou antes de fechar os parênteses)
             await pageIgreen.evaluate(() => {
-                const btnEntrar = Array.from(document.querySelectorAll('button')).find(b => b.textContent.toLowerCase().includes('entrar') || b.textContent
+                const btnEntrar = Array.from(document.querySelectorAll('button')).find(b => b.textContent.toLowerCase().includes('entrar') || b.textContent.toLowerCase().includes('acessar'));
+                if (btnEntrar) btnEntrar.click();
+            });
+
+// ⚠️ ATENÇÃO: O restante do seu código original (que ficou de fora da cópia) deve continuar a partir daqui!
