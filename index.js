@@ -64,7 +64,7 @@ const TEXTOS = {
     T_RESGATE_SUCESSO: "✅ Sucesso Absoluto! A fatura foi resgatada, processada no nosso Banco de Dados e anexada na aba de Devolutivas da iGreen. A pendência está resolvida!",
     T_RESGATE_FAIL: "⚠️ Ocorreu um erro genérico no processo. Tente novamente.",
     
-    // 💡 NOVO TEXTO: PLANO B (FALLBACK DA DEVOLUTIVA)
+    // 💡 PLANO B (FALLBACK DA DEVOLUTIVA)
     T_FALHA_EQUATORIAL_PEDE_FATURA: "⚠️ *Distribuidora Inacessível*\n\nNão foi possível baixar a fatura automaticamente no site da distribuidora (bloqueio ou site indisponível).\n\nMas não se preocupe! Para resolvermos a devolutiva agora mesmo, por favor, **envie aqui a foto ou o arquivo PDF da fatura do cliente**:",
 
     T_GUARDAR_START: "Opção 2️⃣ selecionada! 💾 \n*Módulo de Pré-Cadastro* ativado!\nPor favor, envie a foto ou PDF da sua *Fatura de Energia*.",
@@ -166,10 +166,13 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
 async function injetarFaturaManualIgreen(cpf, mediaUrl, phone) {
     let browserIgreen = null;
     const localPath = path.join('/tmp', `fatura_manual_${Date.now()}.pdf`);
+    
     try {
+        console.log(`\n[PLANO B] ⚡ Iniciando injeção manual para o CPF/CNPJ alvo: ${cpf}`);
         await enviarMensagem(phone, "📥 Baixando e analisando o seu arquivo (Atualizando Banco de Dados e Fila iGreen)...");
         
         // 1. Fazer o download do PDF/Imagem enviado
+        console.log(`[PLANO B] Baixando arquivo do WhatsApp para /tmp...`);
         const response = await axios({ url: mediaUrl, method: 'GET', responseType: 'stream' });
         const writer = fs.createWriteStream(localPath);
         response.data.pipe(writer);
@@ -178,6 +181,7 @@ async function injetarFaturaManualIgreen(cpf, mediaUrl, phone) {
         await enviarMensagem(phone, "⚙️ Arquivo preparado! Iniciando a injeção silenciosa no escritório da iGreen...");
 
         // 2. Ligar o Motor da iGreen
+        console.log(`[PLANO B] Lançando Puppeteer (iGreen)...`);
         browserIgreen = await puppeteer.launch({ 
             headless: "new", 
             args: CHROME_ARGS,
@@ -187,42 +191,63 @@ async function injetarFaturaManualIgreen(cpf, mediaUrl, phone) {
         await pageIgreen.setViewport({ width: 4000, height: 1080 });
         
         // Login iGreen
+        console.log(`[PLANO B] Acessando URL de Login...`);
         await pageIgreen.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+        
         try { await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Começar')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
+        
+        console.log(`[PLANO B] Aguardando inputs de login...`);
+        await pageIgreen.waitForSelector('input[type="email"]', { timeout: 15000 });
+        
+        console.log(`[PLANO B] Inserindo credenciais da iGreen...`);
         await pageIgreen.type('input[type="email"]', IGREEN_USER, { delay: 50 });
         await pageIgreen.type('input[type="password"]', IGREEN_PASS, { delay: 50 });
+        
         await pageIgreen.evaluate(() => { const btnEntrar = Array.from(document.querySelectorAll('button')).find(b => b.textContent.toLowerCase().includes('entrar') || b.textContent.toLowerCase().includes('acessar')); if (btnEntrar) btnEntrar.click(); });
+        
+        console.log(`[PLANO B] Aguardando redirecionamento após login...`);
         await Promise.race([ pageIgreen.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }), new Promise(resolve => setTimeout(resolve, 10000)) ]);
+        
         try { await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
 
         // Ir para o Mapa e Procurar o CPF
+        console.log(`[PLANO B] Navegando para o Mapa de Clientes...`);
         await pageIgreen.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
         await new Promise(r => setTimeout(r, 5000));
         await pageIgreen.evaluate(() => { document.body.style.zoom = "0.4"; });
         
+        console.log(`[PLANO B] Buscando o cliente na barra de pesquisa...`);
         let searchInput = await pageIgreen.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
         await searchInput.click({ clickCount: 3 });
         await pageIgreen.keyboard.press('Backspace');
         await searchInput.type(cpf, { delay: 100 }); 
         await pageIgreen.keyboard.press('Enter');
-        await new Promise(r => setTimeout(r, 3000));
+        await new Promise(r => setTimeout(r, 4000));
 
         await pageIgreen.evaluate(() => { const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller'); scrollers.forEach(s => s.scrollLeft = 9999); });
         await new Promise(r => setTimeout(r, 1500));
         
-        await pageIgreen.evaluate((cpfBusca) => { 
+        console.log(`[PLANO B] Procurando a linha do cliente e clicando nos 3 pontinhos...`);
+        const clicouPontinhos = await pageIgreen.evaluate((cpfBusca) => { 
             const linhas = Array.from(document.querySelectorAll('tr, [role="row"], div[class*="MuiDataGrid-row"]')); 
             const linhaExata = linhas.find(row => row.textContent.replace(/\D/g, '').includes(cpfBusca)); 
             if(linhaExata) {
                 const btnTresPontinhos = Array.from(linhaExata.querySelectorAll('button, div')).find(el => el.textContent.trim() === '...'); 
-                if(btnTresPontinhos) btnTresPontinhos.click(); 
+                if(btnTresPontinhos) { btnTresPontinhos.click(); return true; }
             }
+            return false;
         }, cpf);
+
+        if (!clicouPontinhos) {
+             throw new Error("Não foi possível encontrar a linha do cliente na tabela após a pesquisa.");
+        }
         
         await new Promise(r => setTimeout(r, 2000));
+        console.log(`[PLANO B] Clicando no menu 'Devolutivas'...`);
         await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('span, li, div')).find(el => el.textContent.includes('Devolutivas')); if(btn) btn.click(); });
         await new Promise(r => setTimeout(r, 3000));
 
+        console.log(`[PLANO B] Lidando com os popups e alertas da Devolutiva...`);
         for (let clique = 0; clique < 3; clique++) {
             await pageIgreen.evaluate(() => { 
                 const botoesAcao = Array.from(document.querySelectorAll('button, span, a, div')).filter(el => el.textContent.trim() === 'Realizar ação' || el.textContent.includes('Realizar ação'));
@@ -233,6 +258,7 @@ async function injetarFaturaManualIgreen(cpf, mediaUrl, phone) {
         }
 
         // Injeção do PDF
+        console.log(`[PLANO B] Injetando arquivo local na página da iGreen...`);
         const inputUploads = await pageIgreen.$$('input[type="file"]');
         if (inputUploads.length > 0) {
             for (let input of inputUploads) {
@@ -241,23 +267,26 @@ async function injetarFaturaManualIgreen(cpf, mediaUrl, phone) {
                     await pageIgreen.evaluate((el) => el.dispatchEvent(new Event('change', { bubbles: true })), input);
                 } catch(e){}
             }
+            console.log(`[PLANO B] Arquivo injetado com sucesso nos inputs invisíveis!`);
         } else {
              throw new Error("O formulário de anexo da iGreen está bloqueado ou invisível.");
         }
         await new Promise(r => setTimeout(r, 3000));
 
         // Salvar Devolutiva
+        console.log(`[PLANO B] Clicando em Salvar/Enviar para finalizar...`);
         await pageIgreen.evaluate(() => { 
             const btnSalvar = Array.from(document.querySelectorAll('button')).find(el => el.textContent.toUpperCase().includes('ENVIAR') || el.textContent.toUpperCase().includes('SALVAR') || el.textContent.toUpperCase().includes('CONCLUIR')); 
             if (btnSalvar) btnSalvar.click(); 
         });
         await new Promise(r => setTimeout(r, 5000));
 
+        console.log(`[PLANO B] 🏆 Operação manual concluída com SUCESSO!`);
         await enviarMensagem(phone, TEXTOS.T_RESGATE_SUCESSO);
         
     } catch (e) {
-        console.error("Erro injeção manual:", e);
-        await enviarMensagem(phone, "⚠️ Erro ao tentar injetar a fatura. O portal da iGreen pode estar indisponível ou o seu login expirou.");
+        console.error(`\n❌ [PLANO B - ERRO FATAL]: ${e.message}\n`);
+        await enviarMensagem(phone, "⚠️ Erro ao tentar injetar a fatura. Motivo: O portal da iGreen demorou a responder ou o cliente não foi encontrado no mapa.");
     } finally {
         if (browserIgreen) await browserIgreen.close().catch(()=>{});
         if (fs.existsSync(localPath)) fs.unlinkSync(localPath).catch(()=>{});
@@ -744,15 +773,13 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         if (fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal).catch(()=>{});
         
         if(!isAutomated) {
-            // Se o erro foi no site da iGreen (Login ou Cliente não achado)
             if (e.message === "ERRO_LOGIN_IGREEN") {
-                await enviarMensagem(phone, "⚠️ *Falha na iGreen*\n\nO robô não conseguiu fazer login no escritório virtual. Verifique se a senha está correta no painel do Render.");
+                await enviarMensagem(phone, "⚠️ *Falha na iGreen*\n\nO robô não conseguiu fazer login no escritório virtual. Verifique se a senha está correta no painel da Railway.");
             } else if (e.message === "LINHA_CLIENTE_NAO_ENCONTRADA") {
                 await enviarMensagem(phone, "⚠️ *Cliente Não Encontrado*\n\nO robô acedeu ao Mapa de Clientes da iGreen, mas a linha com o nome/ID procurado não existe na tabela.");
             } else if (e.message === "FALTAM_DADOS_ESSENCIAIS") {
                 await enviarMensagem(phone, "⚠️ *Dados Incompletos na iGreen*\n\nO robô achou o cliente, mas o CPF ou Data de Nascimento estão em branco no painel da iGreen. Sem isto, não conseguimos abrir a Equatorial.");
             } else {
-                // SE O ERRO FOI NA EQUATORIAL OU NO PDF -> ATIVA O PLANO B IMEDIATAMENTE
                 memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA_DEVOLUTIVA_MANUAL', cpfAlvo: cpf });
                 await enviarMensagem(phone, TEXTOS.T_FALHA_EQUATORIAL_PEDE_FATURA);
             }
@@ -1040,7 +1067,7 @@ async function validateBrowser() {
     }
 }
 
-// ROTA DE SEGURANÇA PARA O RENDER
+// ROTA DE SEGURANÇA PARA A RAILWAY
 app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindado!'));
 
 validateBrowser().then(() => {
