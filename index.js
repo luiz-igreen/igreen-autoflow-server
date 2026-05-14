@@ -799,6 +799,14 @@ app.post('/webhook/igreen', async (req, res) => {
     const phone = data.phone;
     const textoIn = data.text?.message?.trim() || "";
     const txtL = textoIn.toLowerCase();
+    
+    // 👁️ GOLPE DE MESTRE: Mostrar a mensagem no Log (Tela Preta)
+    if (textoIn) {
+        console.log(`[WHATSAPP] 📩 Mensagem de ${phone}: "${textoIn}"`);
+    } else if (data.image?.imageUrl || data.document?.documentUrl) {
+        console.log(`[WHATSAPP] 📎 Mídia/Arquivo recebido de ${phone}`);
+    }
+
     const temMidia = !!(data.image?.imageUrl || data.document?.documentUrl);
     const mediaUrl = data.image?.imageUrl || data.document?.documentUrl;
     const mimeType = data.document ? 'application/pdf' : 'image/jpeg';
@@ -995,4 +1003,4 @@ app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindad
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});
+});    
