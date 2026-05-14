@@ -88,6 +88,7 @@ async function salvarNoBanco(docId, phone, dadosExtras) {
     }
 }
 
+// 🔥 FUNÇÃO DE IA ATUALIZADA PARA EXTRAÇÃO COMPLETA DE CAMPOS
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     try {
         console.log(`\n[IA GEMINI] 📥 Iniciando download do arquivo na Z-API: ${mediaUrl}`);
@@ -97,9 +98,13 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         const base64Data = Buffer.from(response.data, 'binary').toString('base64');
         console.log(`[IA GEMINI] ✅ Download concluído com sucesso. Tamanho: ${base64Data.length} bytes.`);
         
-        // 🔥 A VERDADEIRA CORREÇÃO: Usando o modelo gemini-2.5-flash atualizado.
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-        const promptText = `Extraia os dados desta fatura de energia. Chaves necessárias: "NOME_CLIENTE", "CPF", "DATA_NASCIMENTO", "UC", "VENCIMENTO", "VALOR". Se não encontrar alguma, deixe em branco.`;
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+        
+        // NOVO PROMPT ENRIQUECIDO COM TODOS OS CAMPOS DO DASHBOARD
+        const promptText = `Extraia os dados desta fatura de energia em formato JSON. Use EXATAMENTE estas chaves: 
+        "NOME_CLIENTE", "CPF", "MASCARA_CPF", "DATA_NASCIMENTO", "UC", "CONTA_MES", "VENCIMENTO", "VALOR_FATURA", 
+        "CEP", "ENDERECO", "ENDERECO_NUMERO", "ENDERECO_COMPLEMENTO", "ESTADO", "DISTRIBUIDORA" e "MEDIA_CONSUMO". 
+        Se não encontrar alguma informação, retorne uma string vazia "".`;
 
         const payload = {
             contents: [{ parts: [ { text: promptText }, { inline_data: { mime_type: mimeType === 'application/pdf' ? 'application/pdf' : 'image/jpeg', data: base64Data } } ] }],
@@ -129,7 +134,7 @@ async function fluxoProcessamentoUniversal(mediaUrl, mimeType, phone, cpfAlvo = 
     
     try {
         console.log(`\n[FLUXO UNIVERSAL] 🔥 Iniciado via WhatsApp para o telemóvel: ${phone}`);
-        await enviarMensagem(phone, "📥 *Iniciando Fluxo Universal...*\n\n🤖 1️⃣ Analisando a fatura com Inteligência Artificial para capturar CPF e UC...");
+        await enviarMensagem(phone, "📥 *Iniciando Fluxo Universal...*\n\n🤖 1️⃣ Analisando a fatura com Inteligência Artificial para capturar todos os dados...");
         
         let dadosIA;
         try { dadosIA = await analisarFaturaGemini(mediaUrl, mimeType); } catch (e) { await enviarMensagem(phone, "⚠️ A Inteligência Artificial teve dificuldade em ler o arquivo."); return; }
@@ -149,6 +154,7 @@ async function fluxoProcessamentoUniversal(mediaUrl, mimeType, phone, cpfAlvo = 
             await enviarMensagem(phone, `🆕 *Cliente Novo no nosso BD!* \nIncluindo os Dados...`);
         }
         
+        // Salva todos os campos novos extraídos no Firebase
         await salvarNoBanco(ucLimpa, phone, { ...dadosIA, LINK_FATURA: mediaUrl, STATUS_CADASTRO: "PROCESSADO_UNIVERSAL" });
         await new Promise(r => setTimeout(r, 1500));
 
@@ -410,7 +416,6 @@ app.post('/webhook/igreen', async (req, res) => {
         }
         case 'AGUARDANDO_FATURA_SOH_BANCO': {
             if (temMidia) {
-                // T02 não definido nos TEXTOS originais, assumindo T_GUARDAR_START ou similar
                 await enviarMensagem(phone, TEXTOS.T_GUARDAR_START); 
                 try { const dadosIA = await analisarFaturaGemini(mediaUrl, mimeType); const docId = dadosIA.UC ? dadosIA.UC.replace(/\D/g, '') : `SEM_UC_${Date.now()}`; await salvarNoBanco(docId, phone, { ...dadosIA, LINK_FATURA: mediaUrl, STATUS_CADASTRO: "AGUARDANDO_TELEFONE" }); memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_TELEFONE', docId }); await enviarMensagem(phone, TEXTOS.T_PEDIR_TELEFONE.replace('${nome}', dadosIA.NOME_CLIENTE).replace('${uc}', dadosIA.UC)); } catch (e) { await enviarMensagem(phone, "❌ Erro na análise."); }
             } else { await enviarMensagem(phone, "⚠️ Aguardando foto/PDF da fatura."); }
@@ -459,9 +464,6 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 });
 
-// ==========================================
-// ROTA DE DEBUG E PROVAS E INICIALIZAÇÃO
-// ==========================================
 app.get('/tela-robo', (req, res) => { const file = path.join('/tmp', 'debug_tela.png'); if (fs.existsSync(file)) { res.contentType('image/png'); res.sendFile(path.resolve(file)); } else { res.status(404).send('Nenhuma foto da tela foi tirada ainda.'); } });
 app.get('/ultima-fatura', (req, res) => { const file = path.join('/tmp', 'ultima_fatura.pdf'); if (fs.existsSync(file)) { res.contentType('application/pdf'); res.sendFile(path.resolve(file)); } else { res.status(404).send('Nenhuma fatura foi capturada ainda.'); } });
 
