@@ -88,7 +88,6 @@ async function salvarNoBanco(docId, phone, dadosExtras) {
     }
 }
 
-// 🔥 FUNÇÃO DA INTELIGÊNCIA ARTIFICIAL ATUALIZADA (GEMINI-2.5-FLASH)
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     try {
         console.log(`\n[IA GEMINI] 📥 Iniciando download do arquivo na Z-API: ${mediaUrl}`);
@@ -97,10 +96,9 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
 
         const base64Data = Buffer.from(response.data, 'binary').toString('base64');
         console.log(`[IA GEMINI] ✅ Download concluído com sucesso. Tamanho: ${base64Data.length} bytes.`);
-        console.log(`[IA GEMINI] 🧠 Enviando arquivo (${mimeType}) para a nuvem da Google Gemini...`);
         
-        // CORREÇÃO DEFINITIVA: Usando a versão estável 2.5-flash
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+        // CORREÇÃO: Usando o nome técnico correto para a versão 1.5-flash
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
         const promptText = `Extraia os dados desta fatura de energia. Chaves necessárias: "NOME_CLIENTE", "CPF", "DATA_NASCIMENTO", "UC", "VENCIMENTO", "VALOR". Se não encontrar alguma, deixe em branco.`;
 
         const payload = {
@@ -111,18 +109,16 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         const result = await axios.post(geminiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
         let textoResposta = result.data.candidates[0].content.parts[0].text;
         
-        console.log(`[IA GEMINI] 🎯 Leitura concluída com SUCESSO! Resultado:`, textoResposta);
+        console.log(`[IA GEMINI] 🎯 Leitura concluída com SUCESSO!`);
         return JSON.parse(textoResposta);
     } catch (error) {
-        console.error("\n❌ ===============================================");
-        console.error("❌ [ERRO IA GEMINI] Falha profunda ao analisar fatura:");
+        console.error("\n❌ [ERRO IA GEMINI] Falha profunda ao analisar fatura:");
         if (error.response) { 
             console.error("Status Google:", error.response.status); 
             console.error("Detalhes:", JSON.stringify(error.response.data, null, 2)); 
         } else { 
             console.error("Mensagem:", error.message); 
         }
-        console.error("❌ ===============================================\n");
         throw new Error("Falha ao ler fatura.");
     }
 }
@@ -244,7 +240,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             await pageIgreen.evaluate(() => { const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller'); scrollers.forEach(s => s.scrollLeft = 9999); }); await new Promise(r => setTimeout(r, 1500));
 
             const dadosExtraidos = await pageIgreen.evaluate((busca) => {
-                const buscaLimpa = busca.toLowerCase().trim(); const possiveisLinhas = Array.from(document.querySelectorAll('tr, [role="row"], .MuiDataGrid-row')); const linhaExata = linhasComDados.find(linha => linha.textContent.toLowerCase().includes(buscaLimpa));
+                const buscaLimpa = busca.toLowerCase().trim(); const possiveisLinhas = Array.from(document.querySelectorAll('tr, [role="row"], .MuiDataGrid-row')); const linhaExata = possiveisLinhas.find(linha => linha.textContent.toLowerCase().includes(buscaLimpa));
                 if (!linhaExata) return { falhouBusca: true }; let colunas = Array.from(linhaExata.querySelectorAll('td, [role="cell"], .MuiDataGrid-cell')); if (colunas.length === 0) colunas = Array.from(linhaExata.children); const textoLinha = colunas.map(c => c.textContent.trim()).join('   ');
                 let cpfExt = null; let nascExt = null; const cpfMatch = textoLinha.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/); if (cpfMatch) cpfExt = cpfMatch[0]; const todasDatas = textoLinha.match(/\d{2}\/\d{2}\/\d{4}/g);
                 if (todasDatas && todasDatas.length > 0) { let menorAno = 9999; for (let d of todasDatas) { let ano = parseInt(d.split('/')[2], 10); if (ano < menorAno) { menorAno = ano; nascExt = d; } } if (menorAno > 2015) nascExt = null; }
@@ -414,7 +410,8 @@ app.post('/webhook/igreen', async (req, res) => {
         }
         case 'AGUARDANDO_FATURA_SOH_BANCO': {
             if (temMidia) {
-                await enviarMensagem(phone, TEXTOS.T02); 
+                // T02 não definido nos TEXTOS originais, assumindo T_GUARDAR_START ou similar
+                await enviarMensagem(phone, TEXTOS.T_GUARDAR_START); 
                 try { const dadosIA = await analisarFaturaGemini(mediaUrl, mimeType); const docId = dadosIA.UC ? dadosIA.UC.replace(/\D/g, '') : `SEM_UC_${Date.now()}`; await salvarNoBanco(docId, phone, { ...dadosIA, LINK_FATURA: mediaUrl, STATUS_CADASTRO: "AGUARDANDO_TELEFONE" }); memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_TELEFONE', docId }); await enviarMensagem(phone, TEXTOS.T_PEDIR_TELEFONE.replace('${nome}', dadosIA.NOME_CLIENTE).replace('${uc}', dadosIA.UC)); } catch (e) { await enviarMensagem(phone, "❌ Erro na análise."); }
             } else { await enviarMensagem(phone, "⚠️ Aguardando foto/PDF da fatura."); }
             break;
@@ -472,4 +469,4 @@ const PORT = process.env.PORT || 10000;
 async function validateBrowser() { try { const browser = await puppeteer.launch({ headless: "new", args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() }); await browser.close(); console.log('✔ Browser health check passed!'); return true; } catch (error) { console.error('❌ Browser falhou:', error.message); process.exit(1); } }
 
 app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindado!'));
-validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`)); });    
+validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`)); });
