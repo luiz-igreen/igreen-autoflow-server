@@ -127,7 +127,7 @@ async function salvarNoBanco(docId, phone, dadosExtras) {
     }
 }
 
-// 🔥 FUNÇÃO DA INTELIGÊNCIA ARTIFICIAL (AGORA COM LOGS DETALHADOS)
+// 🔥 FUNÇÃO DA INTELIGÊNCIA ARTIFICIAL (CORRIGIDA PARA A API ESTÁVEL 1.5-FLASH)
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     try {
         console.log(`\n[IA GEMINI] 📥 Iniciando download do arquivo na Z-API: ${mediaUrl}`);
@@ -141,13 +141,13 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         console.log(`[IA GEMINI] ✅ Download concluído com sucesso. Tamanho: ${base64Data.length} bytes.`);
         console.log(`[IA GEMINI] 🧠 Enviando arquivo (${mimeType}) para a nuvem da Google Gemini...`);
 
-        // 🔥 ATUALIZAÇÃO DEFINITIVA 1: USANDO A NOVA GERAÇÃO GEMINI 3.0 FLASH
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+        // 🔥 ATUALIZAÇÃO DEFINITIVA: USANDO O NOME TÉCNICO OFICIAL E ESTÁVEL DA API
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
         
         // O prompt agora é mais simples porque o formato é forçado pela configuração
         const promptText = `Extraia os dados desta fatura de energia. Chaves necessárias: "NOME_CLIENTE", "CPF", "DATA_NASCIMENTO", "UC", "VENCIMENTO", "VALOR". Se não encontrar alguma, deixe em branco.`;
 
-        // 🔥 ATUALIZAÇÃO DEFINITIVA 2 (O SEGREDO DA SUA IMAGEM): Respostas Estruturadas (JSON NATIVO)
+        // 🔥 Respostas Estruturadas (JSON NATIVO) - Suportado no 1.5-Flash
         const payload = {
             contents: [{ parts: [ { text: promptText }, { inline_data: { mime_type: mimeType === 'application/pdf' ? 'application/pdf' : 'image/jpeg', data: base64Data } } ] }],
             generationConfig: {
