@@ -88,6 +88,7 @@ async function salvarNoBanco(docId, phone, dadosExtras) {
     }
 }
 
+// 🔥 FUNÇÃO DA INTELIGÊNCIA ARTIFICIAL ATUALIZADA (GEMINI-2.5-FLASH)
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     try {
         console.log(`\n[IA GEMINI] 📥 Iniciando download do arquivo na Z-API: ${mediaUrl}`);
@@ -96,9 +97,10 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
 
         const base64Data = Buffer.from(response.data, 'binary').toString('base64');
         console.log(`[IA GEMINI] ✅ Download concluído com sucesso. Tamanho: ${base64Data.length} bytes.`);
+        console.log(`[IA GEMINI] 🧠 Enviando arquivo (${mimeType}) para a nuvem da Google Gemini...`);
         
-        // CORREÇÃO: Usando a versão estável 1.5-flash
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+        // CORREÇÃO DEFINITIVA: Usando a versão estável 2.5-flash
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
         const promptText = `Extraia os dados desta fatura de energia. Chaves necessárias: "NOME_CLIENTE", "CPF", "DATA_NASCIMENTO", "UC", "VENCIMENTO", "VALOR". Se não encontrar alguma, deixe em branco.`;
 
         const payload = {
@@ -109,11 +111,18 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         const result = await axios.post(geminiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
         let textoResposta = result.data.candidates[0].content.parts[0].text;
         
-        console.log(`[IA GEMINI] 🎯 Leitura concluída com SUCESSO!`);
+        console.log(`[IA GEMINI] 🎯 Leitura concluída com SUCESSO! Resultado:`, textoResposta);
         return JSON.parse(textoResposta);
     } catch (error) {
-        console.error("\n❌ [ERRO IA GEMINI] Falha profunda ao analisar fatura:");
-        if (error.response) { console.error("Status Google:", error.response.status); console.error("Detalhes:", JSON.stringify(error.response.data, null, 2)); } else { console.error("Mensagem:", error.message); }
+        console.error("\n❌ ===============================================");
+        console.error("❌ [ERRO IA GEMINI] Falha profunda ao analisar fatura:");
+        if (error.response) { 
+            console.error("Status Google:", error.response.status); 
+            console.error("Detalhes:", JSON.stringify(error.response.data, null, 2)); 
+        } else { 
+            console.error("Mensagem:", error.message); 
+        }
+        console.error("❌ ===============================================\n");
         throw new Error("Falha ao ler fatura.");
     }
 }
@@ -463,4 +472,4 @@ const PORT = process.env.PORT || 10000;
 async function validateBrowser() { try { const browser = await puppeteer.launch({ headless: "new", args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() }); await browser.close(); console.log('✔ Browser health check passed!'); return true; } catch (error) { console.error('❌ Browser falhou:', error.message); process.exit(1); } }
 
 app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindado!'));
-validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`)); });
+validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`)); });    
