@@ -127,10 +127,20 @@ async function salvarNoBanco(docId, phone, dadosExtras) {
     }
 }
 
+// 🔥 FUNÇÃO DA INTELIGÊNCIA ARTIFICIAL (AGORA COM LOGS DETALHADOS)
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     try {
+        console.log(`\n[IA GEMINI] 📥 Iniciando download do arquivo na Z-API: ${mediaUrl}`);
         const response = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
+        
+        if (!response.data || response.data.length === 0) {
+            throw new Error("O ficheiro baixado está vazio.");
+        }
+
         const base64Data = Buffer.from(response.data, 'binary').toString('base64');
+        console.log(`[IA GEMINI] ✅ Download concluído com sucesso. Tamanho: ${base64Data.length} bytes.`);
+        console.log(`[IA GEMINI] 🧠 Enviando arquivo (${mimeType}) para a nuvem da Google Gemini...`);
+
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
         const promptText = `Analise esta fatura de energia. Extraia os dados em formato JSON exato. Chaves necessárias: "NOME_CLIENTE", "CPF", "DATA_NASCIMENTO", "UC", "VENCIMENTO", "VALOR". Retorne APENAS o JSON, sem marcações ou blocos de código markdown.`;
 
@@ -141,23 +151,35 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         const result = await axios.post(geminiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
         let textoResposta = result.data.candidates[0].content.parts[0].text;
         textoResposta = textoResposta.replace(/```json/g, '').replace(/```/g, '').trim();
+        
+        console.log(`[IA GEMINI] 🎯 Leitura concluída com SUCESSO! Resultado:`, textoResposta);
         return JSON.parse(textoResposta);
+        
     } catch (error) {
+        console.error("\n❌ ===============================================");
+        console.error("❌ [ERRO IA GEMINI] Falha profunda ao analisar fatura:");
+        if (error.response) {
+            console.error("Status Code Google:", error.response.status);
+            console.error("Detalhes do Google:", JSON.stringify(error.response.data, null, 2));
+        } else {
+            console.error("Mensagem de Erro:", error.message);
+        }
+        console.error("❌ ===============================================\n");
         throw new Error("Falha ao ler fatura.");
     }
 }
 
 // =================================================================================
-// 🚀 FLUXO UNIVERSAL DO MESTRE (O PEDIDO ATENDIDO: DB PRIMEIRO -> IGREEN DEPOIS)
+// 🚀 FLUXO UNIVERSAL DO MESTRE (DB PRIMEIRO -> IGREEN DEPOIS)
 // =================================================================================
 async function fluxoProcessamentoUniversal(mediaUrl, mimeType, phone, cpfAlvo = null) {
     const localPath = path.join('/tmp', `fatura_universal_${Date.now()}.pdf`);
     let browserIgreen = null;
     
     try {
+        console.log(`\n[FLUXO UNIVERSAL] 🔥 Iniciado via WhatsApp para o telemóvel: ${phone}`);
         await enviarMensagem(phone, "📥 *Iniciando Fluxo Universal...*\n\n🤖 1️⃣ Analisando a fatura com Inteligência Artificial para capturar CPF e UC...");
         
-        // 1. Extração via IA
         let dadosIA;
         try {
             dadosIA = await analisarFaturaGemini(mediaUrl, mimeType);
@@ -168,13 +190,11 @@ async function fluxoProcessamentoUniversal(mediaUrl, mimeType, phone, cpfAlvo = 
 
         const ucLimpa = dadosIA.UC ? String(dadosIA.UC).replace(/\D/g, '') : `SEM_UC_${Date.now()}`;
         const cpfFatura = dadosIA.CPF ? String(dadosIA.CPF).replace(/\D/g, '') : null;
-        const cpfFinal = cpfFatura || cpfAlvo; // Se a IA não achar na foto, usa o que o licenciado digitou antes
+        const cpfFinal = cpfFatura || cpfAlvo; 
 
-        // 2. Lógica do Mestre: Verificar no Banco de Dados
         await enviarMensagem(phone, `🔍 2️⃣ Verificando no nosso Banco de Dados Oficial se a UC *${ucLimpa}* já existe...`);
         const clienteExiste = await buscarNoBanco(ucLimpa);
         
-        // 3. Atualizar ou Inserir no DB Oficial
         if (clienteExiste) {
             console.log(`[BANCO DE DADOS] Cliente UC ${ucLimpa} já existe. Executando UPDATE.`);
             await enviarMensagem(phone, `🔄 *Cliente Encontrado no nosso BD!* \nO sistema está a **Atualizar os Dados** do cliente com as informações desta nova fatura...`);
@@ -183,7 +203,6 @@ async function fluxoProcessamentoUniversal(mediaUrl, mimeType, phone, cpfAlvo = 
             await enviarMensagem(phone, `🆕 *Cliente Novo no nosso BD!* \nO sistema está a **Incluir os Dados** no nosso Banco de Dados de forma permanente...`);
         }
         
-        // Salva com merge: true (Se existe atualiza, se não existe insere)
         await salvarNoBanco(ucLimpa, phone, { ...dadosIA, LINK_FATURA: mediaUrl, STATUS_CADASTRO: "PROCESSADO_UNIVERSAL" });
         await new Promise(r => setTimeout(r, 1500));
 
@@ -192,14 +211,14 @@ async function fluxoProcessamentoUniversal(mediaUrl, mimeType, phone, cpfAlvo = 
             return;
         }
 
-        // 4. Pegar o PDF local e levar para a iGreen
+        console.log(`[FLUXO UNIVERSAL] Banco Salvo. Acionando Robô para ir à iGreen (CPF alvo: ${cpfFinal})...`);
         await enviarMensagem(phone, `🚀 3️⃣ Banco atualizado! Baixando o PDF e voando para o portal da iGreen para anexar (CPF Alvo: ${cpfFinal})...`);
+        
         const response = await axios({ url: mediaUrl, method: 'GET', responseType: 'stream' });
         const writer = fs.createWriteStream(localPath);
         response.data.pipe(writer);
         await new Promise((resolve, reject) => { writer.on('finish', resolve); writer.on('error', reject); });
         
-        // --- INJEÇÃO NO PORTAL DA IGREEN ---
         console.log(`[IGREEN] Lançando Puppeteer...`);
         browserIgreen = await puppeteer.launch({ 
             headless: "new", 
@@ -280,6 +299,7 @@ async function fluxoProcessamentoUniversal(mediaUrl, mimeType, phone, cpfAlvo = 
         });
         await new Promise(r => setTimeout(r, 5000));
 
+        console.log(`[FLUXO UNIVERSAL] 🏆 Sucesso Absoluto! Fatura salva na iGreen.`);
         await enviarMensagem(phone, "🎉 *Fim do Processo Universal!*\n\n1️⃣ Banco de Dados Sincronizado 💾\n2️⃣ Fatura Anexada na iGreen 🌿\n\nA operação foi um Sucesso Absoluto!");
         
     } catch (e) {
@@ -294,7 +314,6 @@ async function fluxoProcessamentoUniversal(mediaUrl, mimeType, phone, cpfAlvo = 
         if (fs.existsSync(localPath)) fs.unlinkSync(localPath).catch(()=>{});
     }
 }
-
 
 // ==========================================
 // MÓDULO 2: EXTRATOR RPA TOTAL (EQUATORIAL)
@@ -606,6 +625,16 @@ app.post('/webhook/igreen', async (req, res) => {
     const mediaUrl = data.image?.imageUrl || data.document?.documentUrl;
     const mimeType = data.document ? 'application/pdf' : 'image/jpeg';
 
+    // 🔥 DEVOLVI OS LOGS (A CÂMERA DE VIGILÂNCIA DO WHATSAPP ESTÁ DE VOLTA!)
+    console.log(`\n=========================================`);
+    if (textoIn && !temMidia) {
+        console.log(`[WHATSAPP] 📩 Mensagem de ${phone}: "${textoIn}"`);
+    } else if (temMidia) {
+        console.log(`[WHATSAPP] 📎 Arquivo recebido de ${phone} | TIPO: ${mimeType}`);
+    }
+    console.log(`[WHATSAPP] Memória Atual:`, memoriaEstado.get(phone) || 'Nenhuma (NOVO)');
+    console.log(`=========================================\n`);
+
     if (['0', 'cancelar', 'menu'].includes(txtL)) {
         memoriaEstado.set(phone, { STATUS_CADASTRO: 'NOVO' });
         await enviarMensagem(phone, "🔄 Operação cancelada.\n\n" + TEXTOS.T_MENU);
@@ -615,7 +644,6 @@ app.post('/webhook/igreen', async (req, res) => {
     let mem = memoriaEstado.get(phone) || { STATUS_CADASTRO: 'NOVO' };
 
     if (mem.STATUS_CADASTRO === 'NOVO') {
-        // 🔥 A OPÇÃO 1 AGORA É O FLUXO UNIVERSAL (BANDO DE DADOS PRIMEIRO)
         if (txtL === '1') { memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA_FLUXO_UNIVERSAL' }); await enviarMensagem(phone, TEXTOS.T01); return; }
         if (txtL === '2') { memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA_SOH_BANCO' }); await enviarMensagem(phone, TEXTOS.T_GUARDAR_START); return; }
         if (txtL === '3') { memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DADOS_DEVOLUTIVA' }); await enviarMensagem(phone, TEXTOS.T_RESGATE_START); return; }
@@ -625,7 +653,6 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 
     switch (mem.STATUS_CADASTRO) {
-        // 🔥 NOVO FLUXO: TRATA O PDF DIRETAMENTE COM A LÓGICA DO MESTRE (DB -> iGreen)
         case 'AGUARDANDO_FATURA_FLUXO_UNIVERSAL': {
             if (temMidia) {
                 memoriaEstado.delete(phone); 
@@ -634,7 +661,6 @@ app.post('/webhook/igreen', async (req, res) => {
             break;
         }
 
-        // 🔥 NOVO FLUXO: CASO A EQUATORIAL FALHE (OPÇÃO 3), CHAMA O MESMO FLUXO UNIVERSAL COM A FOTO ENVIADA
         case 'AGUARDANDO_FATURA_DEVOLUTIVA_MANUAL': {
             if (temMidia) {
                 const cpfAlvo = mem.cpfAlvo; 
