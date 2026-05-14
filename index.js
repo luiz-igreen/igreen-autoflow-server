@@ -629,7 +629,18 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
                             if (btn) {
                                 btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                if (btn.tagName === 'A') btn.removeAttribute('target'); 
+                                
+                                // 🔥 CORREÇÃO 2: PROIBIR A ABERTURA DE NOVA ABA QUE CEGA O ROBÔ
+                                if (btn.tagName === 'A') {
+                                    btn.removeAttribute('target'); 
+                                    btn.setAttribute('target', '_self');
+                                }
+                                
+                                // Eliminar comandos javascript que abrem abas fantasma
+                                const atualOnclick = btn.getAttribute('onclick') || '';
+                                if (atualOnclick.includes('window.open')) {
+                                    btn.setAttribute('onclick', atualOnclick.replace(/window\.open\(([^,]+)[^)]*\)/, 'window.location.href=$1'));
+                                }
                                 
                                 try { btn.click(); } catch(e){}
                                 
@@ -645,18 +656,53 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                             await new Promise(r => setTimeout(r, 500));
                             await pageEq.mouse.click(alvoBotao.x, alvoBotao.y);
                             
-                            console.log(`[RPA] Equatorial: Aguardando a rede interceptar o arquivo PDF (15s)...`);
+                            console.log(`[RPA] Equatorial: Aguardando a rede ou o sistema de downloads capturar o PDF (15s)...`);
                             for (let i = 0; i < 15; i++) {
                                 await new Promise(r => setTimeout(r, 1000)); 
-                                if (fs.existsSync(caminhoFaturaLocal)) { break; }
+                                
+                                // 🔥 CORREÇÃO 3: ROUBAR O PDF DIRETAMENTE DOS ARQUIVOS BAIXADOS SILENCIOSAMENTE
+                                try {
+                                    const arquivosTmp = fs.readdirSync('/tmp').filter(f => f.endsWith('.pdf'));
+                                    for (let arq of arquivosTmp) {
+                                        if (arq !== path.basename(caminhoFaturaLocal) && arq !== 'ultima_fatura.pdf') {
+                                             fs.renameSync(path.join('/tmp', arq), caminhoFaturaLocal);
+                                             pdfCapturado = true;
+                                             console.log(`[RPA] 🎯 GOLPE DE MESTRE: O Chrome baixou o arquivo fisicamente. Roubo efetuado!`);
+                                             break;
+                                        }
+                                    }
+                                } catch(e){}
+
+                                if (pdfCapturado || fs.existsSync(caminhoFaturaLocal)) { 
+                                    pdfCapturado = true; 
+                                    break; 
+                                }
                             }
                             
-                            if (fs.existsSync(caminhoFaturaLocal)) {
-                                console.log(`[RPA] 🎯 Sucesso! O PDF da fatura #${indiceFatura + 1} foi capturado pela rede.`);
-                                pdfCapturado = true;
+                            if (pdfCapturado) {
+                                console.log(`[RPA] 🎯 Sucesso absoluto com a fatura #${indiceFatura + 1}.`);
                                 break; 
                             } else {
-                                console.log(`[RPA] O PDF não caiu na rede. Vamos verificar se abriu numa nova aba de Leitor de PDF do Chrome...`);
+                                console.log(`[RPA] O arquivo não caiu fisicamente. Verificando se a página virou um Leitor PDF...`);
+                                
+                                // 🔥 CORREÇÃO 4: SE A ABA ATUAL VIROU O LEITOR, EXTRAR DAQUI
+                                try {
+                                    const isPDF = await pageEq.evaluate(() => document.contentType === 'application/pdf' || document.querySelector('embed[type="application/pdf"]') !== null);
+                                    const urlAba = pageEq.url();
+                                    
+                                    if (isPDF || urlAba.toLowerCase().includes('.pdf')) {
+                                        console.log(`[RPA] 🎯 GOLPE DE MESTRE: A tela virou o Leitor Nativo! Extraindo buffer de dados...`);
+                                        const bufferArray = await pageEq.evaluate(async (url) => {
+                                            const res = await fetch(url);
+                                            const buf = await res.arrayBuffer();
+                                            return Array.from(new Uint8Array(buf));
+                                        }, urlAba);
+                                        
+                                        fs.writeFileSync(caminhoFaturaLocal, Buffer.from(bufferArray));
+                                        pdfCapturado = true;
+                                        break;
+                                    }
+                                } catch(e){}
                             }
                             
                         } else {
