@@ -55,7 +55,7 @@ const TEXTOS = {
     T_RESGATE_START: "Opção 3️⃣ selecionada! ⚡ \nPara resolvermos a devolutiva, a nossa equipe vai buscar os seus dados no escritório, baixar a fatura atualizada na Distribuidora e anexar.\n\nPor favor, digite apenas o **Nome do Cliente ou ID**.\n\n*(Exemplo: 398172 ou Wellington Silva Nunes)*:",
     T_RESGATE_BUSCANDO: "🔍 Iniciando a verificação em nosso sistema...\n\n1️⃣ Buscando CPF e Nascimento no relatório da iGreen...\n2️⃣ Acessando a Distribuidora Local...\n3️⃣ Baixando fatura atualizada e identificando a UC correta...\n4️⃣ Retornando à iGreen para anexar o documento...\n\nIsso pode levar alguns segundos, por favor, aguarde...",
     T_RESGATE_SUCESSO: "✅ Sucesso Absoluto! A fatura atualizada foi resgatada e anexada na aba de Devolutivas do escritório iGreen. A sua pendência foi resolvida!",
-    T_RESGATE_FAIL: "⚠️ Ocorreu um erro no processo.\n\nO nosso time não encontrou a linha do cliente, ou o site da distribuidora bloqueou o acesso temporariamente por segurança.\n\nPor favor, verifique se o Nome ou ID digitado está correto e tente novamente mais tarde.",
+    T_RESGATE_FAIL: "⚠️ Ocorreu um erro genérico no processo.\n\nPor favor, verifique se o Nome ou ID digitado está correto e tente novamente mais tarde.",
 
     T_GUARDAR_START: "Opção 2️⃣ selecionada! 💾 \n*Módulo de Pré-Cadastro* ativado!\nPor favor, envie a foto ou PDF da sua *Fatura de Energia*.",
     T_PEDIR_TELEFONE: "✅ Fatura analisada e salva!\n👤 Titular: ${nome}\n⚡ UC: ${uc}\n\nPara completarmos o seu pré-cadastro, digite o **Número de Telefone (com DDD)** do titular:",
@@ -198,7 +198,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 new Promise(resolve => setTimeout(resolve, 10000))
             ]);
 
-            if (pageIgreen.url().includes('login')) throw new Error("O site da iGreen recusou o login. Verifique a senha.");
+            if (pageIgreen.url().includes('login')) throw new Error("ERRO_LOGIN_IGREEN");
 
             try { await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
 
@@ -264,12 +264,18 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 return { cpfExt, nascExt };
             }, termoBuscaIgreen);
 
-            if (dadosExtraidos && dadosExtraidos.falhouBusca) throw new Error(`O nosso time não encontrou a linha do cliente.`);
-            if (!dadosExtraidos || !dadosExtraidos.cpfExt || !dadosExtraidos.nascExt) throw new Error(`Faltam dados essenciais (CPF ou Data de Nascimento) na iGreen.`);
+            if (dadosExtraidos && dadosExtraidos.falhouBusca) throw new Error("LINHA_CLIENTE_NAO_ENCONTRADA");
+            if (!dadosExtraidos || !dadosExtraidos.cpfExt || !dadosExtraidos.nascExt) throw new Error("FALTAM_DADOS_ESSENCIAIS");
 
             cpf = dadosExtraidos.cpfExt;
             nascimento = dadosExtraidos.nascExt;
-            console.log(`[RPA] iGreen lida com sucesso! CPF: ${cpf} | Nasc: ${nascimento}`);
+
+            // 👁️ GOLPE DE MESTRE 1: Auditoria Visual da iGreen (Pedido do Mestre)
+            console.log(`\n======================================================`);
+            console.log(`[🟢 SUCESSO - DADOS EXTRAÍDOS DO MAPA DA IGREEN]`);
+            console.log(`👤 CPF Identificado:      ${cpf}`);
+            console.log(`🎂 Data Nasc. Identificada: ${nascimento}`);
+            console.log(`======================================================\n`);
         }
 
         // ==============================================================
@@ -391,14 +397,12 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 console.log(`[RPA] Equatorial: Aguardando painel carregar...`);
                 await new Promise(r => setTimeout(r, 15000));
 
-                // Fecha qualquer pop-up intrusivo
                 await pageEq.evaluate(() => {
                     const btnFechar = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase() === 'FECHAR' || el.textContent.toUpperCase() === 'X');
                     if(btnFechar) btnFechar.click(); 
                 });
                 await new Promise(r => setTimeout(r, 1000));
 
-                // 👁️ GOLPE DE MESTRE 7: Clicar no Link/Logo da Equatorial para liberar o menu
                 console.log(`[RPA] Equatorial: Procurando e clicando no link/acesso da distribuidora intermediária...`);
                 await pageEq.evaluate(() => {
                     const elementos = Array.from(document.querySelectorAll('a, button, span, div, h2, h3, p'));
@@ -462,10 +466,16 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     return null;
                 });
 
+                // 👁️ GOLPE DE MESTRE 2: Auditoria Visual da Conta Contrato/UC (Pedido do Mestre)
                 if (ucIdentificada) {
-                    console.log(`[RPA] Equatorial: A Conta Contrato [${ucIdentificada}] foi vista e selecionada!`);
+                    console.log(`\n======================================================`);
+                    console.log(`[⚡ SUCESSO - CONTA CONTRATO ENCONTRADA]`);
+                    console.log(`🔌 Número UC/Instalação selecionado: ${ucIdentificada}`);
+                    console.log(`======================================================\n`);
                     ucExtraidaEquatorial = ucIdentificada;
                     await salvarNoBanco(cpf, phone, { UC_ATUALIZADA_EQUATORIAL: ucIdentificada, UC: ucIdentificada });
+                } else {
+                    console.log(`[RPA] ⚠️ Aviso: Nenhuma Conta Contrato identificada na tela.`);
                 }
                 
                 await new Promise(r => setTimeout(r, 5000));
@@ -500,7 +510,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                         }
                     });
                     
-                    // Espera inteligente
                     console.log(`[RPA] Equatorial: Aguardando o servidor da distribuidora carregar os débitos (Até 25s)...`);
                     try {
                         await pageEq.waitForFunction(() => {
@@ -516,7 +525,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     console.log(`[RPA] Equatorial: 🎯 Novo Layout detectado! As faturas já estão na tela, poupando tempo.`);
                 }
 
-                // A SOLUÇÃO DEFINITIVA: O Filtro Mágico da Equatorial
                 console.log(`[RPA] Equatorial: Aplicando filtro 'Exibir apenas faturas não pagas'...`);
                 await pageEq.evaluate(() => {
                     const todos = Array.from(document.querySelectorAll('label, span, div, p'));
@@ -531,13 +539,9 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
                 console.log(`[RPA] Equatorial: Iniciando Análise Profunda e Mouse Real (Sniper)...`);
                 
-                // PASSO 1: O Radar acha as Coordenadas X e Y da PRIMEIRA fatura que sobrar na tela
                 const alvoFatura = await pageEq.evaluate(() => {
                     const todosElementos = Array.from(document.querySelectorAll('span, p, b, strong, div, td, tr'));
                     
-                    // O robô procura a assinatura universal de uma conta: A DATA (Ex: 16/04/2026) ou a LINHA.
-                    
-                    // 1. Procura por qualquer Data (DD/MM/AAAA) solta na tela que não seja fatura paga
                     const celulaData = todosElementos.find(el => el.textContent.match(/\d{2}\/\d{2}\/\d{4}/) && el.offsetParent !== null && el.textContent.length < 40 && !el.textContent.toLowerCase().includes('pagamento'));
 
                     if (celulaData) {
@@ -546,7 +550,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                         return { encontrou: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2), texto: 'Data Universal (DD/MM/YYYY)' };
                     }
                     
-                    // 2. Fallback: Procura a primeira linha de tabela que não esteja paga
                     const linhasTabela = Array.from(document.querySelectorAll('tbody tr'));
                     const primeiraLinhaValida = linhasTabela.find(tr => tr.offsetParent !== null && tr.textContent.trim().length > 10 && !tr.textContent.toLowerCase().includes('pago'));
 
@@ -556,7 +559,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                         return { encontrou: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2), texto: 'Primeira Linha da Tabela' };
                     }
 
-                    // 3. Fallback Final: Procura apenas por um valor numérico (Ex: 268,28) sem exigir o texto "R$"
                     const celulaValor = todosElementos.find(el => el.textContent.match(/\d+,\d{2}/) && el.offsetParent !== null && el.textContent.length < 20 && !el.textContent.toLowerCase().includes('pagamento'));
                     
                     if (celulaValor) {
@@ -571,12 +573,10 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 if (alvoFatura.encontrou) {
                     console.log(`[RPA] Equatorial: Fatura localizada [${alvoFatura.texto}]. Usando MOUSE FÍSICO nas coordenadas X:${Math.round(alvoFatura.x)} Y:${Math.round(alvoFatura.y)}`);
                     
-                    // MOUSE REAL: Move e Clica Fisicamente
                     await pageEq.mouse.move(alvoFatura.x, alvoFatura.y);
                     await new Promise(r => setTimeout(r, 500));
                     await pageEq.mouse.click(alvoFatura.x, alvoFatura.y);
                     
-                    // Clique Duplo por segurança
                     await new Promise(r => setTimeout(r, 500));
                     await pageEq.mouse.click(alvoFatura.x, alvoFatura.y);
 
@@ -585,7 +585,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
                     console.log(`[RPA] Equatorial: Procurando o botão de Impressora/Download...`);
                     
-                    // PASSO 2: Radar para o Botão da Impressora!
                     const alvoBotao = await pageEq.evaluate(() => {
                         const todos = Array.from(document.querySelectorAll('*'));
                         const btn = todos.find(el => {
@@ -605,7 +604,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                             btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
                             if (btn.tagName === 'A') btn.removeAttribute('target'); 
                             
-                            // Tenta forçar clique DOM imediato (cinto de segurança duplo)
                             try { btn.click(); } catch(e){}
                             
                             const rect = btn.getBoundingClientRect();
@@ -621,7 +619,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                         await pageEq.mouse.click(alvoBotao.x, alvoBotao.y);
                     } else {
                         console.log(`[RPA] Equatorial: Botão invisível ao radar. Disparando clique cego no bloco central...`);
-                        await pageEq.mouse.click(alvoFatura.x, alvoFatura.y + 60); // Tenta clicar abaixo da fatura onde costumam abrir os menus
+                        await pageEq.mouse.click(alvoFatura.x, alvoFatura.y + 60); 
                         await pageEq.evaluate(() => {
                             const btns = Array.from(document.querySelectorAll('button, a, i, svg')).filter(e => e.offsetParent !== null);
                             btns.forEach(b => { try { b.click(); } catch(e){} });
@@ -655,6 +653,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     }
                 }
 
+                // Só levanta um erro menor para o loop tentar de novo se o PDF não foi pego
                 if (!pdfCapturado) throw new Error("A fatura não apareceu na tela após os cliques.");
 
                 if (fs.existsSync(caminhoFaturaLocal)) {
@@ -666,21 +665,27 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     }
                 } else {
                     pdfCapturado = false;
-                    throw new Error("Fatura não encontrada.");
+                    throw new Error("Fatura não encontrada na pasta.");
                 }
 
-                console.log(`[RPA] 🎉 Operação no Motor 2 concluída com sucesso!`);
+                console.log(`[RPA] 🎉 Operação no Motor 2 concluída com sucesso! PDF garantido.`);
                 await browserEquatorial.close().catch(()=>{});
                 break; 
             } catch (err) {
-                console.log(`[RPA] ⚠️ O túnel ou extração falhou: ${err.message}`);
+                console.log(`[RPA] ⚠️ O túnel ou extração falhou nesta tentativa: ${err.message}`);
                 if (browserEquatorial) await browserEquatorial.close().catch(()=>{});
                 await new Promise(r => setTimeout(r, 3000));
             }
         } 
 
+        // 👁️ GOLPE DE MESTRE 3: Barreira de Proteção. Se não há PDF, morre aqui e não vai para a iGreen.
         if (!pdfCapturado || !fs.existsSync(caminhoFaturaLocal)) {
-            throw new Error("Falha ao capturar a fatura na Equatorial. O cliente possui faturas pendentes?");
+            console.log(`\n🚫 ======================================================`);
+            console.log(`[OPERAÇÃO ABORTADA ANTES DA INJEÇÃO NA IGREEN]`);
+            console.log(`Motivo: O robô chegou até ao final da Equatorial, mas o PDF não foi baixado.`);
+            console.log(`Para proteger o seu escritório iGreen contra lixo ou erros, a automação foi travada aqui.`);
+            console.log(`======================================================🚫\n`);
+            throw new Error("FALHA_PDF_EQUATORIAL");
         }
 
         try {
@@ -783,11 +788,25 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         if(!isAutomated) await enviarMensagem(phone, TEXTOS.T_RESGATE_SUCESSO);
         
     } catch (e) { 
-        console.error("Erro RPA Devolutivas:", e.message);
+        console.error("\n❌ [RPA ERRO FATAL]:", e.message);
         if (browserIgreen) await browserIgreen.close().catch(()=>{}); 
         if (browserEquatorial) await browserEquatorial.close().catch(()=>{}); 
         if (fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
-        if(!isAutomated) await enviarMensagem(phone, TEXTOS.T_RESGATE_FAIL);
+        
+        if(!isAutomated) {
+            // 👁️ GOLPE DE MESTRE 4: Mensagens explicativas e precisas enviadas para o seu WhatsApp!
+            if (e.message === "FALHA_PDF_EQUATORIAL") {
+                await enviarMensagem(phone, "⚠️ *Operação Interrompida na Equatorial*\n\nO robô extraiu os dados e chegou até ao painel da conta do cliente.\nNo entanto, *não foi possível capturar o PDF da fatura* (pode não haver faturas pendentes ou o site bloqueou o clique final).\n\nPara não sujar o sistema, a automação foi travada aqui e não enviou nada para a iGreen.");
+            } else if (e.message === "ERRO_LOGIN_IGREEN") {
+                await enviarMensagem(phone, "⚠️ *Falha na iGreen*\n\nO robô não conseguiu fazer login no escritório virtual. Verifique se a senha está correta no painel do Render.");
+            } else if (e.message === "LINHA_CLIENTE_NAO_ENCONTRADA") {
+                await enviarMensagem(phone, "⚠️ *Cliente Não Encontrado*\n\nO robô acedeu ao Mapa de Clientes da iGreen, mas a linha com o nome/ID procurado não existe na tabela.");
+            } else if (e.message === "FALTAM_DADOS_ESSENCIAIS") {
+                await enviarMensagem(phone, "⚠️ *Dados Incompletos na iGreen*\n\nO robô achou o cliente, mas o CPF ou Data de Nascimento estão em branco no painel da iGreen. Sem isto, não conseguimos abrir a Equatorial.");
+            } else {
+                await enviarMensagem(phone, TEXTOS.T_RESGATE_FAIL);
+            }
+        }
     }
 }
 
@@ -830,7 +849,7 @@ app.post('/webhook/igreen', async (req, res) => {
     const textoIn = data.text?.message?.trim() || "";
     const txtL = textoIn.toLowerCase();
     
-    // 👁️ GOLPE DE MESTRE: Mostrar a mensagem no Log (Tela Preta)
+    // 👁️ Mostrar a mensagem no Log (Tela Preta)
     if (textoIn) {
         console.log(`[WHATSAPP] 📩 Mensagem de ${phone}: "${textoIn}"`);
     } else if (data.image?.imageUrl || data.document?.documentUrl) {
