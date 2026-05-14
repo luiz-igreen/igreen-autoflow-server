@@ -174,7 +174,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         });
         
         const pageIgreen = await browserIgreen.newPage();
-        await pageIgreen.setViewport({ width: 4000, height: 1080 }); // Visão de Águia
+        await pageIgreen.setViewport({ width: 4000, height: 1080 }); 
 
         if (!cpf || !nascimento) {
             console.log(`[RPA] ETAPA 1: Buscando dados de ${termoBuscaIgreen} na iGreen...`);
@@ -270,7 +270,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             cpf = dadosExtraidos.cpfExt;
             nascimento = dadosExtraidos.nascExt;
 
-            // 👁️ GOLPE DE MESTRE 1: Auditoria Visual da iGreen (Pedido do Mestre)
             console.log(`\n======================================================`);
             console.log(`[🟢 SUCESSO - DADOS EXTRAÍDOS DO MAPA DA IGREEN]`);
             console.log(`👤 CPF Identificado:      ${cpf}`);
@@ -291,7 +290,8 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 browserEquatorial = await puppeteer.launch({ 
                     headless: "new", 
                     args: puppeteerArgsEq,
-                    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() 
+                    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath(),
+                    defaultViewport: { width: 1366, height: 768 } // Resolução de ecrã normal
                 });
                 
                 const pageEq = await browserEquatorial.newPage();
@@ -397,6 +397,12 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 console.log(`[RPA] Equatorial: Aguardando painel carregar...`);
                 await new Promise(r => setTimeout(r, 15000));
 
+                // 📸 A CÂMERA DE VIGILÂNCIA: Tira uma foto da tela do robô e guarda
+                try {
+                    console.log(`[RPA] 📸 Batendo foto secreta da tela da Equatorial para o Mestre...`);
+                    await pageEq.screenshot({ path: path.join('/tmp', 'debug_tela.png'), fullPage: true });
+                } catch(e) { console.log("Erro na foto", e.message); }
+
                 await pageEq.evaluate(() => {
                     const btnFechar = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase() === 'FECHAR' || el.textContent.toUpperCase() === 'X');
                     if(btnFechar) btnFechar.click(); 
@@ -466,7 +472,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     return null;
                 });
 
-                // 👁️ GOLPE DE MESTRE 2: Auditoria Visual da Conta Contrato/UC (Pedido do Mestre)
                 if (ucIdentificada) {
                     console.log(`\n======================================================`);
                     console.log(`[⚡ SUCESSO - CONTA CONTRATO ENCONTRADA]`);
@@ -653,7 +658,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     }
                 }
 
-                // Só levanta um erro menor para o loop tentar de novo se o PDF não foi pego
                 if (!pdfCapturado) throw new Error("A fatura não apareceu na tela após os cliques.");
 
                 if (fs.existsSync(caminhoFaturaLocal)) {
@@ -678,7 +682,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             }
         } 
 
-        // 👁️ GOLPE DE MESTRE 3: Barreira de Proteção. Se não há PDF, morre aqui e não vai para a iGreen.
         if (!pdfCapturado || !fs.existsSync(caminhoFaturaLocal)) {
             console.log(`\n🚫 ======================================================`);
             console.log(`[OPERAÇÃO ABORTADA ANTES DA INJEÇÃO NA IGREEN]`);
@@ -794,7 +797,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         if (fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
         
         if(!isAutomated) {
-            // 👁️ GOLPE DE MESTRE 4: Mensagens explicativas e precisas enviadas para o seu WhatsApp!
             if (e.message === "FALHA_PDF_EQUATORIAL") {
                 await enviarMensagem(phone, "⚠️ *Operação Interrompida na Equatorial*\n\nO robô extraiu os dados e chegou até ao painel da conta do cliente.\nNo entanto, *não foi possível capturar o PDF da fatura* (pode não haver faturas pendentes ou o site bloqueou o clique final).\n\nPara não sujar o sistema, a automação foi travada aqui e não enviou nada para a iGreen.");
             } else if (e.message === "ERRO_LOGIN_IGREEN") {
@@ -849,7 +851,6 @@ app.post('/webhook/igreen', async (req, res) => {
     const textoIn = data.text?.message?.trim() || "";
     const txtL = textoIn.toLowerCase();
     
-    // 👁️ Mostrar a mensagem no Log (Tela Preta)
     if (textoIn) {
         console.log(`[WHATSAPP] 📩 Mensagem de ${phone}: "${textoIn}"`);
     } else if (data.image?.imageUrl || data.document?.documentUrl) {
@@ -1006,6 +1007,26 @@ app.post('/webhook/igreen', async (req, res) => {
 });
 
 // ==========================================
+// ROTA DE DEBUG: CÂMERA DE VIGILÂNCIA DO ROBÔ
+// ==========================================
+app.get('/tela-robo', (req, res) => {
+    const file = path.join('/tmp', 'debug_tela.png');
+    if (fs.existsSync(file)) {
+        res.contentType('image/png');
+        res.sendFile(path.resolve(file));
+    } else {
+        res.status(404).send(`
+            <h2 style="font-family: sans-serif; color: #333; text-align: center; margin-top: 50px;">
+                🕵️‍♂️ A câmera ainda não tirou nenhuma foto!
+            </h2>
+            <p style="font-family: sans-serif; color: #666; text-align: center;">
+                Rode o teste no WhatsApp primeiro. Quando o robô entrar na Equatorial, a foto da tela dele vai aparecer aqui.
+            </p>
+        `);
+    }
+});
+
+// ==========================================
 // ROTA PÚBLICA DE PROVAS (A PEDIDO DO MESTRE)
 // ==========================================
 app.get('/ultima-fatura', (req, res) => {
@@ -1052,4 +1073,4 @@ app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindad
 
 validateBrowser().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`));
-});
+});    
