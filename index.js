@@ -97,8 +97,8 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         const base64Data = Buffer.from(response.data, 'binary').toString('base64');
         console.log(`[IA GEMINI] ✅ Download concluído com sucesso. Tamanho: ${base64Data.length} bytes.`);
         
-        // CORREÇÃO DEFINITIVA (2026): Usando o modelo atualizado gemini-2.5-flash
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+        // 🔥 CORREÇÃO DEFINITIVA E REAL: Usando o modelo oficial, real e atualizado (gemini-1.5-flash)
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
         const promptText = `Extraia os dados desta fatura de energia. Chaves necessárias: "NOME_CLIENTE", "CPF", "DATA_NASCIMENTO", "UC", "VENCIMENTO", "VALOR". Se não encontrar alguma, deixe em branco.`;
 
         const payload = {
@@ -410,7 +410,6 @@ app.post('/webhook/igreen', async (req, res) => {
         }
         case 'AGUARDANDO_FATURA_SOH_BANCO': {
             if (temMidia) {
-                // T02 não definido nos TEXTOS originais, assumindo T_GUARDAR_START ou similar
                 await enviarMensagem(phone, TEXTOS.T_GUARDAR_START); 
                 try { const dadosIA = await analisarFaturaGemini(mediaUrl, mimeType); const docId = dadosIA.UC ? dadosIA.UC.replace(/\D/g, '') : `SEM_UC_${Date.now()}`; await salvarNoBanco(docId, phone, { ...dadosIA, LINK_FATURA: mediaUrl, STATUS_CADASTRO: "AGUARDANDO_TELEFONE" }); memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_TELEFONE', docId }); await enviarMensagem(phone, TEXTOS.T_PEDIR_TELEFONE.replace('${nome}', dadosIA.NOME_CLIENTE).replace('${uc}', dadosIA.UC)); } catch (e) { await enviarMensagem(phone, "❌ Erro na análise."); }
             } else { await enviarMensagem(phone, "⚠️ Aguardando foto/PDF da fatura."); }
