@@ -505,7 +505,8 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     try {
                         await pageEq.waitForFunction(() => {
                             const txt = document.body.innerText.toLowerCase();
-                            return txt.includes('vencimento') || txt.includes('referente a') || txt.includes('pagamento') || txt.includes('r$');
+                            // Espera ver qualquer coisa que pareça uma fatura ou dados da tela de fatura
+                            return txt.match(/\d{2}\/\d{2}\/\d{4}/) || txt.includes('vencimento') || txt.includes('referente a') || txt.includes('pagamento') || txt.includes('r$');
                         }, { timeout: 25000 });
                         console.log(`[RPA] Equatorial: Débitos carregados com sucesso na tela!`);
                         await new Promise(r => setTimeout(r, 3000)); // Tempo extra para os botões ocultos expandirem
@@ -516,51 +517,77 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     console.log(`[RPA] Equatorial: 🎯 Novo Layout detectado! As faturas já estão na tela, poupando tempo.`);
                 }
 
+                // 👁️ A SOLUÇÃO DEFINITIVA: O Filtro Mágico da Equatorial
+                console.log(`[RPA] Equatorial: Aplicando filtro 'Exibir apenas faturas não pagas'...`);
+                await pageEq.evaluate(() => {
+                    const todos = Array.from(document.querySelectorAll('label, span, div, p'));
+                    const toggle = todos.find(el => el.textContent.toLowerCase().includes('exibir apenas faturas não pagas'));
+                    if (toggle) {
+                        toggle.click(); // Clica no texto
+                        const checkbox = toggle.parentElement?.querySelector('input[type="checkbox"]');
+                        if (checkbox && !checkbox.checked) checkbox.click(); // Clica na caixinha
+                    }
+                });
+                await new Promise(r => setTimeout(r, 2500)); // Aguarda o site esconder as faturas velhas
+
                 console.log(`[RPA] Equatorial: Iniciando Análise Profunda e Mouse Real (Sniper)...`);
                 
-                // PASSO 1: O Radar acha as Coordenadas X e Y da fatura na tela
+                // PASSO 1: O Radar acha as Coordenadas X e Y da PRIMEIRA fatura que sobrar na tela!
                 const alvoFatura = await pageEq.evaluate(() => {
-                    const todosElementos = Array.from(document.querySelectorAll('div, span, p, a, tr, td, li'));
+                    const todosElementos = Array.from(document.querySelectorAll('span, p, b, strong, div, td, tr'));
                     
-                    const celula = todosElementos.find(el => {
-                        const txt = el.textContent.trim().toLowerCase();
-                        return txt.includes('r$') && txt.includes('vencimento') && !txt.includes('pagamento') && el.offsetParent !== null && txt.length > 10 && txt.length < 250;
-                    });
+                    // 👁️ GOLPE DE MESTRE: A pedido do Mestre Luiz, excluímos as regras restritas de "R$" e "Vencimento".
+                    // Agora o robô procura a assinatura universal de uma conta: A DATA (Ex: 16/04/2026) ou a LINHA.
+                    
+                    // 1. Procura por qualquer Data (DD/MM/AAAA) solta na tela que não seja fatura paga
+                    const celulaData = todosElementos.find(el => el.textContent.match(/\d{2}\/\d{2}\/\d{4}/) && el.offsetParent !== null && el.textContent.length < 40 && !el.textContent.toLowerCase().includes('pagamento'));
 
-                    if (celula) {
-                        celula.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        // Pega a "caixa física" do elemento na tela para saber a posição exata
-                        const rect = celula.getBoundingClientRect();
-                        return { encontrou: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2), texto: celula.textContent.substring(0, 30) };
+                    if (celulaData) {
+                        celulaData.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        const rect = celulaData.getBoundingClientRect();
+                        return { encontrou: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2), texto: 'Data Universal (DD/MM/YYYY)' };
+                    }
+                    
+                    // 2. Fallback: Procura a primeira linha de tabela que não esteja paga
+                    const linhasTabela = Array.from(document.querySelectorAll('tbody tr'));
+                    const primeiraLinhaValida = linhasTabela.find(tr => tr.offsetParent !== null && tr.textContent.trim().length > 10 && !tr.textContent.toLowerCase().includes('pago'));
+
+                    if (primeiraLinhaValida) {
+                        primeiraLinhaValida.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        const rect = primeiraLinhaValida.getBoundingClientRect();
+                        return { encontrou: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2), texto: 'Primeira Linha da Tabela' };
                     }
 
-                    const celulaAntiga = todosElementos.find(el => el.textContent.trim().toLowerCase().includes('referente a') && !el.textContent.trim().toLowerCase().includes('pagamento') && el.offsetParent !== null && el.textContent.length < 100);
-                    if (celulaAntiga) {
-                        celulaAntiga.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        const rect = celulaAntiga.getBoundingClientRect();
-                        return { encontrou: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2), texto: 'Layout Antigo' };
+                    // 3. Fallback Final: Procura apenas por um valor numérico (Ex: 268,28) sem exigir o texto "R$"
+                    const celulaValor = todosElementos.find(el => el.textContent.match(/\d+,\d{2}/) && el.offsetParent !== null && el.textContent.length < 20 && !el.textContent.toLowerCase().includes('pagamento'));
+                    
+                    if (celulaValor) {
+                        celulaValor.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        const rect = celulaValor.getBoundingClientRect();
+                        return { encontrou: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2), texto: 'Valor Numérico' };
                     }
 
                     return { encontrou: false };
                 });
 
                 if (alvoFatura.encontrou) {
-                    console.log(`[RPA] Equatorial: Fatura localizada na tela. Usando MOUSE FÍSICO nas coordenadas X:${Math.round(alvoFatura.x)} Y:${Math.round(alvoFatura.y)}`);
+                    console.log(`[RPA] Equatorial: Fatura localizada [${alvoFatura.texto}]. Usando MOUSE FÍSICO nas coordenadas X:${Math.round(alvoFatura.x)} Y:${Math.round(alvoFatura.y)}`);
                     
-                    // MOUSE REAL: O robô move o mouse mecânico e clica fisicamente
+                    // MOUSE REAL: Move e Clica Fisicamente
                     await pageEq.mouse.move(alvoFatura.x, alvoFatura.y);
                     await new Promise(r => setTimeout(r, 500));
                     await pageEq.mouse.click(alvoFatura.x, alvoFatura.y);
                     
-                    // Clique Duplo por segurança, ligeiramente mais acima
+                    // Clique Duplo por segurança
                     await new Promise(r => setTimeout(r, 500));
-                    await pageEq.mouse.click(alvoFatura.x, alvoFatura.y - 10);
+                    await pageEq.mouse.click(alvoFatura.x, alvoFatura.y);
 
                     console.log(`[RPA] Equatorial: Clique físico feito! Aguardando a animação abrir o botão (4s)...`);
                     await new Promise(r => setTimeout(r, 4000));
 
                     console.log(`[RPA] Equatorial: Procurando o botão de Impressora/Download...`);
-                    // PASSO 2: O Radar acha as Coordenadas X e Y do botão de Impressora
+                    
+                    // PASSO 2: Radar para o Botão da Impressora!
                     const alvoBotao = await pageEq.evaluate(() => {
                         const todos = Array.from(document.querySelectorAll('*'));
                         const btn = todos.find(el => {
@@ -568,7 +595,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                             const title = (el.getAttribute('title') || '').toUpperCase();
                             const classList = (el.getAttribute('class') || '').toUpperCase();
                             
-                            const isText = txt === 'BAIXAR' || txt === 'IMPRIMIR' || txt === 'VER FATURA' || txt === 'PDF' || txt === 'VISUALIZAR' || txt.includes('2ª VIA');
+                            const isText = txt === 'BAIXAR' || txt === 'IMPRIMIR' || txt === 'VER FATURA' || txt === 'PDF' || txt === 'VISUALIZAR' || txt.includes('2ª VIA') || txt.includes('2 VIA');
                             const isTitle = title.includes('IMPRIMIR') || title.includes('DOWNLOAD') || title.includes('PDF') || title.includes('VISUALIZAR');
                             const isIcon = classList.includes('FA-FILE-PDF') || classList.includes('FA-DOWNLOAD') || classList.includes('FA-PRINT') || classList.includes('PDF') || classList.includes('PRINT');
                             const hasSvg = el.querySelector('svg') !== null;
@@ -579,6 +606,10 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                         if (btn) {
                             btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
                             if (btn.tagName === 'A') btn.removeAttribute('target'); 
+                            
+                            // Tenta forçar clique DOM imediato (cinto de segurança duplo)
+                            try { btn.click(); } catch(e){}
+                            
                             const rect = btn.getBoundingClientRect();
                             return { encontrou: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2) };
                         }
@@ -586,25 +617,26 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                     });
 
                     if (alvoBotao.encontrou) {
-                        console.log(`[RPA] Equatorial: Ícone/Botão localizado! Movendo o mouse e clicando...`);
+                        console.log(`[RPA] Equatorial: Ícone/Botão localizado! Movendo o mouse e clicando no alvo...`);
                         await pageEq.mouse.move(alvoBotao.x, alvoBotao.y);
                         await new Promise(r => setTimeout(r, 500));
                         await pageEq.mouse.click(alvoBotao.x, alvoBotao.y);
                     } else {
-                        console.log(`[RPA] Equatorial: Botão invisível. Injetando clique DOM massivo...`);
+                        console.log(`[RPA] Equatorial: Botão invisível ao radar. Disparando clique cego no bloco central...`);
+                        await pageEq.mouse.click(alvoFatura.x, alvoFatura.y + 60); // Tenta clicar abaixo da fatura onde costumam abrir os menus
                         await pageEq.evaluate(() => {
                             const btns = Array.from(document.querySelectorAll('button, a, i, svg')).filter(e => e.offsetParent !== null);
                             btns.forEach(b => { try { b.click(); } catch(e){} });
                         });
                     }
 
-                    console.log(`[RPA] Equatorial: Aguardando fatura na rede (15s)...`);
+                    console.log(`[RPA] Equatorial: Aguardando a rede interceptar o arquivo PDF (15s)...`);
                     for (let i = 0; i < 15; i++) {
                         await new Promise(r => setTimeout(r, 1000)); 
                         if (fs.existsSync(caminhoFaturaLocal)) { pdfCapturado = true; break; }
                     }
                 } else {
-                    console.log(`[RPA] ⚠️ Fatura não encontrada pelo radar de coordenadas.`);
+                    console.log(`[RPA] ⚠️ Fatura não encontrada pelo radar universal (O cliente não tem pendências ou o site está muito lento).`);
                 }
                 
                 if (!pdfCapturado) {
