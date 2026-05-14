@@ -3,6 +3,7 @@ import axios from 'axios';
 import admin from 'firebase-admin';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import { anonymizeProxy, closeAnonymizedProxy } from 'proxy-chain';
 import fs from 'fs';
 import path from 'path';
 
@@ -27,6 +28,12 @@ const EQUATORIAL_AL_URL = "https://al.equatorialenergia.com.br/siteantigo";
 const IGREEN_USER = process.env.IGREEN_USER;
 const IGREEN_PASS = process.env.IGREEN_PASS;
 const APP_ID = 'igreen-autoflow-v4';
+
+// 🛡️ CHAVES DO PROXY (IPROYAL)
+const PROXY_IP = process.env.PROXY_IP;
+const PROXY_PORT = process.env.PROXY_PORT;
+const PROXY_USER = process.env.PROXY_USER;
+const PROXY_PASS = process.env.PROXY_PASS;
 
 try {
     const firebaseConfig = process.env.FIREBASE_CONFIG ? JSON.parse(process.env.FIREBASE_CONFIG) : null;
@@ -278,25 +285,37 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         }
 
         // ==============================================================
-        // MOTOR 2: EQUATORIAL (SEM PROXY - TENTATIVA DE ACESSO DIRETO)
+        // MOTOR 2: EQUATORIAL (COM PROXY-CHAIN OBRIGATÓRIO)
         // ==============================================================
-        console.log(`[RPA] 👻 Preparando MOTOR 2 (Equatorial - Acesso Direto sem Proxy)...`);
+        console.log(`[RPA] 👻 Preparando MOTOR 2 (Equatorial)...`);
 
         for (let tentativa = 1; tentativa <= 3; tentativa++) {
             console.log(`\n[RPA] ---> Iniciando Salto para Equatorial (Tentativa ${tentativa}/3) <---`);
-            
+            let proxyUrlForPuppeteer = null;
+
             try {
                 let puppeteerArgsEq = [...CHROME_ARGS];
+                
+                // 🛡️ A CORREÇÃO DE MESTRE: Usar Proxy-Chain para forçar o IP Brasileiro
+                if (PROXY_IP && PROXY_PORT && PROXY_USER && PROXY_PASS) {
+                    const rawProxyUrl = `http://${PROXY_USER}:${PROXY_PASS}@${PROXY_IP}:${PROXY_PORT}`;
+                    proxyUrlForPuppeteer = await anonymizeProxy(rawProxyUrl);
+                    puppeteerArgsEq.push(`--proxy-server=${proxyUrlForPuppeteer}`);
+                    console.log(`[RPA] 🛡️ Disfarce Blindado Ativado (Proxy-Chain): ${PROXY_IP}`);
+                } else {
+                    console.log(`[RPA] ⚠️ Aviso: Variáveis de Proxy ausentes na Railway!`);
+                }
+
                 browserEquatorial = await puppeteer.launch({ 
                     headless: "new", 
                     args: puppeteerArgsEq,
                     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath(),
-                    defaultViewport: { width: 1366, height: 768 } // Resolução de ecrã normal
+                    defaultViewport: { width: 1366, height: 768 } 
                 });
                 
                 const pageEq = await browserEquatorial.newPage();
                 await pageEq.setExtraHTTPHeaders({ 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7' });
-                
+
                 const escutarPDF = async (response) => {
                     try {
                         const contentType = response.headers()['content-type'];
@@ -321,10 +340,17 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 await pageEq.goto(EQUATORIAL_AL_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
                 await new Promise(r => setTimeout(r, 5000)); 
 
+                // 📸 Tira a foto exata do Imperva para Auditoria
+                try {
+                    await pageEq.screenshot({ path: path.join('/tmp', 'debug_tela.png'), fullPage: true });
+                } catch(e) {}
+
                 const bodyTextInicio = await pageEq.evaluate(() => document.body.innerText.toLowerCase());
                 if (bodyTextInicio.includes("access denied") || bodyTextInicio.includes("error 16") || bodyTextInicio.includes("imperva")) {
-                    throw new Error("Imperva bloqueou o acesso sem Proxy.");
+                    throw new Error("IMPERVA_BLOCK");
                 }
+
+                console.log(`[RPA] O Imperva foi derrotado! Estamos dentro da Equatorial!`);
 
                 console.log(`[RPA] Verificando se há lixo de outro cliente (Botão SAIR)...`);
                 const clicouSair = await pageEq.evaluate(() => {
@@ -397,11 +423,10 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 console.log(`[RPA] Equatorial: Aguardando painel carregar...`);
                 await new Promise(r => setTimeout(r, 15000));
 
-                // 📸 A CÂMERA DE VIGILÂNCIA: Tira uma foto da tela do robô e guarda
+                // 📸 Tira foto do painel pós-login (substitui a foto do Imperva)
                 try {
-                    console.log(`[RPA] 📸 Batendo foto secreta da tela da Equatorial para o Mestre...`);
                     await pageEq.screenshot({ path: path.join('/tmp', 'debug_tela.png'), fullPage: true });
-                } catch(e) { console.log("Erro na foto", e.message); }
+                } catch(e) {}
 
                 await pageEq.evaluate(() => {
                     const btnFechar = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase() === 'FECHAR' || el.textContent.toUpperCase() === 'X');
@@ -427,13 +452,11 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 const ucIdentificada = await pageEq.evaluate(() => {
                     const elementos = Array.from(document.querySelectorAll('span, div, p, a, li, option, td, h3, h4, b, strong, select'));
                     
-                    // 1. NOVO LAYOUT
                     const selectUc = document.querySelector('select');
                     if (selectUc && selectUc.value && selectUc.value.match(/\d{8,15}/)) {
                         return selectUc.value.replace(/\D/g, '');
                     }
 
-                    // 2. NOVO LAYOUT
                     const labelSelect = elementos.find(el => el.textContent.toLowerCase().includes('selecione sua conta contrato') && el.offsetParent !== null);
                     if (labelSelect) {
                         const container = labelSelect.parentElement || labelSelect.parentElement.parentElement;
@@ -444,7 +467,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                         }
                     }
 
-                    // 3. LAYOUT ANTIGO
                     const elemTexto = elementos.find(el => {
                         const txt = el.textContent.trim().toLowerCase();
                         return (txt.includes('conta contrato') || txt.includes('uc:') || txt.includes('contrato:')) && txt.match(/\d{8,15}/) && el.offsetParent !== null;
@@ -456,7 +478,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                         return elemTexto.textContent.replace(/\D/g, '');
                     }
 
-                    // 4. LAYOUT ANTIGO (Fallback)
                     const elemUc = elementos.find(el => {
                         const txt = el.textContent.trim();
                         if (txt.includes('/') || txt.includes('-') || txt.includes('.')) return false;
@@ -674,10 +695,17 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
                 console.log(`[RPA] 🎉 Operação no Motor 2 concluída com sucesso! PDF garantido.`);
                 await browserEquatorial.close().catch(()=>{});
+                if (proxyUrlForPuppeteer) await closeAnonymizedProxy(proxyUrlForPuppeteer, true).catch(()=>{});
                 break; 
             } catch (err) {
-                console.log(`[RPA] ⚠️ O túnel ou extração falhou nesta tentativa: ${err.message}`);
+                if (err.message === "IMPERVA_BLOCK") {
+                     console.log(`[RPA] ⚠️ O Imperva bloqueou o acesso! O Túnel Proxy foi rejeitado ou a senha está errada.`);
+                } else {
+                     console.log(`[RPA] ⚠️ O túnel ou extração falhou nesta tentativa: ${err.message}`);
+                }
+                
                 if (browserEquatorial) await browserEquatorial.close().catch(()=>{});
+                if (proxyUrlForPuppeteer) await closeAnonymizedProxy(proxyUrlForPuppeteer, true).catch(()=>{});
                 await new Promise(r => setTimeout(r, 3000));
             }
         } 
