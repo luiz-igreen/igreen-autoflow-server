@@ -88,7 +88,7 @@ async function salvarNoBanco(docId, phone, dadosExtras) {
     }
 }
 
-// 🔥 FUNÇÃO DE IA ATUALIZADA PARA EXTRAÇÃO COMPLETA DE CAMPOS
+// 🔥 FUNÇÃO DE IA ATUALIZADA (DASHBOARD COMPLETO + MODELO LATEST)
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     try {
         console.log(`\n[IA GEMINI] 📥 Iniciando download do arquivo na Z-API: ${mediaUrl}`);
@@ -98,9 +98,10 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         const base64Data = Buffer.from(response.data, 'binary').toString('base64');
         console.log(`[IA GEMINI] ✅ Download concluído com sucesso. Tamanho: ${base64Data.length} bytes.`);
         
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+        // CORREÇÃO: Usando a versão '-latest' que garante compatibilidade e evita o erro 404
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`;
         
-        // NOVO PROMPT ENRIQUECIDO COM TODOS OS CAMPOS DO DASHBOARD
+        // PROMPT ENRIQUECIDO COM TODOS OS CAMPOS DO DASHBOARD
         const promptText = `Extraia os dados desta fatura de energia em formato JSON. Use EXATAMENTE estas chaves: 
         "NOME_CLIENTE", "CPF", "MASCARA_CPF", "DATA_NASCIMENTO", "UC", "CONTA_MES", "VENCIMENTO", "VALOR_FATURA", 
         "CEP", "ENDERECO", "ENDERECO_NUMERO", "ENDERECO_COMPLEMENTO", "ESTADO", "DISTRIBUIDORA" e "MEDIA_CONSUMO". 
@@ -154,7 +155,6 @@ async function fluxoProcessamentoUniversal(mediaUrl, mimeType, phone, cpfAlvo = 
             await enviarMensagem(phone, `🆕 *Cliente Novo no nosso BD!* \nIncluindo os Dados...`);
         }
         
-        // Salva todos os campos novos extraídos no Firebase
         await salvarNoBanco(ucLimpa, phone, { ...dadosIA, LINK_FATURA: mediaUrl, STATUS_CADASTRO: "PROCESSADO_UNIVERSAL" });
         await new Promise(r => setTimeout(r, 1500));
 
@@ -471,4 +471,4 @@ const PORT = process.env.PORT || 10000;
 async function validateBrowser() { try { const browser = await puppeteer.launch({ headless: "new", args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() }); await browser.close(); console.log('✔ Browser health check passed!'); return true; } catch (error) { console.error('❌ Browser falhou:', error.message); process.exit(1); } }
 
 app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindado!'));
-validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`)); });    
+validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`)); });
