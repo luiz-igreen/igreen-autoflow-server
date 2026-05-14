@@ -141,17 +141,24 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         console.log(`[IA GEMINI] ✅ Download concluído com sucesso. Tamanho: ${base64Data.length} bytes.`);
         console.log(`[IA GEMINI] 🧠 Enviando arquivo (${mimeType}) para a nuvem da Google Gemini...`);
 
-        // 🔥 CORREÇÃO MAGISTRAL: USANDO A VERSÃO NOVA E OFICIAL DO GEMINI FLASH OCR
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`;
-        const promptText = `Analise esta fatura de energia. Extraia os dados em formato JSON exato. Chaves necessárias: "NOME_CLIENTE", "CPF", "DATA_NASCIMENTO", "UC", "VENCIMENTO", "VALOR". Retorne APENAS o JSON, sem marcações ou blocos de código markdown.`;
+        // 🔥 ATUALIZAÇÃO DEFINITIVA 1: USANDO A NOVA GERAÇÃO GEMINI 3.0 FLASH
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+        
+        // O prompt agora é mais simples porque o formato é forçado pela configuração
+        const promptText = `Extraia os dados desta fatura de energia. Chaves necessárias: "NOME_CLIENTE", "CPF", "DATA_NASCIMENTO", "UC", "VENCIMENTO", "VALOR". Se não encontrar alguma, deixe em branco.`;
 
+        // 🔥 ATUALIZAÇÃO DEFINITIVA 2 (O SEGREDO DA SUA IMAGEM): Respostas Estruturadas (JSON NATIVO)
         const payload = {
-            contents: [{ parts: [ { text: promptText }, { inline_data: { mime_type: mimeType === 'application/pdf' ? 'application/pdf' : 'image/jpeg', data: base64Data } } ] }]
+            contents: [{ parts: [ { text: promptText }, { inline_data: { mime_type: mimeType === 'application/pdf' ? 'application/pdf' : 'image/jpeg', data: base64Data } } ] }],
+            generationConfig: {
+                responseMimeType: "application/json"
+            }
         };
 
         const result = await axios.post(geminiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
+        
+        // Com o Modo JSON ativo, a resposta já vem limpa e sem blocos markdown (```)
         let textoResposta = result.data.candidates[0].content.parts[0].text;
-        textoResposta = textoResposta.replace(/```json/g, '').replace(/```/g, '').trim();
         
         console.log(`[IA GEMINI] 🎯 Leitura concluída com SUCESSO! Resultado:`, textoResposta);
         return JSON.parse(textoResposta);
