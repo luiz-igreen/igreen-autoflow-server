@@ -78,7 +78,7 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
     } catch (error) { throw new Error("Falha ao ler fatura."); }
 }
 
-// 🔥 VARREDURA SNIPER CORRIGIDA
+// 🔥 VARREDURA SNIPER 2.0: Ignora a coluna "Licenciado" para pegar o código real
 async function varreduraIgreenDiaria() {
     let browserIgreen = null;
     try {
@@ -100,7 +100,6 @@ async function varreduraIgreenDiaria() {
         await new Promise(r => setTimeout(r, 5000));
         await pageIgreen.evaluate(() => { document.body.style.zoom = "0.5"; }); 
 
-        // Filtrar exclusivamente pela sua rede 76049
         try {
             let searchInput = await pageIgreen.waitForSelector('input[placeholder*="Buscar"]', { timeout: 10000 });
             await searchInput.click({ clickCount: 3 }); await pageIgreen.keyboard.press('Backspace');
@@ -110,10 +109,7 @@ async function varreduraIgreenDiaria() {
         
         let todosClientes = new Map();
 
-        // Descer a tela 5 vezes
         for (let volta = 0; volta < 5; volta++) {
-            
-            // Fazer 4 paragens horizontais para garantir que as colunas do meio renderizam
             const posicoesScroll = [0, 600, 1200, 9999];
             
             for (let pos of posicoesScroll) {
@@ -125,21 +121,20 @@ async function varreduraIgreenDiaria() {
                     const headers = Array.from(document.querySelectorAll('.MuiDataGrid-columnHeader'));
                     let mapaColunas = { codigo: null, nome: null, celular: null, instalacao: null, distribuidora: null };
                     
-                    // Identifica os cabeçalhos visíveis
+                    // 🔥 CORREÇÃO: Pega o Código do cliente e foge do Código do Licenciado!
                     headers.forEach(h => {
                         const texto = h.textContent.trim().toLowerCase();
                         const field = h.getAttribute('data-field');
-                        if (texto.includes('código') || texto.includes('codigo') || texto === 'cód') mapaColunas.codigo = field;
-                        if (texto === 'nome' || texto === 'cliente') mapaColunas.nome = field;
+                        
+                        if ((texto.includes('código') || texto.includes('codigo') || texto === 'cód') && !texto.includes('licenciado')) mapaColunas.codigo = field;
+                        if (texto === 'nome' || texto === 'cliente' || texto.includes('nome do cliente')) mapaColunas.nome = field;
                         if (texto === 'celular' || texto === 'telefone') mapaColunas.celular = field;
                         if (texto.includes('instala')) mapaColunas.instalacao = field;
                         if (texto.includes('distribuidora')) mapaColunas.distribuidora = field;
                     });
 
-                    // Lê as linhas visíveis usando o mapeamento exato (Corrigido mapColunas -> mapaColunas)
                     document.querySelectorAll('.MuiDataGrid-row').forEach(row => {
                         const id = row.getAttribute('data-id'); if(!id) return;
-                        
                         let textoTotal = row.textContent;
                         let cpf = textoTotal.match(/\d{3}\.\d{3}\.\d{3}-\d{2}/)?.[0]?.replace(/\D/g, '');
                         
@@ -155,7 +150,6 @@ async function varreduraIgreenDiaria() {
                         let uc = mapaColunas.instalacao ? row.querySelector(`[data-field="${mapaColunas.instalacao}"]`)?.textContent?.trim() : "";
                         let dist = mapaColunas.distribuidora ? row.querySelector(`[data-field="${mapaColunas.distribuidora}"]`)?.textContent?.trim() : "";
                         
-                        // Backups visuais caso a coluna não estivesse perfeitamente alinhada
                         if (!tel || tel.length < 8) tel = textoTotal.match(/\(?\d{2}\)?\s?\d{4,5}-?\d{4}/)?.[0] || "";
                         if (!uc || uc.length < 5) uc = textoTotal.match(/\b\d{8,12}\b/)?.[0] || "";
                         if (!dist) {
@@ -166,13 +160,11 @@ async function varreduraIgreenDiaria() {
                         if(tel) tel = tel.replace(/[^\d()-\s]/g, '').trim();
                         if(uc) uc = uc.replace(/\D/g, '').trim();
 
-                        // Só guarda quem tem CPF
                         if (cpf) m[cpf] = { cpf, nasc, codigo, nome, tel, uc, dist };
                     });
                     return m;
                 });
 
-                // Funde os dados parciais no mapa principal (nunca sobrepõe informação boa com vazia)
                 for (let cpfKey in extraidosParciais) {
                     const extraido = extraidosParciais[cpfKey];
                     let existente = todosClientes.get(cpfKey) || {};
@@ -188,7 +180,6 @@ async function varreduraIgreenDiaria() {
                 }
             }
             
-            // Depois de ler as 4 posições horizontais, desce a tela
             await pageIgreen.evaluate(() => { const s = document.querySelector('.MuiDataGrid-virtualScroller'); if(s) s.scrollTop += 600; });
             await new Promise(r => setTimeout(r, 1500));
         }
@@ -196,7 +187,6 @@ async function varreduraIgreenDiaria() {
         const arrayClientes = Array.from(todosClientes.values());
         console.log(`[VARREDURA DIÁRIA] Colheita profunda concluída! Analisando ${arrayClientes.length} clientes...`);
         
-        // 4. INJETAR NO BANCO DE DADOS (Fusão Inteligente e Respeitosa)
         for (let cli of arrayClientes) {
             let finalId = cli.CPF;
             let dbData = {};
@@ -212,23 +202,25 @@ async function varreduraIgreenDiaria() {
             }
 
             const payload = {
-                CODIGO_CLIENTE: cli.CODIGO_CLIENTE,
                 NOME_CLIENTE: cli.NOME_CLIENTE,
                 CPF: cli.CPF
             };
             
-            // Injeta dados apenas se a iGreen tiver, E o Banco estiver vazio (respeitando o WhatsApp)
+            // 🔥 SOBRESCREVE o código errado (76049) pelo código novo e real (ex: 390424)
+            if (cli.CODIGO_CLIENTE && cli.CODIGO_CLIENTE !== "76.049" && cli.CODIGO_CLIENTE !== "76049") {
+                payload.CODIGO_CLIENTE = cli.CODIGO_CLIENTE;
+            }
+
             if (cli.DATA_NASCIMENTO) payload.DATA_NASCIMENTO = cli.DATA_NASCIMENTO;
             if (cli.TELEFONE && cli.TELEFONE.length >= 8 && (!dbData.TELEFONE || dbData.TELEFONE.length < 8)) payload.TELEFONE = cli.TELEFONE;
             if (cli.UC && cli.UC.length >= 4 && (!dbData.UC || dbData.UC.length < 4)) payload.UC = cli.UC;
             if (cli.DISTRIBUIDORA && cli.DISTRIBUIDORA.length > 2 && (!dbData.DISTRIBUIDORA || dbData.DISTRIBUIDORA.length < 2)) payload.DISTRIBUIDORA = cli.DISTRIBUIDORA;
             
-            // Se for cliente 100% novo (nunca criado), ganha status NOVO.
             if (!dbData.STATUS_CADASTRO) payload.STATUS_CADASTRO = "NOVO";
 
             await salvarNoBanco(finalId, "SISTEMA_VARREDURA", payload);
         }
-        console.log(`[VARREDURA DIÁRIA] ✅ Banco de Dados atualizado e colunas preenchidas com precisão cirúrgica!\n`);
+        console.log(`[VARREDURA DIÁRIA] ✅ Códigos corrigidos e colunas preenchidas!\n`);
     } catch (e) { console.error("Erro Varredura:", e.message); } finally { if (browserIgreen) await browserIgreen.close(); }
 }
 
@@ -424,4 +416,4 @@ app.get('/ultima-fatura', (req, res) => { const file = path.join('/tmp', 'ultima
 const PORT = process.env.PORT || 10000;
 async function validateBrowser() { try { const browser = await puppeteer.launch({ headless: true, args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() }); await browser.close(); return true; } catch (e) { process.exit(1); } }
 app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindado!'));
-validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Porta ${PORT}`)); });    
+validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Porta ${PORT}`)); });
