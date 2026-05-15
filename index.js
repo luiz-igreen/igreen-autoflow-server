@@ -29,7 +29,6 @@ const PROXY_PORT = process.env.PROXY_PORT;
 const PROXY_USER = process.env.PROXY_USER;
 const PROXY_PASS = process.env.PROXY_PASS;
 
-// 🔥 CONEXÃO DB
 try {
     const firebaseConfig = process.env.FIREBASE_CONFIG ? JSON.parse(process.env.FIREBASE_CONFIG) : null;
     if (firebaseConfig && admin.apps.length === 0) {
@@ -78,7 +77,6 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
     } catch (error) { throw new Error("Falha ao ler fatura."); }
 }
 
-// 🔥 VARREDURA SNIPER 2.0: Ignora a coluna "Licenciado" para pegar o código real
 async function varreduraIgreenDiaria() {
     let browserIgreen = null;
     try {
@@ -121,7 +119,6 @@ async function varreduraIgreenDiaria() {
                     const headers = Array.from(document.querySelectorAll('.MuiDataGrid-columnHeader'));
                     let mapaColunas = { codigo: null, nome: null, celular: null, instalacao: null, distribuidora: null };
                     
-                    // 🔥 CORREÇÃO: Pega o Código do cliente e foge do Código do Licenciado!
                     headers.forEach(h => {
                         const texto = h.textContent.trim().toLowerCase();
                         const field = h.getAttribute('data-field');
@@ -206,8 +203,10 @@ async function varreduraIgreenDiaria() {
                 CPF: cli.CPF
             };
             
-            // 🔥 SOBRESCREVE o código errado (76049) pelo código novo e real (ex: 390424)
-            if (cli.CODIGO_CLIENTE && cli.CODIGO_CLIENTE !== "76.049" && cli.CODIGO_CLIENTE !== "76049") {
+            // 🔥 EXCEÇÃO DE MESTRE: Dá a coroa 76.049 para o Luiz Jorge e corrige todos os outros!
+            if (cli.NOME_CLIENTE && cli.NOME_CLIENTE.toUpperCase().includes("LUIZ JORGE")) {
+                payload.CODIGO_CLIENTE = "76.049";
+            } else if (cli.CODIGO_CLIENTE && cli.CODIGO_CLIENTE !== "76.049" && cli.CODIGO_CLIENTE !== "76049") {
                 payload.CODIGO_CLIENTE = cli.CODIGO_CLIENTE;
             }
 
@@ -224,7 +223,6 @@ async function varreduraIgreenDiaria() {
     } catch (e) { console.error("Erro Varredura:", e.message); } finally { if (browserIgreen) await browserIgreen.close(); }
 }
 
-// 🔥 FLUXO UNIVERSAL WHATSAPP
 async function fluxoProcessamentoUniversal(mediaUrl, mimeType, phone, cpfAlvo = null) {
     const localPath = path.join('/tmp', `fatura_universal_${Date.now()}.pdf`);
     let browserIgreen = null;
@@ -416,4 +414,4 @@ app.get('/ultima-fatura', (req, res) => { const file = path.join('/tmp', 'ultima
 const PORT = process.env.PORT || 10000;
 async function validateBrowser() { try { const browser = await puppeteer.launch({ headless: true, args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() }); await browser.close(); return true; } catch (e) { process.exit(1); } }
 app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindado!'));
-validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Porta ${PORT}`)); });
+validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Porta ${PORT}`)); });    
