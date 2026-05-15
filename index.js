@@ -58,7 +58,6 @@ const TEXTOS = {
     T_DOCS_RECEBIDOS: "✅ Documentos recebidos com sucesso! \nAs imagens foram anexadas ao seu perfil com segurança. Muito obrigado! 🙏"
 };
 
-// 🔥 BLINDAGEM MÁXIMA NO CHROME INTACTA
 const CHROME_ARGS = [
     "--no-sandbox", 
     "--disable-setuid-sandbox", 
@@ -108,7 +107,7 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         const base64Data = Buffer.from(response.data, 'binary').toString('base64');
         console.log(`[IA GEMINI] ✅ Download concluído com sucesso. Tamanho: ${base64Data.length} bytes.`);
         
-        // VERSÃO INTACTA E BLINDADA
+        // VERSÃO INTACTA COMO ORDENADO: gemini-2.5-flash
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
         
         const promptText = `Extraia os dados desta fatura de energia em formato JSON. Use EXATAMENTE estas chaves: 
@@ -155,9 +154,8 @@ async function varreduraIgreenDiaria() {
         console.log(`[VARREDURA DIÁRIA] Acessando Mapa de Clientes...`);
         await pageIgreen.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
         await new Promise(r => setTimeout(r, 5000));
-        await pageIgreen.evaluate(() => { document.body.style.zoom = "0.4"; }); // Zoom out para ver toda a tabela
+        await pageIgreen.evaluate(() => { document.body.style.zoom = "0.4"; }); 
         
-        // ETAPA 1: LER A ESQUERDA (Pega o Código e o Documento/CPF)
         await pageIgreen.evaluate(() => { const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller'); scrollers.forEach(s => s.scrollLeft = 0); });
         await new Promise(r => setTimeout(r, 2000));
         
@@ -166,15 +164,15 @@ async function varreduraIgreenDiaria() {
             document.querySelectorAll('.MuiDataGrid-row').forEach(row => {
                 const id = row.getAttribute('data-id');
                 const cols = Array.from(row.querySelectorAll('.MuiDataGrid-cell'));
-                // Código é a primeira coluna, CPF é reconhecido pelo padrão
                 const codigo = cols[0]?.textContent?.trim() || "";
+                // Agora capturamos o Nome Real na varredura também!
+                const nome = cols[1]?.textContent?.trim() || "";
                 const cpf = cols.find(c => c.textContent.match(/\d{3}\.\d{3}\.\d{3}-\d{2}/))?.textContent?.replace(/\D/g, '') || ""; 
-                mapa[id] = { codigo, cpf };
+                mapa[id] = { codigo, nome, cpf };
             });
             return mapa;
         });
 
-        // ETAPA 2: LER A DIREITA E APLICAR O SEU FILTRO DE EQUIPE
         await pageIgreen.evaluate(() => { const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller'); scrollers.forEach(s => s.scrollLeft = 9999); });
         await new Promise(r => setTimeout(r, 2000));
         
@@ -184,10 +182,8 @@ async function varreduraIgreenDiaria() {
                 const id = row.getAttribute('data-id');
                 const textoLinha = row.textContent.toLowerCase();
                 
-                // O SEU FILTRO: Só pega os seus clientes diretos
                 if (textoLinha.includes("luiz jorge gomes da silva") && textoLinha.includes("76.049")) {
                     const esq = mapEsq[id] || {};
-                    
                     let nasc = null;
                     const todasDatas = row.textContent.match(/\d{2}\/\d{2}\/\d{4}/g);
                     if (todasDatas && todasDatas.length > 0) {
@@ -198,28 +194,25 @@ async function varreduraIgreenDiaria() {
                         }
                         if (menorAno > 2015) nasc = null;
                     }
-                    
-                    resultados.push({ CODIGO_CLIENTE: esq.codigo, CPF: esq.cpf, DATA_NASCIMENTO: nasc });
+                    resultados.push({ CODIGO_CLIENTE: esq.codigo, NOME_CLIENTE: esq.nome, CPF: esq.cpf, DATA_NASCIMENTO: nasc });
                 }
             });
             return resultados;
         }, dadosEsquerda);
 
-        console.log(`[VARREDURA DIÁRIA] Filtragem concluída! Encontrados ${clientesParaAtualizar.length} clientes da sua rede nesta tela.`);
+        console.log(`[VARREDURA DIÁRIA] Filtragem concluída! Encontrados ${clientesParaAtualizar.length} clientes da sua rede.`);
         
-        // ETAPA 3: ATUALIZAR O SEU BANCO DE DADOS
         for (let cliente of clientesParaAtualizar) {
             if (cliente.CPF && cliente.DATA_NASCIMENTO && cliente.CODIGO_CLIENTE) {
-                console.log(`[VARREDURA DIÁRIA] Salvando no Firebase -> Cód: ${cliente.CODIGO_CLIENTE} | CPF: ${cliente.CPF} | Nasc: ${cliente.DATA_NASCIMENTO}`);
-                // Usamos o CPF como chave principal do documento para evitar duplicidades
+                console.log(`[VARREDURA DIÁRIA] Salvando Firebase -> Cód: ${cliente.CODIGO_CLIENTE} | Nome: ${cliente.NOME_CLIENTE}`);
                 await salvarNoBanco(cliente.CPF, "SISTEMA_AUTONOMO", {
                     CODIGO_CLIENTE: cliente.CODIGO_CLIENTE,
+                    NOME_CLIENTE: cliente.NOME_CLIENTE,
                     CPF: cliente.CPF,
                     DATA_NASCIMENTO: cliente.DATA_NASCIMENTO
                 });
             }
         }
-        
         console.log(`[VARREDURA DIÁRIA] ✅ Varredura finalizada com sucesso.\n`);
     } catch (e) {
         console.error(`❌ [ERRO VARREDURA DIÁRIA]:`, e.message);
@@ -344,21 +337,29 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
             await pageIgreen.evaluate(() => { const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller'); scrollers.forEach(s => s.scrollLeft = 0); }); 
             await new Promise(r => setTimeout(r, 1500));
-            let textoEsquerda = await pageIgreen.evaluate((busca) => { 
+            
+            // 🔥 CORREÇÃO: Pegar Código e Nome Real da Tabela na hora da busca manual (Opção 3)
+            let extraidosEsq = await pageIgreen.evaluate((busca) => { 
                 const linhas = Array.from(document.querySelectorAll('tr, [role="row"], .MuiDataGrid-row')); 
                 const l = linhas.find(x => x.textContent.toLowerCase().includes(busca.toLowerCase().trim())); 
-                return l ? l.textContent : ""; 
+                if(!l) return { texto: "", codigo: "", nome: "" };
+                const cols = Array.from(l.querySelectorAll('.MuiDataGrid-cell, td'));
+                return { 
+                    texto: l.textContent, 
+                    codigo: cols[0]?.textContent?.trim() || "", 
+                    nome: cols[1]?.textContent?.trim() || "" 
+                }; 
             }, termoBuscaIgreen);
 
             await pageIgreen.evaluate(() => { const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller'); scrollers.forEach(s => s.scrollLeft = 9999); }); 
             await new Promise(r => setTimeout(r, 1500));
             
-            const dadosExtraidos = await pageIgreen.evaluate((busca, esq) => {
+            const dadosExtraidos = await pageIgreen.evaluate((busca, esqTexto) => {
                 const linhas = Array.from(document.querySelectorAll('tr, [role="row"], .MuiDataGrid-row'));
                 let linhaExata = linhas.find(l => l.textContent.toLowerCase().includes(busca.toLowerCase().trim()));
                 if (!linhaExata && linhas.length > 1) linhaExata = linhas[1]; 
                 
-                let textoCompleto = esq + "   " + (linhaExata ? linhaExata.textContent : "");
+                let textoCompleto = esqTexto + "   " + (linhaExata ? linhaExata.textContent : "");
 
                 let cpfExt = null; let nascExt = null;
                 const cpfMatch = textoCompleto.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
@@ -376,13 +377,15 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 
                 if (!cpfExt || !nascExt) return { falhouBusca: true };
                 return { cpfExt, nascExt };
-            }, termoBuscaIgreen, textoEsquerda);
+            }, termoBuscaIgreen, extraidosEsq.texto);
 
             if (dadosExtraidos && dadosExtraidos.falhouBusca) throw new Error("FALTAM_DADOS_ESSENCIAIS");
             cpf = dadosExtraidos.cpfExt; nascimento = dadosExtraidos.nascExt;
 
-            console.log(`[BANCO DE DADOS] Atualizando CPF e Nascimento resgatados puros da iGreen...`);
-            await salvarNoBanco(cpf, phone, { CPF: cpf, DATA_NASCIMENTO: nascimento, NOME_CLIENTE: termoBuscaIgreen });
+            console.log(`[BANCO DE DADOS] Atualizando CPF, Código e Nascimento puros da iGreen...`);
+            // 🔥 CORREÇÃO: Agora salva o Nome Real (e não mais "398172")
+            let nomeCorreto = extraidosEsq.nome || termoBuscaIgreen;
+            await salvarNoBanco(cpf, phone, { CODIGO_CLIENTE: extraidosEsq.codigo, CPF: cpf, DATA_NASCIMENTO: nascimento, NOME_CLIENTE: nomeCorreto });
         }
 
         console.log(`[RPA] 👻 Preparando MOTOR 2 (Equatorial)...`);
@@ -516,13 +519,9 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
     }
 }
 
-// 🔥 NOVO: MOTOR RECORRENTE AGORA RODA A VARREDURA DA SUA EQUIPE E AS DEVOLUTIVAS
 function iniciarMotorRecorrente() {
     setInterval(async () => {
-        // 1. O novo módulo de sincronização
         await varreduraIgreenDiaria();
-
-        // 2. A antiga rotina de cobrar médias pendentes
         if (admin.apps.length > 0) {
             try {
                 const snapshot = await admin.firestore().collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').where('STATUS_CADASTRO', '==', 'PENDENTE_MEDIA').get();
@@ -535,7 +534,6 @@ function iniciarMotorRecorrente() {
         }
     }, 86400000); 
 
-    // Opcional: Roda o robô escavador da iGreen 15 segundos após você reiniciar a máquina!
     setTimeout(() => { varreduraIgreenDiaria(); }, 15000);
 }
 iniciarMotorRecorrente();
@@ -636,4 +634,4 @@ const PORT = process.env.PORT || 10000;
 async function validateBrowser() { try { const browser = await puppeteer.launch({ headless: true, args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() }); await browser.close(); console.log('✔ Browser health check passed!'); return true; } catch (error) { console.error('❌ Browser falhou:', error.message); process.exit(1); } }
 
 app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindado!'));
-validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`)); });    
+validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`)); });
