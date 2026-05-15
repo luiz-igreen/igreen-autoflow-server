@@ -58,7 +58,18 @@ const TEXTOS = {
     T_DOCS_RECEBIDOS: "✅ Documentos recebidos com sucesso! \nAs imagens foram anexadas ao seu perfil com segurança. Muito obrigado! 🙏"
 };
 
-const CHROME_ARGS = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-zygote", "--disable-blink-features=AutomationControlled", "--ignore-certificate-errors"];
+// 🔥 BLINDAGEM MÁXIMA NO CHROME
+const CHROME_ARGS = [
+    "--no-sandbox", 
+    "--disable-setuid-sandbox", 
+    "--disable-dev-shm-usage", 
+    "--disable-gpu", 
+    "--no-zygote", 
+    "--disable-blink-features=AutomationControlled", 
+    "--disable-features=IsolateOrigins,site-per-process", 
+    "--window-size=1920,1080",
+    "--ignore-certificate-errors"
+];
 
 async function enviarMensagem(phone, message) {
     const numLimpo = String(phone).replace(/\D/g, ''); 
@@ -158,8 +169,8 @@ async function fluxoProcessamentoUniversal(mediaUrl, mimeType, phone, cpfAlvo = 
         await new Promise((resolve, reject) => { writer.on('finish', resolve); writer.on('error', reject); });
         
         console.log(`[IGREEN] Lançando Puppeteer...`);
-        browserIgreen = await puppeteer.launch({ headless: "new", args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() });
-        const pageIgreen = await browserIgreen.newPage(); await pageIgreen.setViewport({ width: 4000, height: 1080 });
+        browserIgreen = await puppeteer.launch({ headless: true, args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() });
+        const pageIgreen = await browserIgreen.newPage(); await pageIgreen.setViewport({ width: 1920, height: 1080 });
         
         await pageIgreen.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
         try { await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Começar')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
@@ -217,8 +228,8 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
     try {
         console.log(`[RPA] 🚀 Arrancando MOTOR 1 (iGreen - Sem Proxy)...`);
-        browserIgreen = await puppeteer.launch({ headless: "new", args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() });
-        const pageIgreen = await browserIgreen.newPage(); await pageIgreen.setViewport({ width: 4000, height: 1080 }); 
+        browserIgreen = await puppeteer.launch({ headless: true, args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() });
+        const pageIgreen = await browserIgreen.newPage(); await pageIgreen.setViewport({ width: 1920, height: 1080 }); 
 
         if (!cpf || !nascimento) {
             await pageIgreen.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
@@ -256,21 +267,24 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 console.log(`[RPA] 🌐 Tentativa ${tentativa}: Camuflando conexão e IP...`);
                 let puppeteerArgsEq = [...CHROME_ARGS];
                 
-                // 🔥 A CORREÇÃO DE FORÇA BRUTA: Proxy-chain COM TIMEOUT rigoroso para impedir bloqueios infinitos
                 if (PROXY_IP && PROXY_PORT && PROXY_USER && PROXY_PASS) { 
                     const rawProxyUrl = `http://${PROXY_USER}:${PROXY_PASS}@${PROXY_IP}:${PROXY_PORT}`; 
-                    
                     const proxyPromise = anonymizeProxy(rawProxyUrl);
-                    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout ao ligar ao Proxy Residencial")), 15000));
-                    
+                    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout ao ligar ao Proxy Residencial")), 20000));
                     proxyUrlForPuppeteer = await Promise.race([proxyPromise, timeoutPromise]);
                     puppeteerArgsEq.push(`--proxy-server=${proxyUrlForPuppeteer}`); 
                 } 
 
-                browserEquatorial = await puppeteer.launch({ headless: "new", args: puppeteerArgsEq, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath(), defaultViewport: { width: 1366, height: 768 } });
+                browserEquatorial = await puppeteer.launch({ headless: true, args: puppeteerArgsEq, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath(), defaultViewport: { width: 1920, height: 1080 } });
                 const pageEq = await browserEquatorial.newPage(); 
                 
-                // 🔥 CAMUFLAGEM PERFEITA DE NAVEGADOR WINDOWS (Fura o bloqueio da Imperva)
+                // 🔥 INJEÇÃO DE CÓDIGO PARA DESTRUIR O RASTREAMENTO DA IMPERVA
+                await pageEq.evaluateOnNewDocument(() => {
+                    Object.defineProperty(navigator, 'webdriver', { get: () => false });
+                    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+                    window.chrome = { runtime: {} };
+                });
+                
                 await pageEq.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
                 await pageEq.setExtraHTTPHeaders({ 
                     'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
@@ -283,7 +297,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 const escutarPDF = async (response) => { try { const contentType = response.headers()['content-type']; const contentDisposition = response.headers()['content-disposition']; if (response.status() === 200 && ((contentType && contentType.includes('application/pdf')) || (contentDisposition && contentDisposition.includes('.pdf')))) { const buffer = await response.buffer(); fs.writeFileSync(caminhoFaturaLocal, buffer); } } catch(err) {} };
                 pageEq.on('response', escutarPDF); browserEquatorial.on('targetcreated', async (target) => { if (target.type() === 'page') { try { const novaAba = await target.page(); novaAba.on('response', escutarPDF); } catch (e) {} } });
 
-                console.log(`[RPA] 🌍 Entrando na porta da Equatorial...`);
+                console.log(`[RPA] 🌍 Entrando na porta da Equatorial (Modo Camuflado)...`);
                 await pageEq.goto(EQUATORIAL_AL_URL, { waitUntil: 'domcontentloaded', timeout: 60000 }); 
                 console.log(`[RPA] ✅ Site da Equatorial abriu! Passamos pela segurança.`);
                 await new Promise(r => setTimeout(r, 5000)); 
@@ -487,7 +501,7 @@ app.get('/tela-robo', (req, res) => { const file = path.join('/tmp', 'debug_tela
 app.get('/ultima-fatura', (req, res) => { const file = path.join('/tmp', 'ultima_fatura.pdf'); if (fs.existsSync(file)) { res.contentType('application/pdf'); res.sendFile(path.resolve(file)); } else { res.status(404).send('Nenhuma fatura foi capturada ainda.'); } });
 
 const PORT = process.env.PORT || 10000;
-async function validateBrowser() { try { const browser = await puppeteer.launch({ headless: "new", args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() }); await browser.close(); console.log('✔ Browser health check passed!'); return true; } catch (error) { console.error('❌ Browser falhou:', error.message); process.exit(1); } }
+async function validateBrowser() { try { const browser = await puppeteer.launch({ headless: true, args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() }); await browser.close(); console.log('✔ Browser health check passed!'); return true; } catch (error) { console.error('❌ Browser falhou:', error.message); process.exit(1); } }
 
 app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindado!'));
 validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`)); });    
