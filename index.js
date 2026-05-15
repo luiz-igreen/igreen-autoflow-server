@@ -107,7 +107,6 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         const base64Data = Buffer.from(response.data, 'binary').toString('base64');
         console.log(`[IA GEMINI] ✅ Download concluído com sucesso. Tamanho: ${base64Data.length} bytes.`);
         
-        // VERSÃO INTACTA COMO ORDENADO: gemini-2.5-flash
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
         
         const promptText = `Extraia os dados desta fatura de energia em formato JSON. Use EXATAMENTE estas chaves: 
@@ -132,7 +131,7 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
     }
 }
 
-// 🔥 NOVO MÓDULO: VARREDURA AUTÔNOMA DA IGREEN PARA ATUALIZAR O BANCO DE DADOS
+// 🔥 VARREDURA AUTÔNOMA COM RADAR À PROVA DE FALHAS (TRUNCAMENTOS)
 async function varreduraIgreenDiaria() {
     let browserIgreen = null;
     try {
@@ -165,7 +164,6 @@ async function varreduraIgreenDiaria() {
                 const id = row.getAttribute('data-id');
                 const cols = Array.from(row.querySelectorAll('.MuiDataGrid-cell'));
                 const codigo = cols[0]?.textContent?.trim() || "";
-                // Agora capturamos o Nome Real na varredura também!
                 const nome = cols[1]?.textContent?.trim() || "";
                 const cpf = cols.find(c => c.textContent.match(/\d{3}\.\d{3}\.\d{3}-\d{2}/))?.textContent?.replace(/\D/g, '') || ""; 
                 mapa[id] = { codigo, nome, cpf };
@@ -182,7 +180,10 @@ async function varreduraIgreenDiaria() {
                 const id = row.getAttribute('data-id');
                 const textoLinha = row.textContent.toLowerCase();
                 
-                if (textoLinha.includes("luiz jorge gomes da silva") && textoLinha.includes("76.049")) {
+                // 🔥 RADAR ATUALIZADO: Procura pela Chave Única (76.049) para evitar bugs de nome cortado!
+                const isMeuCliente = textoLinha.includes("76.049") || textoLinha.replace(/\s/g, '').includes("76049") || textoLinha.includes("luiz jorge gomes");
+
+                if (isMeuCliente) {
                     const esq = mapEsq[id] || {};
                     let nasc = null;
                     const todasDatas = row.textContent.match(/\d{2}\/\d{2}\/\d{4}/g);
@@ -338,7 +339,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             await pageIgreen.evaluate(() => { const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller'); scrollers.forEach(s => s.scrollLeft = 0); }); 
             await new Promise(r => setTimeout(r, 1500));
             
-            // 🔥 CORREÇÃO: Pegar Código e Nome Real da Tabela na hora da busca manual (Opção 3)
             let extraidosEsq = await pageIgreen.evaluate((busca) => { 
                 const linhas = Array.from(document.querySelectorAll('tr, [role="row"], .MuiDataGrid-row')); 
                 const l = linhas.find(x => x.textContent.toLowerCase().includes(busca.toLowerCase().trim())); 
@@ -383,7 +383,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             cpf = dadosExtraidos.cpfExt; nascimento = dadosExtraidos.nascExt;
 
             console.log(`[BANCO DE DADOS] Atualizando CPF, Código e Nascimento puros da iGreen...`);
-            // 🔥 CORREÇÃO: Agora salva o Nome Real (e não mais "398172")
             let nomeCorreto = extraidosEsq.nome || termoBuscaIgreen;
             await salvarNoBanco(cpf, phone, { CODIGO_CLIENTE: extraidosEsq.codigo, CPF: cpf, DATA_NASCIMENTO: nascimento, NOME_CLIENTE: nomeCorreto });
         }
@@ -634,4 +633,4 @@ const PORT = process.env.PORT || 10000;
 async function validateBrowser() { try { const browser = await puppeteer.launch({ headless: true, args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() }); await browser.close(); console.log('✔ Browser health check passed!'); return true; } catch (error) { console.error('❌ Browser falhou:', error.message); process.exit(1); } }
 
 app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindado!'));
-validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`)); });
+validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`)); });    
