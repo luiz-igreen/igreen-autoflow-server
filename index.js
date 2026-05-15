@@ -246,18 +246,48 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             let searchInput; try { searchInput = await pageIgreen.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 }); } catch (e) { throw new Error("LINHA_CLIENTE_NAO_ENCONTRADA"); }
             await searchInput.click(); await searchInput.click({ clickCount: 3 }); await pageIgreen.keyboard.press('Backspace'); await searchInput.type(termoBuscaIgreen, { delay: 100 }); await pageIgreen.keyboard.press('Enter'); await new Promise(r => setTimeout(r, 3000));
 
-            await pageIgreen.evaluate(() => { const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller'); scrollers.forEach(s => s.scrollLeft = 9999); }); await new Promise(r => setTimeout(r, 1500));
-
-            const dadosExtraidos = await pageIgreen.evaluate((busca) => {
-                const buscaLimpa = busca.toLowerCase().trim(); const possiveisLinhas = Array.from(document.querySelectorAll('tr, [role="row"], .MuiDataGrid-row')); const linhaExata = possiveisLinhas.find(linha => linha.textContent.toLowerCase().includes(buscaLimpa));
-                if (!linhaExata) return { falhouBusca: true }; let colunas = Array.from(linhaExata.querySelectorAll('td, [role="cell"], .MuiDataGrid-cell')); if (colunas.length === 0) colunas = Array.from(linhaExata.children); const textoLinha = colunas.map(c => c.textContent.trim()).join('   ');
-                let cpfExt = null; let nascExt = null; const cpfMatch = textoLinha.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/); if (cpfMatch) cpfExt = cpfMatch[0]; const todasDatas = textoLinha.match(/\d{2}\/\d{2}\/\d{4}/g);
-                if (todasDatas && todasDatas.length > 0) { let menorAno = 9999; for (let d of todasDatas) { let ano = parseInt(d.split('/')[2], 10); if (ano < menorAno) { menorAno = ano; nascExt = d; } } if (menorAno > 2015) nascExt = null; }
-                if (cpfExt) cpfExt = cpfExt.replace(/\D/g, ''); return { cpfExt, nascExt };
+            // 🔥 A CORREÇÃO MÁGICA ESTÁ AQUI: LEITURA EM DUAS ETAPAS PARA VENCER A TABELA VIRTUALIZADA!
+            
+            // LEITURA 1: Lado Esquerdo (Garante que memoriza o CPF na coluna Documento)
+            await pageIgreen.evaluate(() => { const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller'); scrollers.forEach(s => s.scrollLeft = 0); }); 
+            await new Promise(r => setTimeout(r, 1500));
+            let textoEsquerda = await pageIgreen.evaluate((busca) => { 
+                const linhas = Array.from(document.querySelectorAll('tr, [role="row"], .MuiDataGrid-row')); 
+                const l = linhas.find(x => x.textContent.toLowerCase().includes(busca.toLowerCase().trim())); 
+                return l ? l.textContent : ""; 
             }, termoBuscaIgreen);
 
-            if (dadosExtraidos && dadosExtraidos.falhouBusca) throw new Error("LINHA_CLIENTE_NAO_ENCONTRADA");
-            if (!dadosExtraidos || !dadosExtraidos.cpfExt || !dadosExtraidos.nascExt) throw new Error("FALTAM_DADOS_ESSENCIAIS");
+            // LEITURA 2: Lado Direito (Garante que memoriza a Data de Nascimento)
+            await pageIgreen.evaluate(() => { const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller'); scrollers.forEach(s => s.scrollLeft = 9999); }); 
+            await new Promise(r => setTimeout(r, 1500));
+            
+            const dadosExtraidos = await pageIgreen.evaluate((busca, esq) => {
+                const linhas = Array.from(document.querySelectorAll('tr, [role="row"], .MuiDataGrid-row'));
+                let linhaExata = linhas.find(l => l.textContent.toLowerCase().includes(busca.toLowerCase().trim()));
+                if (!linhaExata && linhas.length > 1) linhaExata = linhas[1]; // Fallback para a linha visível após o filtro
+                
+                // JUNTA AS DUAS MEMÓRIAS!
+                let textoCompleto = esq + "   " + (linhaExata ? linhaExata.textContent : "");
+
+                let cpfExt = null; let nascExt = null;
+                const cpfMatch = textoCompleto.match(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
+                if (cpfMatch) cpfExt = cpfMatch[0].replace(/\D/g, '');
+
+                const todasDatas = textoCompleto.match(/\d{2}\/\d{2}\/\d{4}/g);
+                if (todasDatas && todasDatas.length > 0) {
+                    let menorAno = 9999;
+                    for (let d of todasDatas) { 
+                        let ano = parseInt(d.split('/')[2], 10); 
+                        if (ano < menorAno) { menorAno = ano; nascExt = d; } 
+                    }
+                    if (menorAno > 2015) nascExt = null;
+                }
+                
+                if (!cpfExt || !nascExt) return { falhouBusca: true };
+                return { cpfExt, nascExt };
+            }, termoBuscaIgreen, textoEsquerda);
+
+            if (dadosExtraidos && dadosExtraidos.falhouBusca) throw new Error("FALTAM_DADOS_ESSENCIAIS");
             cpf = dadosExtraidos.cpfExt; nascimento = dadosExtraidos.nascExt;
         }
 
