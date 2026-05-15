@@ -153,38 +153,53 @@ async function varreduraIgreenDiaria() {
         console.log(`[VARREDURA DIÁRIA] Acessando Mapa de Clientes...`);
         await pageIgreen.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
         await new Promise(r => setTimeout(r, 5000));
-        await pageIgreen.evaluate(() => { document.body.style.zoom = "0.4"; }); 
+        await pageIgreen.evaluate(() => { document.body.style.zoom = "0.5"; }); 
+
+        // 🔥 GOLPE DE MESTRE: Digitar 76049 na barra de pesquisa para filtrar SÓ a sua rede!
+        console.log(`[VARREDURA DIÁRIA] Filtrando tabela para exibir APENAS a rede 76049...`);
+        try {
+            let searchInput = await pageIgreen.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
+            await searchInput.click({ clickCount: 3 }); await pageIgreen.keyboard.press('Backspace');
+            await searchInput.type('76049', { delay: 100 }); // ✨ CORREÇÃO APLICADA: Sem o ponto!
+            await pageIgreen.keyboard.press('Enter');
+            await new Promise(r => setTimeout(r, 6000)); // Espera a tabela processar a busca
+        } catch(e) {
+            console.log(`[VARREDURA DIÁRIA] Aviso: Barra de busca não encontrada, faremos a varredura normal.`);
+        }
         
-        await pageIgreen.evaluate(() => { const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller'); scrollers.forEach(s => s.scrollLeft = 0); });
-        await new Promise(r => setTimeout(r, 2000));
-        
-        const dadosEsquerda = await pageIgreen.evaluate(() => {
-            let mapa = {};
-            document.querySelectorAll('.MuiDataGrid-row').forEach(row => {
-                const id = row.getAttribute('data-id');
-                const cols = Array.from(row.querySelectorAll('.MuiDataGrid-cell'));
-                const codigo = cols[0]?.textContent?.trim() || "";
-                const nome = cols[1]?.textContent?.trim() || "";
-                const cpf = cols.find(c => c.textContent.match(/\d{3}\.\d{3}\.\d{3}-\d{2}/))?.textContent?.replace(/\D/g, '') || ""; 
-                mapa[id] = { codigo, nome, cpf };
+        let todosClientes = new Map();
+
+        // 🔥 LOOP DE COLHEITA: Desce a tela 5 vezes para pegar todos os clientes escondidos
+        console.log(`[VARREDURA DIÁRIA] Iniciando Loop de Colheita Profunda...`);
+        for (let volta = 0; volta < 5; volta++) {
+            
+            // 1. LER O LADO ESQUERDO
+            await pageIgreen.evaluate(() => { const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller'); scrollers.forEach(s => s.scrollLeft = 0); });
+            await new Promise(r => setTimeout(r, 1500));
+            
+            let dadosEsq = await pageIgreen.evaluate(() => {
+                let mapa = {};
+                document.querySelectorAll('.MuiDataGrid-row').forEach(row => {
+                    const id = row.getAttribute('data-id');
+                    if(!id) return;
+                    const cols = Array.from(row.querySelectorAll('.MuiDataGrid-cell'));
+                    const codigo = cols[0]?.textContent?.trim() || "";
+                    const nome = cols[1]?.textContent?.trim() || "";
+                    const cpf = cols.find(c => c.textContent.match(/\d{3}\.\d{3}\.\d{3}-\d{2}/))?.textContent?.replace(/\D/g, '') || ""; 
+                    mapa[id] = { codigo, nome, cpf };
+                });
+                return mapa;
             });
-            return mapa;
-        });
 
-        await pageIgreen.evaluate(() => { const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller'); scrollers.forEach(s => s.scrollLeft = 9999); });
-        await new Promise(r => setTimeout(r, 2000));
-        
-        const clientesParaAtualizar = await pageIgreen.evaluate((mapEsq) => {
-            let resultados = [];
-            document.querySelectorAll('.MuiDataGrid-row').forEach(row => {
-                const id = row.getAttribute('data-id');
-                const textoLinha = row.textContent.toLowerCase();
-                
-                // 🔥 RADAR ATUALIZADO: Procura pela Chave Única (76.049) para evitar bugs de nome cortado!
-                const isMeuCliente = textoLinha.includes("76.049") || textoLinha.replace(/\s/g, '').includes("76049") || textoLinha.includes("luiz jorge gomes");
-
-                if (isMeuCliente) {
-                    const esq = mapEsq[id] || {};
+            // 2. LER O LADO DIREITO
+            await pageIgreen.evaluate(() => { const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller'); scrollers.forEach(s => s.scrollLeft = 9999); });
+            await new Promise(r => setTimeout(r, 1500));
+            
+            let dadosDir = await pageIgreen.evaluate(() => {
+                let mapa = {};
+                document.querySelectorAll('.MuiDataGrid-row').forEach(row => {
+                    const id = row.getAttribute('data-id');
+                    if(!id) return;
                     let nasc = null;
                     const todasDatas = row.textContent.match(/\d{2}\/\d{2}\/\d{4}/g);
                     if (todasDatas && todasDatas.length > 0) {
@@ -195,26 +210,42 @@ async function varreduraIgreenDiaria() {
                         }
                         if (menorAno > 2015) nasc = null;
                     }
-                    resultados.push({ CODIGO_CLIENTE: esq.codigo, NOME_CLIENTE: esq.nome, CPF: esq.cpf, DATA_NASCIMENTO: nasc });
-                }
+                    mapa[id] = { nasc };
+                });
+                return mapa;
             });
-            return resultados;
-        }, dadosEsquerda);
 
-        console.log(`[VARREDURA DIÁRIA] Filtragem concluída! Encontrados ${clientesParaAtualizar.length} clientes da sua rede.`);
+            // 3. JUNTAR AS DUAS METADES
+            for (let id in dadosEsq) {
+                if (dadosEsq[id].cpf && dadosEsq[id].nome) {
+                    todosClientes.set(dadosEsq[id].cpf, {
+                        CODIGO_CLIENTE: dadosEsq[id].codigo,
+                        NOME_CLIENTE: dadosEsq[id].nome,
+                        CPF: dadosEsq[id].cpf,
+                        DATA_NASCIMENTO: dadosDir[id] ? dadosDir[id].nasc : null
+                    });
+                }
+            }
+
+            // 4. FAZER O SCROLL PARA BAIXO (Para revelar mais linhas da tabela)
+            await pageIgreen.evaluate(() => { const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller'); scrollers.forEach(s => s.scrollTop += 600); });
+            await new Promise(r => setTimeout(r, 1500));
+        }
+
+        const clientesParaAtualizar = Array.from(todosClientes.values());
+        console.log(`[VARREDURA DIÁRIA] Colheita concluída! Capturámos ${clientesParaAtualizar.length} clientes na rede.`);
         
         for (let cliente of clientesParaAtualizar) {
-            if (cliente.CPF && cliente.DATA_NASCIMENTO && cliente.CODIGO_CLIENTE) {
-                console.log(`[VARREDURA DIÁRIA] Salvando Firebase -> Cód: ${cliente.CODIGO_CLIENTE} | Nome: ${cliente.NOME_CLIENTE}`);
+            if (cliente.CPF) {
                 await salvarNoBanco(cliente.CPF, "SISTEMA_AUTONOMO", {
-                    CODIGO_CLIENTE: cliente.CODIGO_CLIENTE,
-                    NOME_CLIENTE: cliente.NOME_CLIENTE,
+                    CODIGO_CLIENTE: cliente.CODIGO_CLIENTE || "",
+                    NOME_CLIENTE: cliente.NOME_CLIENTE || "",
                     CPF: cliente.CPF,
-                    DATA_NASCIMENTO: cliente.DATA_NASCIMENTO
+                    DATA_NASCIMENTO: cliente.DATA_NASCIMENTO || ""
                 });
             }
         }
-        console.log(`[VARREDURA DIÁRIA] ✅ Varredura finalizada com sucesso.\n`);
+        console.log(`[VARREDURA DIÁRIA] ✅ Banco de Dados atualizado com os novos clientes.\n`);
     } catch (e) {
         console.error(`❌ [ERRO VARREDURA DIÁRIA]:`, e.message);
     } finally {
@@ -633,4 +664,4 @@ const PORT = process.env.PORT || 10000;
 async function validateBrowser() { try { const browser = await puppeteer.launch({ headless: true, args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() }); await browser.close(); console.log('✔ Browser health check passed!'); return true; } catch (error) { console.error('❌ Browser falhou:', error.message); process.exit(1); } }
 
 app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindado!'));
-validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`)); });    
+validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`)); });
