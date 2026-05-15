@@ -78,7 +78,7 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
     } catch (error) { throw new Error("Falha ao ler fatura."); }
 }
 
-// 🔥 VARREDURA SNIPER: Mirando exatamente nas colunas 'Celular', 'Instalação' e 'Distribuidora' com passos curtos
+// 🔥 VARREDURA SNIPER CORRIGIDA
 async function varreduraIgreenDiaria() {
     let browserIgreen = null;
     try {
@@ -136,7 +136,7 @@ async function varreduraIgreenDiaria() {
                         if (texto.includes('distribuidora')) mapaColunas.distribuidora = field;
                     });
 
-                    // Lê as linhas visíveis usando o mapeamento exato
+                    // Lê as linhas visíveis usando o mapeamento exato (Corrigido mapColunas -> mapaColunas)
                     document.querySelectorAll('.MuiDataGrid-row').forEach(row => {
                         const id = row.getAttribute('data-id'); if(!id) return;
                         
@@ -149,11 +149,11 @@ async function varreduraIgreenDiaria() {
                             let menorAno = 9999; for (let d of todasDatas) { let ano = parseInt(d.split('/')[2], 10); if (ano < menorAno) { menorAno = ano; nasc = d; } } if (menorAno > 2015) nasc = null;
                         }
 
-                        let codigo = mapaColunas.codigo ? row.querySelector(`[data-field="${mapColunas.codigo}"]`)?.textContent?.trim() : "";
-                        let nome = mapaColunas.nome ? row.querySelector(`[data-field="${mapColunas.nome}"]`)?.textContent?.trim() : "";
-                        let tel = mapaColunas.celular ? row.querySelector(`[data-field="${mapColunas.celular}"]`)?.textContent?.trim() : "";
-                        let uc = mapaColunas.instalacao ? row.querySelector(`[data-field="${mapColunas.instalacao}"]`)?.textContent?.trim() : "";
-                        let dist = mapaColunas.distribuidora ? row.querySelector(`[data-field="${mapColunas.distribuidora}"]`)?.textContent?.trim() : "";
+                        let codigo = mapaColunas.codigo ? row.querySelector(`[data-field="${mapaColunas.codigo}"]`)?.textContent?.trim() : "";
+                        let nome = mapaColunas.nome ? row.querySelector(`[data-field="${mapaColunas.nome}"]`)?.textContent?.trim() : "";
+                        let tel = mapaColunas.celular ? row.querySelector(`[data-field="${mapaColunas.celular}"]`)?.textContent?.trim() : "";
+                        let uc = mapaColunas.instalacao ? row.querySelector(`[data-field="${mapaColunas.instalacao}"]`)?.textContent?.trim() : "";
+                        let dist = mapaColunas.distribuidora ? row.querySelector(`[data-field="${mapaColunas.distribuidora}"]`)?.textContent?.trim() : "";
                         
                         // Backups visuais caso a coluna não estivesse perfeitamente alinhada
                         if (!tel || tel.length < 8) tel = textoTotal.match(/\(?\d{2}\)?\s?\d{4,5}-?\d{4}/)?.[0] || "";
