@@ -88,7 +88,6 @@ async function salvarNoBanco(docId, phone, dadosExtras) {
     }
 }
 
-// 🔥 FUNÇÃO DE IA ATUALIZADA (DASHBOARD COMPLETO + MODELO LATEST)
 async function analisarFaturaGemini(mediaUrl, mimeType) {
     try {
         console.log(`\n[IA GEMINI] 📥 Iniciando download do arquivo na Z-API: ${mediaUrl}`);
@@ -98,10 +97,8 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         const base64Data = Buffer.from(response.data, 'binary').toString('base64');
         console.log(`[IA GEMINI] ✅ Download concluído com sucesso. Tamanho: ${base64Data.length} bytes.`);
         
-        // CORREÇÃO: Usando a versão '-latest' que garante compatibilidade e evita o erro 404
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`;
         
-        // PROMPT ENRIQUECIDO COM TODOS OS CAMPOS DO DASHBOARD
         const promptText = `Extraia os dados desta fatura de energia em formato JSON. Use EXATAMENTE estas chaves: 
         "NOME_CLIENTE", "CPF", "MASCARA_CPF", "DATA_NASCIMENTO", "UC", "CONTA_MES", "VENCIMENTO", "VALOR_FATURA", 
         "CEP", "ENDERECO", "ENDERECO_NUMERO", "ENDERECO_COMPLEMENTO", "ESTADO", "DISTRIBUIDORA" e "MEDIA_CONSUMO". 
@@ -119,12 +116,6 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         return JSON.parse(textoResposta);
     } catch (error) {
         console.error("\n❌ [ERRO IA GEMINI] Falha profunda ao analisar fatura:");
-        if (error.response) { 
-            console.error("Status Google:", error.response.status); 
-            console.error("Detalhes:", JSON.stringify(error.response.data, null, 2)); 
-        } else { 
-            console.error("Mensagem:", error.message); 
-        }
         throw new Error("Falha ao ler fatura.");
     }
 }
@@ -262,17 +253,41 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         for (let tentativa = 1; tentativa <= 3; tentativa++) {
             let proxyUrlForPuppeteer = null;
             try {
+                console.log(`[RPA] 🌐 Tentativa ${tentativa}: Camuflando conexão e IP...`);
                 let puppeteerArgsEq = [...CHROME_ARGS];
-                if (PROXY_IP && PROXY_PORT && PROXY_USER && PROXY_PASS) { const rawProxyUrl = `http://${PROXY_USER}:${PROXY_PASS}@${PROXY_IP}:${PROXY_PORT}`; proxyUrlForPuppeteer = await anonymizeProxy(rawProxyUrl); puppeteerArgsEq.push(`--proxy-server=${proxyUrlForPuppeteer}`); } 
+                
+                // 🔥 A CORREÇÃO DE FORÇA BRUTA: Proxy-chain COM TIMEOUT rigoroso para impedir bloqueios infinitos
+                if (PROXY_IP && PROXY_PORT && PROXY_USER && PROXY_PASS) { 
+                    const rawProxyUrl = `http://${PROXY_USER}:${PROXY_PASS}@${PROXY_IP}:${PROXY_PORT}`; 
+                    
+                    const proxyPromise = anonymizeProxy(rawProxyUrl);
+                    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout ao ligar ao Proxy Residencial")), 15000));
+                    
+                    proxyUrlForPuppeteer = await Promise.race([proxyPromise, timeoutPromise]);
+                    puppeteerArgsEq.push(`--proxy-server=${proxyUrlForPuppeteer}`); 
+                } 
 
                 browserEquatorial = await puppeteer.launch({ headless: "new", args: puppeteerArgsEq, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath(), defaultViewport: { width: 1366, height: 768 } });
-                const pageEq = await browserEquatorial.newPage(); await pageEq.setExtraHTTPHeaders({ 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7' });
+                const pageEq = await browserEquatorial.newPage(); 
+                
+                // 🔥 CAMUFLAGEM PERFEITA DE NAVEGADOR WINDOWS (Fura o bloqueio da Imperva)
+                await pageEq.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+                await pageEq.setExtraHTTPHeaders({ 
+                    'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+                    'Upgrade-Insecure-Requests': '1',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8'
+                });
+
                 const clientEq = await pageEq.target().createCDPSession(); await clientEq.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: '/tmp' });
 
                 const escutarPDF = async (response) => { try { const contentType = response.headers()['content-type']; const contentDisposition = response.headers()['content-disposition']; if (response.status() === 200 && ((contentType && contentType.includes('application/pdf')) || (contentDisposition && contentDisposition.includes('.pdf')))) { const buffer = await response.buffer(); fs.writeFileSync(caminhoFaturaLocal, buffer); } } catch(err) {} };
                 pageEq.on('response', escutarPDF); browserEquatorial.on('targetcreated', async (target) => { if (target.type() === 'page') { try { const novaAba = await target.page(); novaAba.on('response', escutarPDF); } catch (e) {} } });
 
-                await pageEq.goto(EQUATORIAL_AL_URL, { waitUntil: 'domcontentloaded', timeout: 90000 }); await new Promise(r => setTimeout(r, 5000)); 
+                console.log(`[RPA] 🌍 Entrando na porta da Equatorial...`);
+                await pageEq.goto(EQUATORIAL_AL_URL, { waitUntil: 'domcontentloaded', timeout: 60000 }); 
+                console.log(`[RPA] ✅ Site da Equatorial abriu! Passamos pela segurança.`);
+                await new Promise(r => setTimeout(r, 5000)); 
+                
                 const bodyTextInicio = await pageEq.evaluate(() => document.body.innerText.toLowerCase()); if (bodyTextInicio.includes("access denied") || bodyTextInicio.includes("error 16") || bodyTextInicio.includes("imperva")) throw new Error("IMPERVA_BLOCK");
                 await pageEq.evaluate(() => { const btnSair = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase().includes('SAIR') || el.textContent.toUpperCase().includes('X SAIR')); if (btnSair) btnSair.click(); }); await new Promise(r => setTimeout(r, 4000)); 
                 await pageEq.evaluate(() => { const check = document.querySelector('input[type="checkbox"]'); if(check) check.click(); const btnEnviar = Array.from(document.querySelectorAll('button, div, span')).find(el => el.textContent.toUpperCase().includes('ENVIAR')); if(btnEnviar) btnEnviar.click(); const btnFechar = Array.from(document.querySelectorAll('button, a, span')).find(el => el.textContent.toUpperCase() === 'FECHAR' || el.textContent.toUpperCase() === 'X'); if(btnFechar) btnFechar.click(); });
@@ -320,7 +335,10 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                 }
                 if (!pdfCapturado || !fs.existsSync(caminhoFaturaLocal) || fs.statSync(caminhoFaturaLocal).size < 15000) throw new Error("FALHA_PDF_EQUATORIAL");
                 console.log(`[RPA] 🎉 Operação no Motor 2 concluída com sucesso! PDF garantido.`); await browserEquatorial.close().catch(()=>{}); if (proxyUrlForPuppeteer) await closeAnonymizedProxy(proxyUrlForPuppeteer, true).catch(()=>{}); break; 
-            } catch (err) { if (browserEquatorial) await browserEquatorial.close().catch(()=>{}); if (proxyUrlForPuppeteer) await closeAnonymizedProxy(proxyUrlForPuppeteer, true).catch(()=>{}); await new Promise(r => setTimeout(r, 3000)); }
+            } catch (err) { 
+                console.error(`[RPA] ⚠️ Tentativa ${tentativa} no Motor 2 falhou: ${err.message}`);
+                if (browserEquatorial) await browserEquatorial.close().catch(()=>{}); if (proxyUrlForPuppeteer) await closeAnonymizedProxy(proxyUrlForPuppeteer, true).catch(()=>{}); await new Promise(r => setTimeout(r, 3000)); 
+            }
         } 
 
         if (!pdfCapturado || !fs.existsSync(caminhoFaturaLocal)) throw new Error("FALHA_PDF_EQUATORIAL");
@@ -349,6 +367,7 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
         if (browserIgreen) await browserIgreen.close().catch(()=>{}); if (fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
         if(!isAutomated) await enviarMensagem(phone, TEXTOS.T_RESGATE_SUCESSO);
     } catch (e) { 
+        console.error(`\n❌ [ERRO RPA DEVOLUTIVA] Falha grave no processo: ${e.message}`);
         if (browserIgreen) await browserIgreen.close().catch(()=>{}); if (browserEquatorial) await browserEquatorial.close().catch(()=>{}); if (fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal).catch(()=>{});
         if(!isAutomated) {
             if (e.message === "ERRO_LOGIN_IGREEN") { await enviarMensagem(phone, "⚠️ *Falha na iGreen*\n\nO robô não conseguiu fazer login no escritório virtual."); } 
@@ -471,4 +490,4 @@ const PORT = process.env.PORT || 10000;
 async function validateBrowser() { try { const browser = await puppeteer.launch({ headless: "new", args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() }); await browser.close(); console.log('✔ Browser health check passed!'); return true; } catch (error) { console.error('❌ Browser falhou:', error.message); process.exit(1); } }
 
 app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindado!'));
-validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`)); });
+validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`)); });    
