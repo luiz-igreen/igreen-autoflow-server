@@ -29,6 +29,7 @@ const PROXY_PORT = process.env.PROXY_PORT;
 const PROXY_USER = process.env.PROXY_USER;
 const PROXY_PASS = process.env.PROXY_PASS;
 
+// 🔥 CONEXÃO DB
 try {
     const firebaseConfig = process.env.FIREBASE_CONFIG ? JSON.parse(process.env.FIREBASE_CONFIG) : null;
     if (firebaseConfig && admin.apps.length === 0) {
@@ -77,6 +78,7 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
     } catch (error) { throw new Error("Falha ao ler fatura."); }
 }
 
+// 🔥 VARREDURA SNIPER 2.0 COM O PROTOCOLO DO MESTRE
 async function varreduraIgreenDiaria() {
     let browserIgreen = null;
     try {
@@ -203,10 +205,7 @@ async function varreduraIgreenDiaria() {
                 CPF: cli.CPF
             };
             
-            // 🔥 EXCEÇÃO DE MESTRE: Dá a coroa 76.049 para o Luiz Jorge e corrige todos os outros!
-            if (cli.NOME_CLIENTE && cli.NOME_CLIENTE.toUpperCase().includes("LUIZ JORGE")) {
-                payload.CODIGO_CLIENTE = "76.049";
-            } else if (cli.CODIGO_CLIENTE && cli.CODIGO_CLIENTE !== "76.049" && cli.CODIGO_CLIENTE !== "76049") {
+            if (cli.CODIGO_CLIENTE && cli.CODIGO_CLIENTE !== "76.049" && cli.CODIGO_CLIENTE !== "76049") {
                 payload.CODIGO_CLIENTE = cli.CODIGO_CLIENTE;
             }
 
@@ -219,7 +218,23 @@ async function varreduraIgreenDiaria() {
 
             await salvarNoBanco(finalId, "SISTEMA_VARREDURA", payload);
         }
-        console.log(`[VARREDURA DIÁRIA] ✅ Códigos corrigidos e colunas preenchidas!\n`);
+
+        // 🔥 PROTOCOLO DO MESTRE: O robô varre o próprio banco para garantir que o Luiz Jorge tem o seu código!
+        if (admin.apps.length > 0) {
+            try {
+                const mestreRef = await admin.firestore().collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').get();
+                mestreRef.forEach(async (doc) => {
+                    const data = doc.data();
+                    if (data.NOME_CLIENTE && data.NOME_CLIENTE.toUpperCase().includes('LUIZ JORGE')) {
+                        if (data.CODIGO_CLIENTE !== '76.049') {
+                            await admin.firestore().collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').doc(doc.id).set({ CODIGO_CLIENTE: '76.049' }, { merge: true });
+                        }
+                    }
+                });
+            } catch(e) { console.error("Erro ao aplicar Coroa do Mestre:", e.message); }
+        }
+
+        console.log(`[VARREDURA DIÁRIA] ✅ Códigos corrigidos, colunas preenchidas e Protocolo do Mestre executado!\n`);
     } catch (e) { console.error("Erro Varredura:", e.message); } finally { if (browserIgreen) await browserIgreen.close(); }
 }
 
@@ -414,4 +429,4 @@ app.get('/ultima-fatura', (req, res) => { const file = path.join('/tmp', 'ultima
 const PORT = process.env.PORT || 10000;
 async function validateBrowser() { try { const browser = await puppeteer.launch({ headless: true, args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() }); await browser.close(); return true; } catch (e) { process.exit(1); } }
 app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindado!'));
-validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Porta ${PORT}`)); });    
+validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Porta ${PORT}`)); });
