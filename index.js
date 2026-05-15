@@ -108,12 +108,14 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
         const base64Data = Buffer.from(response.data, 'binary').toString('base64');
         console.log(`[IA GEMINI] ✅ Download concluído com sucesso. Tamanho: ${base64Data.length} bytes.`);
         
-        // CORREÇÃO: Restaurada a versão correta do modelo que lê a fatura
+        // MANTENDO A VERSÃO INTACTA COMO ORDENADO: gemini-2.5-flash
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
         
+        // 🔥 CORREÇÃO DE MESTRE: Instruindo a IA sobre a Máscara vs CPF real + Todos os 12 meses de consumo
         const promptText = `Extraia os dados desta fatura de energia em formato JSON. Use EXATAMENTE estas chaves: 
-        "NOME_CLIENTE", "CPF", "MASCARA_CPF", "DATA_NASCIMENTO", "UC", "CONTA_MES", "VENCIMENTO", "VALOR_FATURA", 
-        "CEP", "ENDERECO", "ENDERECO_NUMERO", "ENDERECO_COMPLEMENTO", "ESTADO", "DISTRIBUIDORA" e "MEDIA_CONSUMO". 
+        "NOME_CLIENTE", "CPF" (APENAS se o número for puro sem asteriscos, senão deixe vazio ""), "MASCARA_CPF" (use esta chave se tiver asteriscos ex: ***.123.456-**), "DATA_NASCIMENTO", "UC", "CONTA_MES", "VENCIMENTO", "VALOR_FATURA", 
+        "CEP", "ENDERECO", "ENDERECO_NUMERO", "ENDERECO_COMPLEMENTO", "ESTADO", "DISTRIBUIDORA", "MEDIA_CONSUMO",
+        "CONSUMO_MES_1", "CONSUMO_MES_2", "CONSUMO_MES_3", "CONSUMO_MES_4", "CONSUMO_MES_5", "CONSUMO_MES_6", "CONSUMO_MES_7", "CONSUMO_MES_8", "CONSUMO_MES_9", "CONSUMO_MES_10", "CONSUMO_MES_11", "CONSUMO_MES_12". 
         Se não encontrar alguma informação, retorne uma string vazia "".`;
 
         const payload = {
@@ -246,8 +248,6 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             let searchInput; try { searchInput = await pageIgreen.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 }); } catch (e) { throw new Error("LINHA_CLIENTE_NAO_ENCONTRADA"); }
             await searchInput.click(); await searchInput.click({ clickCount: 3 }); await pageIgreen.keyboard.press('Backspace'); await searchInput.type(termoBuscaIgreen, { delay: 100 }); await pageIgreen.keyboard.press('Enter'); await new Promise(r => setTimeout(r, 3000));
 
-            // 🔥 A CORREÇÃO MÁGICA ESTÁ AQUI: LEITURA EM DUAS ETAPAS PARA VENCER A TABELA VIRTUALIZADA!
-            
             // LEITURA 1: Lado Esquerdo (Garante que memoriza o CPF na coluna Documento)
             await pageIgreen.evaluate(() => { const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller'); scrollers.forEach(s => s.scrollLeft = 0); }); 
             await new Promise(r => setTimeout(r, 1500));
@@ -264,9 +264,8 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             const dadosExtraidos = await pageIgreen.evaluate((busca, esq) => {
                 const linhas = Array.from(document.querySelectorAll('tr, [role="row"], .MuiDataGrid-row'));
                 let linhaExata = linhas.find(l => l.textContent.toLowerCase().includes(busca.toLowerCase().trim()));
-                if (!linhaExata && linhas.length > 1) linhaExata = linhas[1]; // Fallback para a linha visível após o filtro
+                if (!linhaExata && linhas.length > 1) linhaExata = linhas[1]; // Fallback
                 
-                // JUNTA AS DUAS MEMÓRIAS!
                 let textoCompleto = esq + "   " + (linhaExata ? linhaExata.textContent : "");
 
                 let cpfExt = null; let nascExt = null;
@@ -289,6 +288,10 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
 
             if (dadosExtraidos && dadosExtraidos.falhouBusca) throw new Error("FALTAM_DADOS_ESSENCIAIS");
             cpf = dadosExtraidos.cpfExt; nascimento = dadosExtraidos.nascExt;
+
+            // 🔥 A CORREÇÃO DE MESTRE: Salvar IMEDIATAMENTE os dados puros da iGreen no Banco de Dados!
+            console.log(`[BANCO DE DADOS] Atualizando CPF e Nascimento resgatados puros da iGreen...`);
+            await salvarNoBanco(cpf, phone, { CPF: cpf, DATA_NASCIMENTO: nascimento, NOME_CLIENTE: termoBuscaIgreen });
         }
 
         console.log(`[RPA] 👻 Preparando MOTOR 2 (Equatorial)...`);
@@ -535,4 +538,4 @@ const PORT = process.env.PORT || 10000;
 async function validateBrowser() { try { const browser = await puppeteer.launch({ headless: true, args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() }); await browser.close(); console.log('✔ Browser health check passed!'); return true; } catch (error) { console.error('❌ Browser falhou:', error.message); process.exit(1); } }
 
 app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindado!'));
-validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`)); });
+validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando a 100% na porta ${PORT} via Docker (0.0.0.0)`)); });    
