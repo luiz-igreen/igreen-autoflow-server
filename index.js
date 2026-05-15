@@ -78,11 +78,10 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
     } catch (error) { throw new Error("Falha ao ler fatura."); }
 }
 
-// 🔥 VARREDURA SNIPER 2.0 COM O PROTOCOLO DO MESTRE
 async function varreduraIgreenDiaria() {
     let browserIgreen = null;
     try {
-        console.log(`\n[VARREDURA DIÁRIA] 🕵️ Iniciando Colheita Sniper Passo-a-Passo (76049)...`);
+        console.log(`\n[VARREDURA DIÁRIA] 🕵️ Iniciando Colheita Sniper...`);
         browserIgreen = await puppeteer.launch({ headless: true, args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() });
         const pageIgreen = await browserIgreen.newPage(); 
         await pageIgreen.setViewport({ width: 1920, height: 1080 });
@@ -111,7 +110,6 @@ async function varreduraIgreenDiaria() {
 
         for (let volta = 0; volta < 5; volta++) {
             const posicoesScroll = [0, 600, 1200, 9999];
-            
             for (let pos of posicoesScroll) {
                 await pageIgreen.evaluate((p) => { const s = document.querySelector('.MuiDataGrid-virtualScroller'); if(s) { s.scrollLeft = p; s.dispatchEvent(new Event('scroll')); } }, pos);
                 await new Promise(r => setTimeout(r, 1200));
@@ -124,7 +122,6 @@ async function varreduraIgreenDiaria() {
                     headers.forEach(h => {
                         const texto = h.textContent.trim().toLowerCase();
                         const field = h.getAttribute('data-field');
-                        
                         if ((texto.includes('código') || texto.includes('codigo') || texto === 'cód') && !texto.includes('licenciado')) mapaColunas.codigo = field;
                         if (texto === 'nome' || texto === 'cliente' || texto.includes('nome do cliente')) mapaColunas.nome = field;
                         if (texto === 'celular' || texto === 'telefone') mapaColunas.celular = field;
@@ -139,9 +136,7 @@ async function varreduraIgreenDiaria() {
                         
                         let nasc = null;
                         const todasDatas = textoTotal.match(/\d{2}\/\d{2}\/\d{4}/g);
-                        if (todasDatas && todasDatas.length > 0) {
-                            let menorAno = 9999; for (let d of todasDatas) { let ano = parseInt(d.split('/')[2], 10); if (ano < menorAno) { menorAno = ano; nasc = d; } } if (menorAno > 2015) nasc = null;
-                        }
+                        if (todasDatas && todasDatas.length > 0) { let menorAno = 9999; for (let d of todasDatas) { let ano = parseInt(d.split('/')[2], 10); if (ano < menorAno) { menorAno = ano; nasc = d; } } if (menorAno > 2015) nasc = null; }
 
                         let codigo = mapaColunas.codigo ? row.querySelector(`[data-field="${mapaColunas.codigo}"]`)?.textContent?.trim() : "";
                         let nome = mapaColunas.nome ? row.querySelector(`[data-field="${mapaColunas.nome}"]`)?.textContent?.trim() : "";
@@ -151,90 +146,88 @@ async function varreduraIgreenDiaria() {
                         
                         if (!tel || tel.length < 8) tel = textoTotal.match(/\(?\d{2}\)?\s?\d{4,5}-?\d{4}/)?.[0] || "";
                         if (!uc || uc.length < 5) uc = textoTotal.match(/\b\d{8,12}\b/)?.[0] || "";
-                        if (!dist) {
-                            const dists = ["EQUATORIAL", "ENEL", "COELBA", "CPFL", "CEMIG", "COPEL", "CELESC", "RGE", "EDP", "ENERGISA", "LIGHT"];
-                            dist = dists.find(d => textoTotal.toUpperCase().includes(d)) || "";
-                        }
+                        if (!dist) { const dists = ["EQUATORIAL", "ENEL", "COELBA", "CPFL", "CEMIG", "COPEL", "CELESC", "RGE", "EDP", "ENERGISA", "LIGHT"]; dist = dists.find(d => textoTotal.toUpperCase().includes(d)) || ""; }
 
                         if(tel) tel = tel.replace(/[^\d()-\s]/g, '').trim();
                         if(uc) uc = uc.replace(/\D/g, '').trim();
 
-                        if (cpf) m[cpf] = { cpf, nasc, codigo, nome, tel, uc, dist };
+                        let uniqueKey = codigo || uc || cpf;
+                        if (uniqueKey) m[uniqueKey] = { cpf, nasc, codigo, nome, tel, uc, dist };
                     });
                     return m;
                 });
 
-                for (let cpfKey in extraidosParciais) {
-                    const extraido = extraidosParciais[cpfKey];
-                    let existente = todosClientes.get(cpfKey) || {};
-                    todosClientes.set(cpfKey, {
-                        CODIGO_CLIENTE: extraido.codigo || existente.CODIGO_CLIENTE || "", 
-                        NOME_CLIENTE: extraido.nome || existente.NOME_CLIENTE || "", 
-                        CPF: extraido.cpf,
-                        DATA_NASCIMENTO: extraido.nasc || existente.DATA_NASCIMENTO || "", 
-                        TELEFONE: extraido.tel || existente.TELEFONE || "", 
-                        UC: extraido.uc || existente.UC || "", 
-                        DISTRIBUIDORA: extraido.dist || existente.DISTRIBUIDORA || ""
-                    });
+                for (let uniqueKey in extraidosParciais) {
+                    const extraido = extraidosParciais[uniqueKey];
+                    let existente = todosClientes.get(uniqueKey) || {};
+                    todosClientes.set(uniqueKey, { CODIGO_CLIENTE: extraido.codigo || existente.CODIGO_CLIENTE || "", NOME_CLIENTE: extraido.nome || existente.NOME_CLIENTE || "", CPF: extraido.cpf, DATA_NASCIMENTO: extraido.nasc || existente.DATA_NASCIMENTO || "", TELEFONE: extraido.tel || existente.TELEFONE || "", UC: extraido.uc || existente.UC || "", DISTRIBUIDORA: extraido.dist || existente.DISTRIBUIDORA || "" });
                 }
             }
-            
             await pageIgreen.evaluate(() => { const s = document.querySelector('.MuiDataGrid-virtualScroller'); if(s) s.scrollTop += 600; });
             await new Promise(r => setTimeout(r, 1500));
         }
 
         const arrayClientes = Array.from(todosClientes.values());
-        console.log(`[VARREDURA DIÁRIA] Colheita profunda concluída! Analisando ${arrayClientes.length} clientes...`);
+        console.log(`[VARREDURA DIÁRIA] Analisando ${arrayClientes.length} propriedades...`);
         
+        // 1. INJETA OS DADOS ATIVOS
         for (let cli of arrayClientes) {
-            let finalId = cli.CPF;
+            let finalId = cli.CODIGO_CLIENTE || cli.UC || cli.CPF;
             let dbData = {};
 
             if (admin.apps.length > 0) {
                 try {
-                    const snap = await admin.firestore().collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').where('CPF', '==', cli.CPF).get();
-                    if(!snap.empty) {
-                        finalId = snap.docs[0].id;
-                        dbData = snap.docs[0].data();
-                    }
+                    let snap;
+                    if (cli.CODIGO_CLIENTE) { snap = await admin.firestore().collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').where('CODIGO_CLIENTE', '==', cli.CODIGO_CLIENTE).get(); }
+                    if ((!snap || snap.empty) && cli.UC) { snap = await admin.firestore().collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').where('UC', '==', cli.UC).get(); }
+                    if(snap && !snap.empty) { finalId = snap.docs[0].id; dbData = snap.docs[0].data(); }
                 } catch(e) {}
             }
 
-            const payload = {
-                NOME_CLIENTE: cli.NOME_CLIENTE,
-                CPF: cli.CPF
-            };
+            const payload = { NOME_CLIENTE: cli.NOME_CLIENTE, CPF: cli.CPF };
             
-            if (cli.CODIGO_CLIENTE && cli.CODIGO_CLIENTE !== "76.049" && cli.CODIGO_CLIENTE !== "76049") {
-                payload.CODIGO_CLIENTE = cli.CODIGO_CLIENTE;
-            }
+            if (cli.NOME_CLIENTE && cli.NOME_CLIENTE.toUpperCase().includes('LUIZ JORGE')) { payload.CODIGO_CLIENTE = '76.049'; } 
+            else if (cli.CODIGO_CLIENTE && cli.CODIGO_CLIENTE !== "76.049" && cli.CODIGO_CLIENTE !== "76049") { payload.CODIGO_CLIENTE = cli.CODIGO_CLIENTE; }
 
             if (cli.DATA_NASCIMENTO) payload.DATA_NASCIMENTO = cli.DATA_NASCIMENTO;
             if (cli.TELEFONE && cli.TELEFONE.length >= 8 && (!dbData.TELEFONE || dbData.TELEFONE.length < 8)) payload.TELEFONE = cli.TELEFONE;
             if (cli.UC && cli.UC.length >= 4 && (!dbData.UC || dbData.UC.length < 4)) payload.UC = cli.UC;
             if (cli.DISTRIBUIDORA && cli.DISTRIBUIDORA.length > 2 && (!dbData.DISTRIBUIDORA || dbData.DISTRIBUIDORA.length < 2)) payload.DISTRIBUIDORA = cli.DISTRIBUIDORA;
             
-            if (!dbData.STATUS_CADASTRO) payload.STATUS_CADASTRO = "NOVO";
+            // Se estava inativo, volta para ATUALIZADO. Se era novo, ganha status. Se não tinha status, vira NOVO.
+            if (dbData.STATUS_CADASTRO === 'INATIVO') { payload.STATUS_CADASTRO = "ATUALIZADO"; }
+            else if (!dbData.STATUS_CADASTRO) { payload.STATUS_CADASTRO = "NOVO"; }
 
             await salvarNoBanco(finalId, "SISTEMA_VARREDURA", payload);
         }
 
-        // 🔥 PROTOCOLO DO MESTRE: O robô varre o próprio banco para garantir que o Luiz Jorge tem o seu código!
-        if (admin.apps.length > 0) {
+        // 🔥 2. PROTOCOLO DE AUDITORIA DE INATIVOS (Sincronização Reversa)
+        if (admin.apps.length > 0 && arrayClientes.length > 0) {
             try {
-                const mestreRef = await admin.firestore().collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').get();
-                mestreRef.forEach(async (doc) => {
-                    const data = doc.data();
-                    if (data.NOME_CLIENTE && data.NOME_CLIENTE.toUpperCase().includes('LUIZ JORGE')) {
-                        if (data.CODIGO_CLIENTE !== '76.049') {
-                            await admin.firestore().collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').doc(doc.id).set({ CODIGO_CLIENTE: '76.049' }, { merge: true });
+                // Pega todos os Códigos e UCs que estão ATIVOS na iGreen hoje
+                const codigosAtivos = new Set(arrayClientes.map(c => c.CODIGO_CLIENTE).filter(c => c));
+                const ucsAtivas = new Set(arrayClientes.map(c => c.UC).filter(c => c));
+
+                const leadsSnapshot = await admin.firestore().collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').get();
+                
+                leadsSnapshot.forEach(async (doc) => {
+                    const dbLead = doc.data();
+                    
+                    // Condição de inatividade: O cliente tinha Código (já foi da iGreen), mas NÃO está na varredura de hoje
+                    if (dbLead.CODIGO_CLIENTE && dbLead.CODIGO_CLIENTE !== '76.049') {
+                        const sumiuPorCodigo = !codigosAtivos.has(dbLead.CODIGO_CLIENTE);
+                        const sumiuPorUc = dbLead.UC ? !ucsAtivas.has(dbLead.UC) : true;
+                        
+                        if (sumiuPorCodigo && sumiuPorUc && dbLead.STATUS_CADASTRO !== 'INATIVO') {
+                            console.log(`[AUDITORIA] Cliente sumiu da iGreen, movendo para INATIVO: ${dbLead.NOME_CLIENTE}`);
+                            await admin.firestore().collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').doc(doc.id).set({ STATUS_CADASTRO: 'INATIVO' }, { merge: true });
                         }
                     }
                 });
-            } catch(e) { console.error("Erro ao aplicar Coroa do Mestre:", e.message); }
+            } catch(e) { console.error("Erro na Auditoria de Inativos:", e.message); }
         }
 
-        console.log(`[VARREDURA DIÁRIA] ✅ Códigos corrigidos, colunas preenchidas e Protocolo do Mestre executado!\n`);
+        console.log(`[VARREDURA DIÁRIA] ✅ Processo 100% Finalizado!\n`);
     } catch (e) { console.error("Erro Varredura:", e.message); } finally { if (browserIgreen) await browserIgreen.close(); }
 }
 
