@@ -96,7 +96,7 @@ async function varreduraIgreenDiaria() {
         await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.toLowerCase().includes('entrar')); if (btn) btn.click(); });
         await new Promise(r => setTimeout(r, 8000));
 
-        // 🔥 FASE 1: MAPA DE REDE - BUSCA CIRÚRGICA DE IDs
+        // 🔥 FASE 1: MAPA DE REDE - EXTRAÇÃO SNIPER
         console.log(`[VARREDURA DIÁRIA] Acessando Mapa de Rede para identificar Licenciados...`);
         await pageIgreen.goto(IGREEN_REDE_URL, { waitUntil: 'networkidle2', timeout: 30000 });
         await new Promise(r => setTimeout(r, 5000));
@@ -104,36 +104,19 @@ async function varreduraIgreenDiaria() {
 
         let licenciadosDaRede = await pageIgreen.evaluate(() => {
             let idsEncontrados = [];
-            
-            const headers = Array.from(document.querySelectorAll('.MuiDataGrid-columnHeader'));
-            let idField = null;
-            headers.forEach(h => {
-                const text = h.textContent.trim().toLowerCase();
-                if (text === 'id' || text === 'código' || text === 'codigo') {
-                    idField = h.getAttribute('data-field');
-                }
-            });
-
-            document.querySelectorAll('.MuiDataGrid-row').forEach(row => {
-                if (idField) {
-                    const cell = row.querySelector(`[data-field="${idField}"]`);
-                    if (cell) {
-                        const val = cell.textContent.replace(/\D/g, '').trim();
-                        if (val && val.length >= 4) idsEncontrados.push(val);
-                    }
-                } else {
-                    const cols = Array.from(row.querySelectorAll('.MuiDataGrid-cell'));
-                    if (cols.length > 0) {
-                        const possibleId = cols[0].textContent.replace(/\D/g, '').trim();
-                        if (possibleId.length >= 4 && possibleId.length <= 6) idsEncontrados.push(possibleId);
-                    }
+            // Vasculha TODAS as células da tabela
+            document.querySelectorAll('.MuiDataGrid-cell').forEach(cell => {
+                const val = cell.textContent.trim();
+                // Regra Sniper: Só aceita números puros entre 4 a 6 dígitos (ignora com pontos, vírgulas, letras)
+                if (/^\d{4,6}$/.test(val)) {
+                    idsEncontrados.push(val);
                 }
             });
             return [...new Set(idsEncontrados)]; 
         });
 
         if (!licenciadosDaRede || licenciadosDaRede.length === 0) licenciadosDaRede = ['76049'];
-        console.log(`[VARREDURA DIÁRIA] Licenciados Reais identificados: ${licenciadosDaRede.join(', ')}`);
+        console.log(`[VARREDURA DIÁRIA] Licenciados Reais Extraídos: ${licenciadosDaRede.join(', ')}`);
 
         // 🔥 FASE 2: ACESSAR MAPA DE CLIENTES E VARRER UM POR UM
         await pageIgreen.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
@@ -141,29 +124,28 @@ async function varreduraIgreenDiaria() {
         await pageIgreen.evaluate(() => { document.body.style.zoom = "0.5"; }); 
         
         let todosClientes = new Map();
-        let searchInput = await pageIgreen.waitForSelector('input[placeholder*="Buscar"]', { timeout: 10000 });
 
         for (let lic_id of licenciadosDaRede) {
             console.log(`[VARREDURA DIÁRIA] Filtrando clientes do Licenciado ID: ${lic_id}...`);
             
-            // 🧹 A VASSOURA: Limpeza Extrema da barra de pesquisa para não misturar licenciados
+            // 🧹 A VASSOURA ABSOLUTA
             await pageIgreen.evaluate(() => {
                 const input = document.querySelector('input[placeholder*="Buscar"]');
-                if(input) {
+                if (input) {
                     input.value = '';
                     input.dispatchEvent(new Event('input', { bubbles: true }));
-                    input.dispatchEvent(new Event('change', { bubbles: true }));
                 }
             });
-            await new Promise(r => setTimeout(r, 1500)); 
+            await new Promise(r => setTimeout(r, 1000));
             
-            await searchInput.click();
-            await pageIgreen.keyboard.down('Control'); await pageIgreen.keyboard.press('A'); await pageIgreen.keyboard.up('Control');
+            let searchInput = await pageIgreen.waitForSelector('input[placeholder*="Buscar"]', { timeout: 10000 });
+            await searchInput.click({ clickCount: 3 }); 
             await pageIgreen.keyboard.press('Backspace');
+            await new Promise(r => setTimeout(r, 500));
             
             await searchInput.type(lic_id, { delay: 100 }); 
             await pageIgreen.keyboard.press('Enter');
-            await new Promise(r => setTimeout(r, 8000)); // Tempo reforçado para a iGreen filtrar corretamente
+            await new Promise(r => setTimeout(r, 7000)); // Tempo para iGreen atualizar a lista
 
             for (let volta = 0; volta < 4; volta++) { 
                 const posicoesScroll = [0, 600, 1200, 9999];
@@ -263,7 +245,6 @@ async function varreduraIgreenDiaria() {
             if (cli.UC && cli.UC.length >= 4 && (!dbData.UC || dbData.UC.length < 4)) payload.UC = cli.UC;
             if (cli.DISTRIBUIDORA && cli.DISTRIBUIDORA.length > 2 && (!dbData.DISTRIBUIDORA || dbData.DISTRIBUIDORA.length < 2)) payload.DISTRIBUIDORA = cli.DISTRIBUIDORA;
             
-            // O PODER DO MESTRE: Se não tiver dono ou vier com defeito, é do Luiz Jorge!
             if (cli.DONO_REDE) payload.DONO_REDE = cli.DONO_REDE;
             else if (!dbData.DONO_REDE) payload.DONO_REDE = '76049';
 
@@ -273,7 +254,6 @@ async function varreduraIgreenDiaria() {
             await salvarNoBanco(finalId, "SISTEMA_VARREDURA", payload);
         }
 
-        // 🔥 AUDITORIA DE INATIVOS (Sincronização Reversa)
         if (admin.apps.length > 0 && arrayClientes.length > 0) {
             try {
                 const codigosAtivos = new Set(arrayClientes.map(c => c.CODIGO_CLIENTE).filter(c => c));
