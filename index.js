@@ -105,7 +105,6 @@ async function varreduraIgreenDiaria() {
         let licenciadosDaRede = await pageIgreen.evaluate(() => {
             let idsEncontrados = [];
             
-            // Procura qual é a coluna exata do "ID" ou "Código"
             const headers = Array.from(document.querySelectorAll('.MuiDataGrid-columnHeader'));
             let idField = null;
             headers.forEach(h => {
@@ -123,7 +122,6 @@ async function varreduraIgreenDiaria() {
                         if (val && val.length >= 4) idsEncontrados.push(val);
                     }
                 } else {
-                    // Backup: Pega sempre a primeira coluna se o cabeçalho falhar
                     const cols = Array.from(row.querySelectorAll('.MuiDataGrid-cell'));
                     if (cols.length > 0) {
                         const possibleId = cols[0].textContent.replace(/\D/g, '').trim();
@@ -147,9 +145,25 @@ async function varreduraIgreenDiaria() {
 
         for (let lic_id of licenciadosDaRede) {
             console.log(`[VARREDURA DIÁRIA] Filtrando clientes do Licenciado ID: ${lic_id}...`);
-            await searchInput.click({ clickCount: 3 }); await pageIgreen.keyboard.press('Backspace');
-            await searchInput.type(lic_id); await pageIgreen.keyboard.press('Enter');
-            await new Promise(r => setTimeout(r, 6000)); 
+            
+            // 🧹 A VASSOURA: Limpeza Extrema da barra de pesquisa para não misturar licenciados
+            await pageIgreen.evaluate(() => {
+                const input = document.querySelector('input[placeholder*="Buscar"]');
+                if(input) {
+                    input.value = '';
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            });
+            await new Promise(r => setTimeout(r, 1500)); 
+            
+            await searchInput.click();
+            await pageIgreen.keyboard.down('Control'); await pageIgreen.keyboard.press('A'); await pageIgreen.keyboard.up('Control');
+            await pageIgreen.keyboard.press('Backspace');
+            
+            await searchInput.type(lic_id, { delay: 100 }); 
+            await pageIgreen.keyboard.press('Enter');
+            await new Promise(r => setTimeout(r, 8000)); // Tempo reforçado para a iGreen filtrar corretamente
 
             for (let volta = 0; volta < 4; volta++) { 
                 const posicoesScroll = [0, 600, 1200, 9999];
@@ -240,7 +254,6 @@ async function varreduraIgreenDiaria() {
 
             const payload = { NOME_CLIENTE: cli.NOME_CLIENTE, CPF: cli.CPF };
             
-            // Mantém os códigos originais (não sobreescreve tudo com 76.049)
             if (cli.CODIGO_CLIENTE && cli.CODIGO_CLIENTE !== "76.049" && cli.CODIGO_CLIENTE !== "76049") { 
                 payload.CODIGO_CLIENTE = cli.CODIGO_CLIENTE; 
             }
@@ -250,7 +263,9 @@ async function varreduraIgreenDiaria() {
             if (cli.UC && cli.UC.length >= 4 && (!dbData.UC || dbData.UC.length < 4)) payload.UC = cli.UC;
             if (cli.DISTRIBUIDORA && cli.DISTRIBUIDORA.length > 2 && (!dbData.DISTRIBUIDORA || dbData.DISTRIBUIDORA.length < 2)) payload.DISTRIBUIDORA = cli.DISTRIBUIDORA;
             
+            // O PODER DO MESTRE: Se não tiver dono ou vier com defeito, é do Luiz Jorge!
             if (cli.DONO_REDE) payload.DONO_REDE = cli.DONO_REDE;
+            else if (!dbData.DONO_REDE) payload.DONO_REDE = '76049';
 
             if (dbData.STATUS_CADASTRO === 'INATIVO') { payload.STATUS_CADASTRO = "ATUALIZADO"; }
             else if (!dbData.STATUS_CADASTRO) { payload.STATUS_CADASTRO = "NOVO"; }
