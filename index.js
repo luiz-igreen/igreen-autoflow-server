@@ -46,11 +46,22 @@ const TEXTOS = {
     T_FALHA_EQUATORIAL_PEDE_FATURA: "⚠️ Distribuidora inacessível. Por favor, envie a fatura manualmente aqui."
 };
 
-const CHROME_ARGS = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-zygote", "--ignore-certificate-errors"];
+const CHROME_ARGS = [
+    "--no-sandbox", 
+    "--disable-setuid-sandbox", 
+    "--disable-dev-shm-usage", 
+    "--disable-gpu", 
+    "--no-zygote", 
+    "--ignore-certificate-errors"
+];
 
 async function enviarMensagem(phone, message) {
     const numLimpo = String(phone).replace(/\D/g, ''); 
-    try { await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, { phone: numLimpo, message: String(message) }, { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN, 'Content-Type': 'application/json' } }); } catch (e) {}
+    try { 
+        await axios.post(`https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`, 
+        { phone: numLimpo, message: String(message) }, 
+        { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN, 'Content-Type': 'application/json' } }); 
+    } catch (e) {}
 }
 
 async function salvarNoBanco(docId, phone, dadosExtras) {
@@ -78,7 +89,7 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
     } catch (error) { throw new Error("Falha ao ler fatura."); }
 }
 
-// 🔥 VARREDURA MULTI-NÍVEL COM RECARREGAMENTO FORÇADO
+// 🔥 O MOTOR GLOBAL E CORRETO DO MESTRE (PESQUISA ID POR ID)
 async function varreduraIgreenDiaria() {
     let browserIgreen = null;
     try {
@@ -96,8 +107,8 @@ async function varreduraIgreenDiaria() {
         await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.toLowerCase().includes('entrar')); if (btn) btn.click(); });
         await new Promise(r => setTimeout(r, 8000));
 
-        // 🔥 FASE 1: MAPA DE REDE - EXTRAÇÃO DOS IDs
-        console.log(`[VARREDURA DIÁRIA] Acessando Mapa de Rede para identificar Licenciados...`);
+        // 🔥 FASE 1: APENAS COPIAR A LISTA DE IDs DO MAPA DE REDE
+        console.log(`[VARREDURA DIÁRIA] Acessando Mapa de Rede para extrair lista de IDs...`);
         await pageIgreen.goto(IGREEN_REDE_URL, { waitUntil: 'networkidle2', timeout: 30000 });
         await new Promise(r => setTimeout(r, 5000));
         await pageIgreen.evaluate(() => { document.body.style.zoom = "0.5"; }); 
@@ -106,29 +117,32 @@ async function varreduraIgreenDiaria() {
             let idsEncontrados = [];
             document.querySelectorAll('.MuiDataGrid-cell').forEach(cell => {
                 const val = cell.textContent.trim();
+                // Procura números puros de 4 a 6 dígitos (IDs oficiais)
                 if (/^\d{4,6}$/.test(val)) idsEncontrados.push(val);
             });
             return [...new Set(idsEncontrados)]; 
         });
 
         if (!licenciadosDaRede || licenciadosDaRede.length === 0) licenciadosDaRede = ['76049'];
-        console.log(`[VARREDURA DIÁRIA] Licenciados Identificados: ${licenciadosDaRede.join(', ')}`);
+        console.log(`[VARREDURA DIÁRIA] IDs encontrados para pesquisar: ${licenciadosDaRede.join(', ')}`);
 
-        // 🔥 FASE 2: BUSCA ISOLADA POR LICENCIADO
+        // 🔥 FASE 2: RELATÓRIO DE CLIENTES - O PROCESSO HUMANO (Digita, Pesquisa, Extrai)
         let todosClientes = new Map();
 
         for (let lic_id of licenciadosDaRede) {
-            console.log(`[VARREDURA DIÁRIA] Recarregando página para puxar os clientes do Licenciado: ${lic_id}...`);
+            console.log(`[VARREDURA DIÁRIA] Recarregando a página e pesquisando o ID: ${lic_id}...`);
             
+            // F5 - GARANTE QUE A TELA ESTÁ 100% LIMPA DE PESQUISAS ANTERIORES
             await pageIgreen.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
-            await new Promise(r => setTimeout(r, 4000));
+            await new Promise(r => setTimeout(r, 5000));
             await pageIgreen.evaluate(() => { document.body.style.zoom = "0.5"; }); 
             
+            // Digita o ID do Licenciado na barra e dá Enter
             let searchInput = await pageIgreen.waitForSelector('input[placeholder*="Buscar"]', { timeout: 10000 });
             await searchInput.click();
             await pageIgreen.keyboard.type(lic_id, { delay: 100 }); 
             await pageIgreen.keyboard.press('Enter');
-            await new Promise(r => setTimeout(r, 8000)); 
+            await new Promise(r => setTimeout(r, 8000)); // Espera a iGreen processar a lista
 
             for (let volta = 0; volta < 4; volta++) { 
                 const posicoesScroll = [0, 600, 1200, 9999];
@@ -136,7 +150,8 @@ async function varreduraIgreenDiaria() {
                     await pageIgreen.evaluate((p) => { const s = document.querySelector('.MuiDataGrid-virtualScroller'); if(s) { s.scrollLeft = p; s.dispatchEvent(new Event('scroll')); } }, pos);
                     await new Promise(r => setTimeout(r, 1200));
 
-                    let extraidosParciais = await pageIgreen.evaluate((dono_atual) => {
+                    // Extrai apenas as linhas que apareceram para ESTE licenciado (lic_id)
+                    let extraidosParciais = await pageIgreen.evaluate((dono_pesquisado) => {
                         let m = {};
                         const headers = Array.from(document.querySelectorAll('.MuiDataGrid-columnHeader'));
                         let mapaColunas = { codigo: null, nome: null, celular: null, instalacao: null, distribuidora: null };
@@ -144,7 +159,8 @@ async function varreduraIgreenDiaria() {
                         headers.forEach(h => {
                             const texto = h.textContent.trim().toLowerCase();
                             const field = h.getAttribute('data-field');
-                            if ((texto.includes('código') || texto.includes('codigo') || texto === 'cód') && !texto.includes('licenciado')) mapaColunas.codigo = field;
+                            // Lê o Código do CLIENTE
+                            if ((texto === 'código' || texto === 'codigo' || texto === 'cód') && !texto.includes('licencia')) mapaColunas.codigo = field;
                             if (texto === 'nome' || texto === 'cliente' || texto.includes('nome do cliente')) mapaColunas.nome = field;
                             if (texto === 'celular' || texto === 'telefone') mapaColunas.celular = field;
                             if (texto.includes('instala')) mapaColunas.instalacao = field;
@@ -176,7 +192,8 @@ async function varreduraIgreenDiaria() {
                             if(uc) uc = uc.replace(/\D/g, '').trim();
 
                             let uniqueKey = codigo || uc || cpf;
-                            if (uniqueKey) m[uniqueKey] = { cpf, nasc, codigo, nome, tel, uc, dist, dono_rede: dono_atual };
+                            // 🔥 O ROBÔ GRAVA O ID QUE FOI DIGITADO NA BARRA COMO DONO!
+                            if (uniqueKey) m[uniqueKey] = { cpf, nasc, codigo, nome, tel, uc, dist, dono_rede: dono_pesquisado };
                         });
                         return m;
                     }, lic_id);
@@ -202,6 +219,7 @@ async function varreduraIgreenDiaria() {
         const arrayClientes = Array.from(todosClientes.values());
         console.log(`[VARREDURA DIÁRIA] Sucesso Total! ${arrayClientes.length} propriedades capturadas corretamente.`);
         
+        // 4. INJETA NO BANCO COM A ETIQUETA DEFINITIVA
         for (let cli of arrayClientes) {
             let finalId = cli.CODIGO_CLIENTE || cli.UC || cli.CPF;
             let dbData = {};
@@ -364,103 +382,4 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
                             for (let i = 0; i < 15; i++) { await new Promise(r => setTimeout(r, 1000)); try { const arquivosTmp = fs.readdirSync('/tmp').filter(f => f.endsWith('.pdf')); for (let arq of arquivosTmp) { if (arq !== path.basename(caminhoFaturaLocal) && arq !== 'ultima_fatura.pdf') { fs.renameSync(path.join('/tmp', arq), caminhoFaturaLocal); pdfCapturado = true; break; } } } catch(e){} if (pdfCapturado || fs.existsSync(caminhoFaturaLocal)) { pdfCapturado = true; break; } }
                             if (pdfCapturado) break; 
                             try { const isPDF = await pageEq.evaluate(() => document.contentType === 'application/pdf' || document.querySelector('embed[type="application/pdf"]') !== null); if (isPDF || pageEq.url().toLowerCase().includes('.pdf')) { const bufferArray = await pageEq.evaluate(async (url) => { const res = await fetch(url); const buf = await res.arrayBuffer(); return Array.from(new Uint8Array(buf)); }, pageEq.url()); fs.writeFileSync(caminhoFaturaLocal, Buffer.from(bufferArray)); pdfCapturado = true; break; } } catch(e){}
-                        } else { await pageEq.mouse.click(alvoFatura.x, alvoFatura.y + 60); await pageEq.evaluate(() => { Array.from(document.querySelectorAll('button, a, i, svg')).filter(e => e.offsetParent !== null).forEach(b => { try { b.click(); } catch(e){} }); }); }
-                    } else { break; }
-                }
-                if (!pdfCapturado) {
-                    await new Promise(r => setTimeout(r, 6000)); const abas = await browserEquatorial.pages();
-                    for (let aba of abas) { try { const isPDF = await aba.evaluate(() => document.contentType === 'application/pdf' || document.querySelector('embed[type="application/pdf"]') !== null); if (isPDF || aba.url().toLowerCase().includes('.pdf')) { const bufferArray = await aba.evaluate(async (url) => { const res = await fetch(url); const buf = await res.arrayBuffer(); return Array.from(new Uint8Array(buf)); }, aba.url()); fs.writeFileSync(caminhoFaturaLocal, Buffer.from(bufferArray)); if (fs.existsSync(caminhoFaturaLocal)) { pdfCapturado = true; break; } } else { const textoAba = await aba.evaluate(() => document.body.innerText.toLowerCase()); if (textoAba.includes('total a pagar') || textoAba.includes('referente a') || textoAba.includes('conta de energia') || textoAba.includes('vencimento')) { await aba.emulateMediaType('screen'); await aba.pdf({ path: caminhoFaturaLocal, format: 'A4', printBackground: true }); if (fs.existsSync(caminhoFaturaLocal)) { pdfCapturado = true; break; } } } } catch(e){} }
-                }
-                if (!pdfCapturado || !fs.existsSync(caminhoFaturaLocal) || fs.statSync(caminhoFaturaLocal).size < 15000) throw new Error("FALHA_PDF_EQUATORIAL");
-                await browserEquatorial.close().catch(()=>{}); if (proxyUrlForPuppeteer) await closeAnonymizedProxy(proxyUrlForPuppeteer, true).catch(()=>{}); break; 
-            } catch (err) { if (browserEquatorial) await browserEquatorial.close().catch(()=>{}); if (proxyUrlForPuppeteer) await closeAnonymizedProxy(proxyUrlForPuppeteer, true).catch(()=>{}); await new Promise(r => setTimeout(r, 3000)); }
-        } 
-        if (!pdfCapturado || !fs.existsSync(caminhoFaturaLocal)) throw new Error("FALHA_PDF_EQUATORIAL");
-        try { fs.copyFileSync(caminhoFaturaLocal, path.join('/tmp', 'ultima_fatura.pdf')); } catch (e) {}
-
-        const pages = await browserIgreen.pages(); const pageIgreenFinal = pages[pages.length - 1]; await pageIgreenFinal.bringToFront();
-        try { await pageIgreenFinal.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não') || el.textContent.includes('Fechar')); if(btn) btn.click(); }); } catch(e){}
-        let searchDevolutiva = await pageIgreenFinal.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
-        await searchDevolutiva.click({ clickCount: 3 }); await pageIgreenFinal.keyboard.press('Backspace'); await searchDevolutiva.type(cpf, { delay: 100 }); await pageIgreenFinal.keyboard.press('Enter'); await new Promise(r => setTimeout(r, 2000));
-        await pageIgreenFinal.evaluate(() => { const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller'); scrollers.forEach(s => s.scrollLeft = 9999); }); await new Promise(r => setTimeout(r, 1500));
-        await pageIgreenFinal.evaluate((cpfBusca) => { const linhas = Array.from(document.querySelectorAll('tr, [role="row"], div[class*="MuiDataGrid-row"]')); const linhaExata = linhas.find(row => row.textContent.replace(/\D/g, '').includes(cpfBusca)); if(linhaExata) { const btnTresPontinhos = Array.from(linhaExata.querySelectorAll('button, div')).find(el => el.textContent.trim() === '...'); if(btnTresPontinhos) btnTresPontinhos.click(); } }, cpf);
-        await new Promise(r => setTimeout(r, 2000)); await pageIgreenFinal.evaluate(() => { const btn = Array.from(document.querySelectorAll('span, li, div')).find(el => el.textContent.includes('Devolutivas')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 3000));
-        for (let clique = 0; clique < 3; clique++) { await pageIgreenFinal.evaluate(() => { const botoesAcao = Array.from(document.querySelectorAll('button, span, a, div')).filter(el => el.textContent.trim() === 'Realizar ação' || el.textContent.includes('Realizar ação')); const btn = botoesAcao.filter(b => b.offsetParent !== null).pop() || botoesAcao[botoesAcao.length - 1]; if(btn) { btn.scrollIntoView({behavior: 'smooth', block: 'center'}); btn.click(); } }); await new Promise(r => setTimeout(r, 3000)); }
-        const inputUploads = await pageIgreenFinal.$$('input[type="file"]');
-        if (inputUploads.length > 0) { for (let input of inputUploads) { try { await input.uploadFile(caminhoFaturaLocal); await pageIgreenFinal.evaluate((el) => el.dispatchEvent(new Event('change', { bubbles: true })), input); } catch(e){} } } else { throw new Error("O formulário de anexo da iGreen está bloqueado ou invisível."); }
-        await new Promise(r => setTimeout(r, 3000)); await pageIgreenFinal.evaluate(() => { const btnSalvar = Array.from(document.querySelectorAll('button')).find(el => el.textContent.toUpperCase().includes('ENVIAR') || el.textContent.toUpperCase().includes('SALVAR') || el.textContent.toUpperCase().includes('CONCLUIR')); if (btnSalvar) btnSalvar.click(); }); await new Promise(r => setTimeout(r, 5000)); 
-        if (browserIgreen) await browserIgreen.close().catch(()=>{}); if (fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal);
-        if(!isAutomated) await enviarMensagem(phone, TEXTOS.T_RESGATE_SUCESSO);
-    } catch (e) { 
-        if (browserIgreen) await browserIgreen.close().catch(()=>{}); if (browserEquatorial) await browserEquatorial.close().catch(()=>{}); if (fs.existsSync(caminhoFaturaLocal)) fs.unlinkSync(caminhoFaturaLocal).catch(()=>{});
-        if(!isAutomated) {
-            if (e.message === "ERRO_LOGIN_IGREEN") { await enviarMensagem(phone, "⚠️ *Falha na iGreen*"); } 
-            else if (e.message === "LINHA_CLIENTE_NAO_ENCONTRADA") { await enviarMensagem(phone, "⚠️ *Cliente Não Encontrado*"); } 
-            else if (e.message === "FALTAM_DADOS_ESSENCIAIS") { await enviarMensagem(phone, "⚠️ *Dados Incompletos*"); } 
-            else { memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA_DEVOLUTIVA_MANUAL', cpfAlvo: cpf }); await enviarMensagem(phone, TEXTOS.T_FALHA_EQUATORIAL_PEDE_FATURA); }
-        }
-    }
-}
-
-function iniciarMotorRecorrente() {
-    setInterval(async () => {
-        await varreduraIgreenDiaria();
-        if (admin.apps.length > 0) {
-            try {
-                const snapshot = await admin.firestore().collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').where('STATUS_CADASTRO', '==', 'PENDENTE_MEDIA').get();
-                snapshot.forEach(async (doc) => {
-                    const lead = doc.data(); const ultimaVerificacao = lead.DATA_ULTIMA_ATUALIZACAO ? lead.DATA_ULTIMA_ATUALIZACAO.toDate() : new Date();
-                    const diasPassados = Math.floor((new Date() - ultimaVerificacao) / (1000 * 60 * 60 * 24));
-                    if (diasPassados >= 15) { fluxoResgateDevolutiva(lead.NOME_CLIENTE, lead.TELEFONE_REMETENTE, lead.CPF, lead.DATA_NASCIMENTO, true); await salvarNoBanco(doc.id, lead.TELEFONE_REMETENTE, { STATUS_CADASTRO: 'PENDENTE_MEDIA' }); }
-                });
-            } catch (e) { console.error("Erro no Cron:", e.message); }
-        }
-    }, 86400000); 
-    setTimeout(() => { varreduraIgreenDiaria(); }, 15000);
-}
-iniciarMotorRecorrente();
-
-app.post('/webhook/igreen', async (req, res) => {
-    res.status(200).send("OK"); const data = req.body; if (data.fromMe) return;
-    const phone = data.phone; const textoIn = data.text?.message?.trim() || ""; const txtL = textoIn.toLowerCase();
-    const temMidia = !!(data.image?.imageUrl || data.document?.documentUrl); const mediaUrl = data.image?.imageUrl || data.document?.documentUrl; const mimeType = data.document ? 'application/pdf' : 'image/jpeg';
-    if (['0', 'cancelar', 'menu'].includes(txtL)) { memoriaEstado.set(phone, { STATUS_CADASTRO: 'NOVO' }); await enviarMensagem(phone, "🔄 Operação cancelada.\n\n" + TEXTOS.T_MENU); return; }
-    let mem = memoriaEstado.get(phone) || { STATUS_CADASTRO: 'NOVO' };
-    if (mem.STATUS_CADASTRO === 'NOVO') {
-        if (txtL === '1') { memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA_FLUXO_UNIVERSAL' }); await enviarMensagem(phone, TEXTOS.T01); return; }
-        if (txtL === '2') { memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_FATURA_SOH_BANCO' }); await enviarMensagem(phone, TEXTOS.T_GUARDAR_START); return; }
-        if (txtL === '3') { memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DADOS_DEVOLUTIVA' }); await enviarMensagem(phone, TEXTOS.T_RESGATE_START); return; }
-        if (txtL === '4') { memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_UC_DOC' }); await enviarMensagem(phone, TEXTOS.T_START_OPCAO_4); return; }
-        await enviarMensagem(phone, TEXTOS.T_MENU); return;
-    }
-    switch (mem.STATUS_CADASTRO) {
-        case 'AGUARDANDO_FATURA_FLUXO_UNIVERSAL': { if (temMidia) { memoriaEstado.delete(phone); fluxoProcessamentoUniversal(mediaUrl, mimeType, phone); } else { await enviarMensagem(phone, "⚠️ Aguardando foto/PDF da fatura."); } break; }
-        case 'AGUARDANDO_FATURA_DEVOLUTIVA_MANUAL': { if (temMidia) { const cpfAlvo = mem.cpfAlvo; memoriaEstado.delete(phone); fluxoProcessamentoUniversal(mediaUrl, mimeType, phone, cpfAlvo); } else { await enviarMensagem(phone, "⚠️ Envie a fatura."); } break; }
-        case 'AGUARDANDO_FATURA_SOH_BANCO': { if (temMidia) { await enviarMensagem(phone, TEXTOS.T_GUARDAR_START); try { const dadosIA = await analisarFaturaGemini(mediaUrl, mimeType); const docId = dadosIA.UC ? dadosIA.UC.replace(/\D/g, '') : `SEM_UC_${Date.now()}`; await salvarNoBanco(docId, phone, { ...dadosIA, LINK_FATURA: mediaUrl, STATUS_CADASTRO: "AGUARDANDO_TELEFONE" }); memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_TELEFONE', docId }); await enviarMensagem(phone, TEXTOS.T_PEDIR_TELEFONE.replace('${nome}', dadosIA.NOME_CLIENTE).replace('${uc}', dadosIA.UC)); } catch (e) { await enviarMensagem(phone, "❌ Erro na análise."); } } else { await enviarMensagem(phone, "⚠️ Aguardando fatura."); } break; }
-        case 'AGUARDANDO_TELEFONE': { if (textoIn.length >= 8) { await salvarNoBanco(mem.docId, phone, { TELEFONE: textoIn, STATUS_CADASTRO: "AGUARDANDO_EMAIL" }); memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_EMAIL', docId: mem.docId }); await enviarMensagem(phone, TEXTOS.T_PEDIR_EMAIL); } else { await enviarMensagem(phone, "⚠️ Digite um telefone válido."); } break; }
-        case 'AGUARDANDO_EMAIL': { if (textoIn.includes('@')) { await salvarNoBanco(mem.docId, phone, { EMAIL: textoIn, STATUS_CADASTRO: "PENDENTE_DOCUMENTOS" }); await enviarMensagem(phone, TEXTOS.T_FIM_PRE_CADASTRO); memoriaEstado.delete(phone); } else { await enviarMensagem(phone, "⚠️ Digite um e-mail."); } break; }
-        case 'AGUARDANDO_DADOS_DEVOLUTIVA': { if (textoIn.length >= 3) { await enviarMensagem(phone, TEXTOS.T_RESGATE_BUSCANDO); memoriaEstado.delete(phone); setTimeout(() => { fluxoResgateDevolutiva(textoIn, phone, null, null, false); }, 2000); } else { await enviarMensagem(phone, "⚠️ Digite o Nome/ID."); } break; }
-        case 'AGUARDANDO_UC_DOC': { if (textoIn.length >= 4) { const ucLimpa = textoIn.replace(/\D/g, ''); const leadExistente = await buscarNoBanco(ucLimpa); if (leadExistente) { if (!leadExistente.TELEFONE) { memoriaEstado.set(phone, { STATUS_CADASTRO: 'OP4_PEDIR_TELEFONE', docId: ucLimpa }); await enviarMensagem(phone, TEXTOS.T_OP4_FALTANDO_TEL); } else if (!leadExistente.EMAIL) { memoriaEstado.set(phone, { STATUS_CADASTRO: 'OP4_PEDIR_EMAIL', docId: ucLimpa }); await enviarMensagem(phone, TEXTOS.T_OP4_FALTANDO_MAIL); } else { memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: ucLimpa }); await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE); } } else { memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: ucLimpa }); await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE); } } else { await enviarMensagem(phone, "⚠️ Digite a UC."); } break; }
-        case 'OP4_PEDIR_TELEFONE': { if (textoIn.length >= 8) { await salvarNoBanco(mem.docId, phone, { TELEFONE: textoIn }); const leadAtualizadoTel = await buscarNoBanco(mem.docId); if (leadAtualizadoTel && !leadAtualizadoTel.EMAIL) { memoriaEstado.set(phone, { STATUS_CADASTRO: 'OP4_PEDIR_EMAIL', docId: mem.docId }); await enviarMensagem(phone, TEXTOS.T_OP4_FALTANDO_MAIL); } else { memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: mem.docId }); await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE); } } else { await enviarMensagem(phone, "⚠️ Telefone inválido."); } break; }
-        case 'OP4_PEDIR_EMAIL': { if (textoIn.includes('@')) { await salvarNoBanco(mem.docId, phone, { EMAIL: textoIn }); memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_FRENTE', docId: mem.docId }); await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_FRENTE); } else { await enviarMensagem(phone, "⚠️ E-mail inválido."); } break; }
-        case 'AGUARDANDO_DOC_FRENTE': { if (temMidia) { await salvarNoBanco(mem.docId, phone, { LINK_DOC_FRENTE: mediaUrl }); memoriaEstado.set(phone, { STATUS_CADASTRO: 'AGUARDANDO_DOC_VERSO', docId: mem.docId }); await enviarMensagem(phone, TEXTOS.T_PEDIR_FOTO_DOC_VERSO); } else { await enviarMensagem(phone, "⚠️ Envie a FRENTE."); } break; }
-        case 'AGUARDANDO_DOC_VERSO': { if (temMidia) { await salvarNoBanco(mem.docId, phone, { LINK_DOC_VERSO: mediaUrl, STATUS_CADASTRO: "CONCLUIDO_COM_DOCS" }); await enviarMensagem(phone, TEXTOS.T_DOCS_RECEBIDOS); memoriaEstado.delete(phone); } else { await enviarMensagem(phone, "⚠️ Envie o VERSO."); } break; }
-    }
-});
-
-app.get('/tela-robo', (req, res) => { const file = path.join('/tmp', 'debug_tela.png'); if (fs.existsSync(file)) { res.contentType('image/png'); res.sendFile(path.resolve(file)); } else { res.status(404).send('Sem imagem'); } });
-app.get('/ultima-fatura', (req, res) => { const file = path.join('/tmp', 'ultima_fatura.pdf'); if (fs.existsSync(file)) { res.contentType('application/pdf'); res.sendFile(path.resolve(file)); } else { res.status(404).send('Sem fatura'); } });
-
-const PORT = process.env.PORT || 10000;
-async function validateBrowser() { 
-    try { 
-        const browser = await puppeteer.launch({ headless: true, args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() }); 
-        await browser.close(); 
-        return true; 
-    } catch (e) { process.exit(1); } 
-}
-
-app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindado!'));
-validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Porta ${PORT}`)); });
-
-// --- FIM DO CÓDIGO ---
+                        } else { await pageEq.mouse.click(alvoFatura.x, alvoFatura.y + 60); await pageEq.evaluate(() => { Array.from
