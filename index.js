@@ -49,7 +49,7 @@
             const [loading, setLoading] = useState(true);
             const [searchTerm, setSearchTerm] = useState("");
             const [leadToDelete, setLeadToDelete] = useState(null);
-            const [activeTab, setActiveTab] = useState('TODOS'); // 🔥 NOVA ABA ATIVA
+            const [activeTab, setActiveTab] = useState('TODOS'); 
 
             useEffect(() => {
                 auth.signInAnonymously().catch(console.error);
@@ -86,25 +86,20 @@
                 return date.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
             };
 
-            // 🔥 SEPARAÇÃO DE DADOS MULTI-NÍVEL
             const leadsReais = leads.filter(l => !String(l.id || l.TELEFONE || "").toLowerCase().includes("group"));
             
-            // Pega todos os códigos de licenciados únicos para gerar os botões
             const uniqueDonos = useMemo(() => {
                 const donos = leadsReais.map(l => l.DONO_REDE).filter(Boolean);
                 return [...new Set(donos)].sort();
             }, [leadsReais]);
 
-            // Filtra os clientes da aba atual
             const filtradosTab = leadsReais.filter(l => activeTab === 'TODOS' || l.DONO_REDE === activeTab);
             
-            // Filtra pela barra de pesquisa
             const filtradosBusca = filtradosTab.filter(l => {
                 return (l.NOME_CLIENTE || "").toLowerCase().includes(searchTerm.toLowerCase()) || 
                 (l.TELEFONE || "").includes(searchTerm) || (l.UC || "").includes(searchTerm) || (l.CODIGO_CLIENTE || "").includes(searchTerm)
             });
 
-            // Recalcula KPIs baseados apenas na aba clicada
             const totalGeral = filtradosTab.length;
             const totalCompletos = filtradosTab.filter(l => l.LINK_FATURA && l.LINK_DOC_FRENTE && l.STATUS_CADASTRO !== 'INATIVO').length;
             const totalPendentes = totalGeral - totalCompletos;
@@ -151,7 +146,6 @@
                         </div>
                     </header>
 
-                    {/* 🔥 BOTÕES DE ABAS (TABS) */}
                     <div className="max-w-[1800px] mx-auto flex space-x-2 mb-4 overflow-x-auto pb-2">
                         <button onClick={() => setActiveTab('TODOS')} className={`px-5 py-2 rounded-xl font-bold text-xs shadow-sm transition-all whitespace-nowrap ${activeTab === 'TODOS' ? 'bg-slate-800 text-white shadow-slate-300' : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'}`}>
                             <i className="fas fa-globe mr-2"></i> VISÃO GERAL (Todos)
@@ -267,4 +261,4 @@
         root.render(<App />);
     </script>
 </body>
-</html>
+</html>    
