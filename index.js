@@ -472,4 +472,11 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 });
 
-app.get('/tela-robo', (req, res) => { const file = path.join('/tmp', 'debug_tela.png'); if (fs.existsSync(    
+app.get('/tela-robo', (req, res) => { const file = path.join('/tmp', 'debug_tela.png'); if (fs.existsSync(file)) { res.contentType('image/png'); res.sendFile(path.resolve(file)); } else { res.status(404).send('Sem imagem'); } });
+app.get('/ultima-fatura', (req, res) => { const file = path.join('/tmp', 'ultima_fatura.pdf'); if (fs.existsSync(file)) { res.contentType('application/pdf'); res.sendFile(path.resolve(file)); } else { res.status(404).send('Sem fatura'); } });
+const PORT = process.env.PORT || 10000;
+async function validateBrowser() { try { const browser = await puppeteer.launch({ headless: true, args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() }); await browser.close(); return true; } catch (e) { process.exit(1); } }
+app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindado!'));
+validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Porta ${PORT}`)); });
+
+// --- FIM DO CÓDIGO ---
