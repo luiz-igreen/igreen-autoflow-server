@@ -89,7 +89,7 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
     } catch (error) { throw new Error("Falha ao ler fatura."); }
 }
 
-// 🔥 O MOTOR GLOBAL E CORRETO DO MESTRE (PESQUISA ID POR ID)
+// 🔥 O MOTOR GLOBAL (LÓGICA EXATA DO MESTRE)
 async function varreduraIgreenDiaria() {
     let browserIgreen = null;
     try {
@@ -126,28 +126,34 @@ async function varreduraIgreenDiaria() {
         if (!licenciadosDaRede || licenciadosDaRede.length === 0) licenciadosDaRede = ['76049'];
         console.log(`[VARREDURA DIÁRIA] IDs encontrados para pesquisar: ${licenciadosDaRede.join(', ')}`);
 
-        // 🔥 FASE 2: RELATÓRIO DE CLIENTES - O PROCESSO HUMANO (Digita, Pesquisa, Extrai)
+        // 🔥 FASE 2: MAPA DE CLIENTES - O PROCESSO HUMANO (Digita ID por ID, Pesquisa, Extrai)
+        console.log(`[VARREDURA DIÁRIA] Acessando Mapa de Clientes...`);
+        await pageIgreen.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await new Promise(r => setTimeout(r, 5000));
+        await pageIgreen.evaluate(() => { document.body.style.zoom = "0.5"; }); 
+
         let todosClientes = new Map();
 
         for (let lic_id of licenciadosDaRede) {
-            console.log(`[VARREDURA DIÁRIA] Recarregando a página e pesquisando o ID: ${lic_id}...`);
+            console.log(`[VARREDURA DIÁRIA] Limpando a barra e pesquisando o ID Licenciado: ${lic_id}...`);
             
-            // F5 - GARANTE QUE A TELA ESTÁ 100% LIMPA DE PESQUISAS ANTERIORES
-            await pageIgreen.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
-            await new Promise(r => setTimeout(r, 5000));
-            await pageIgreen.evaluate(() => { document.body.style.zoom = "0.5"; }); 
-            
-            // Digita o ID do Licenciado na barra e dá Enter
             let searchInput = await pageIgreen.waitForSelector('input[placeholder*="Buscar"]', { timeout: 10000 });
-            await searchInput.click();
-            await pageIgreen.keyboard.type(lic_id, { delay: 100 }); 
+            
+            // 🧹 A VASSOURA PERFEITA: Clica 3x (seleciona tudo) e apaga!
+            await searchInput.click({ clickCount: 3 });
+            await pageIgreen.keyboard.press('Backspace');
+            await new Promise(r => setTimeout(r, 1000));
+            
+            // Digita o ID limpo e dá Enter
+            await searchInput.type(lic_id, { delay: 100 }); 
             await pageIgreen.keyboard.press('Enter');
-            await new Promise(r => setTimeout(r, 8000)); // Espera a iGreen processar a lista
+            await new Promise(r => setTimeout(r, 8000)); // Espera 8s a iGreen atualizar a lista do Licenciado
 
-            for (let volta = 0; volta < 4; volta++) { 
-                const posicoesScroll = [0, 600, 1200, 9999];
+            // Loop para descer a página do Licenciado e ler todos os clientes DELE
+            for (let volta = 0; volta < 5; volta++) { 
+                const posicoesScroll = [0, 600, 1200, 1800, 9999];
                 for (let pos of posicoesScroll) {
-                    await pageIgreen.evaluate((p) => { const s = document.querySelector('.MuiDataGrid-virtualScroller'); if(s) { s.scrollLeft = p; s.dispatchEvent(new Event('scroll')); } }, pos);
+                    await pageIgreen.evaluate((p) => { const s = document.querySelector('.MuiDataGrid-virtualScroller'); if(s) { s.scrollTop = p; s.dispatchEvent(new Event('scroll')); } }, pos);
                     await new Promise(r => setTimeout(r, 1200));
 
                     // Extrai apenas as linhas que apareceram para ESTE licenciado (lic_id)
@@ -192,7 +198,7 @@ async function varreduraIgreenDiaria() {
                             if(uc) uc = uc.replace(/\D/g, '').trim();
 
                             let uniqueKey = codigo || uc || cpf;
-                            // 🔥 O ROBÔ GRAVA O ID QUE FOI DIGITADO NA BARRA COMO DONO!
+                            // 🔥 O ROBÔ GRAVA O ID QUE FOI DIGITADO NA BARRA COMO O VERDADEIRO DONO!
                             if (uniqueKey) m[uniqueKey] = { cpf, nasc, codigo, nome, tel, uc, dist, dono_rede: dono_pesquisado };
                         });
                         return m;
@@ -211,8 +217,6 @@ async function varreduraIgreenDiaria() {
                         });
                     }
                 }
-                await pageIgreen.evaluate(() => { const s = document.querySelector('.MuiDataGrid-virtualScroller'); if(s) s.scrollTop += 600; });
-                await new Promise(r => setTimeout(r, 1000));
             }
         }
 
@@ -481,4 +485,4 @@ async function validateBrowser() {
 app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindado!'));
 validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Porta ${PORT}`)); });
 
-// --- FIM DO CÓDIGO ---
+// --- FIM DO CÓDIGO ---    
