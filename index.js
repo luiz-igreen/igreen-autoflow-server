@@ -75,31 +75,20 @@ async function salvarNoBanco(docId, phone, dadosExtras) {
     }
 }
 
-async function analisarFaturaGemini(mediaUrl, mimeType) {
-    try {
-        const response = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
-        if (!response.data || response.data.length === 0) throw new Error("Ficheiro vazio.");
-        const base64Data = Buffer.from(response.data, 'binary').toString('base64');
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-        const promptText = `Extraia os dados desta fatura de energia em formato JSON. Chaves: "NOME_CLIENTE", "CPF", "MASCARA_CPF", "DATA_NASCIMENTO", "UC", "CONTA_MES", "VENCIMENTO", "VALOR_FATURA", "CEP", "ENDERECO", "ENDERECO_NUMERO", "ENDERECO_COMPLEMENTO", "ESTADO", "DISTRIBUIDORA", "MEDIA_CONSUMO". Retorne string vazia se não encontrar.`;
-        const payload = { contents: [{ parts: [ { text: promptText }, { inline_data: { mime_type: mimeType === 'application/pdf' ? 'application/pdf' : 'image/jpeg', data: base64Data } } ] }], generationConfig: { responseMimeType: "application/json" } };
-        const result = await axios.post(geminiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
-        return JSON.parse(result.data.candidates[0].content.parts[0].text);
-    } catch (error) { throw new Error("Falha ao ler fatura."); }
-}
-
-// 🔥 NOVO MOTOR BLINDADO: VARREDURA DA COLUNA 17 SEM BARRA DE PESQUISA
+// 🔥 MOTOR BLINDADO DA SUA DICA: ZERA BARRA DE PESQUISA, LÊ SÓ A COLUNA 17
 async function varreduraIgreenDiaria() {
     let browserIgreen = null;
     try {
-        console.log(`\n[VARREDURA DIÁRIA] 🕵️ Iniciando Varredura Visual por Linha...`);
+        // 👇 A MENSAGEM QUE PROVA QUE O CÓDIGO ATUALIZOU 👇
+        console.log(`\n[VARREDURA DO MESTRE] 🕵️ Ignorando barra de pesquisa e lendo a Coluna 17...`);
+        
         if (!IGREEN_USER || !IGREEN_PASS) { console.log("❌ ERRO: Faltam as senhas na Railway!"); return; }
 
         browserIgreen = await puppeteer.launch({ headless: true, args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() });
         const pageIgreen = await browserIgreen.newPage(); 
         await pageIgreen.setViewport({ width: 1920, height: 1080 });
         
-        // Login inicial
+        // Faz o login
         await pageIgreen.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
         try { await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Começar')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
         
@@ -109,13 +98,13 @@ async function varreduraIgreenDiaria() {
         await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.toLowerCase().includes('entrar')); if (btn) btn.click(); });
         await new Promise(r => setTimeout(r, 8000));
 
-        // Vai direto para a tabela de clientes global
-        console.log(`[VARREDURA DIÁRIA] Entrando no Mapa de Clientes...`);
+        // Vai direto e APENAS para o Mapa de Clientes
+        console.log(`[VARREDURA DO MESTRE] Entrando no Mapa de Clientes...`);
         await pageIgreen.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
         await new Promise(r => setTimeout(r, 8000));
         await pageIgreen.evaluate(() => { document.body.style.zoom = "0.3"; }); 
 
-        // Rola tudo para a direita para deixar visível a coluna do Licenciado (Coluna 17)
+        // Passo OBRIGATÓRIO: Rola a tabela toda para a DIREITA para enxergar a coluna 17
         await pageIgreen.evaluate(() => { 
             const s = document.querySelector('.MuiDataGrid-virtualScroller'); 
             if(s) { s.scrollLeft = 9999; s.dispatchEvent(new Event('scroll')); } 
@@ -124,10 +113,10 @@ async function varreduraIgreenDiaria() {
 
         let todosClientes = new Map();
 
-        console.log(`[VARREDURA DIÁRIA] Descendo a tabela e lendo a coluna do Licenciado linha por linha...`);
+        console.log(`[VARREDURA DO MESTRE] Descendo a lista e capturando o Código de Licenciado de cada linha...`);
         
-        // Corre a página inteira de cima a baixo lendo as linhas
-        for (let pos = 0; pos <= 35000; pos += 450) {
+        // Lê a página toda, da linha 1 à última linha
+        for (let pos = 0; pos <= 40000; pos += 500) {
             await pageIgreen.evaluate((p) => { 
                 const s = document.querySelector('.MuiDataGrid-virtualScroller'); 
                 if(s) { s.scrollTop = p; s.dispatchEvent(new Event('scroll')); } 
@@ -135,17 +124,20 @@ async function varreduraIgreenDiaria() {
             
             await new Promise(r => setTimeout(r, 1000));
 
-            let extraidosParCIAis = await pageIgreen.evaluate(() => {
+            let extraidosDaTela = await pageIgreen.evaluate(() => {
                 let m = {};
                 const headers = Array.from(document.querySelectorAll('.MuiDataGrid-columnHeader'));
                 let mapaColunas = { codigo: null, nome: null, celular: null, instalacao: null, distribuidora: null, dono_rede: null };
                 
+                // Mapeia onde estão as colunas
                 headers.forEach(h => {
                     const texto = h.textContent.trim().toLowerCase();
                     const field = h.getAttribute('data-field');
                     
                     if ((texto === 'código' || texto === 'codigo' || texto === 'cód') && !texto.includes('licencia')) mapaColunas.codigo = field;
-                    if (texto.includes('código licencia') || texto.includes('codigo licencia') || texto.includes('licenciado')) mapaColunas.dono_rede = field;
+                    // 🔥 COLUNA DO LICENCIADO (A DICA DE OURO)
+                    if (texto.includes('código licencia') || texto.includes('codigo licencia') || texto.includes('licenciado') || texto.includes('dono rede')) mapaColunas.dono_rede = field;
+                    
                     if (texto === 'nome' || texto === 'cliente' || texto.includes('nome do cliente')) mapaColunas.nome = field;
                     if (texto === 'celular' || texto === 'telefone') mapaColunas.celular = field;
                     if (texto.includes('instala')) mapaColunas.instalacao = field;
@@ -173,7 +165,7 @@ async function varreduraIgreenDiaria() {
                     if (tel) tel = tel.replace(/[^\d()-\s]/g, '').trim();
                     if (uc) uc = uc.replace(/\D/g, '').trim();
                     
-                    // Extrai o Código do Licenciado direto da coluna da linha atual
+                    // Extrai o Código do Licenciado EXATO da linha daquele cliente
                     let dono_rede = "";
                     if(dono_bruto) {
                         const dono_match = dono_bruto.replace(/\./g, '').match(/\b\d{4,6}\b/);
@@ -186,8 +178,8 @@ async function varreduraIgreenDiaria() {
                 return m;
             });
 
-            for (let uniqueKey in extraidosParCIAis) {
-                const extraido = extraidosParCIAis[uniqueKey];
+            for (let uniqueKey in extraidosDaTela) {
+                const extraido = extraidosDaTela[uniqueKey];
                 let existente = todosClientes.get(uniqueKey) || {};
                 todosClientes.set(uniqueKey, {
                     CODIGO_CLIENTE: extraido.codigo || existente.CODIGO_CLIENTE || "", 
@@ -202,10 +194,9 @@ async function varreduraIgreenDiaria() {
 
         const arrayClientes = Array.from(todosClientes.values());
         
-        // 📢 EXECUTANDO A SUA ORDEM VISUAL EXATA
-        console.log(`[VARREDURA DIÁRIA] Opa! Terminou. ${arrayClientes.length} propriedades capturadas corretamente.`);
+        console.log(`[VARREDURA DO MESTRE] Opa! Terminou. ${arrayClientes.length} propriedades capturadas.`);
         
-        // Inicia a importação para o banco de dados
+        // Envia para o banco de dados separando por dono
         for (let cli of arrayClientes) {
             let finalId = cli.CODIGO_CLIENTE || cli.UC || cli.CPF;
             let dbData = {};
@@ -229,21 +220,22 @@ async function varreduraIgreenDiaria() {
             if (cli.UC && cli.UC.length >= 4 && (!dbData.UC || dbData.UC.length < 4)) payload.UC = cli.UC;
             if (cli.DISTRIBUIDORA && cli.DISTRIBUIDORA.length > 2 && (!dbData.DISTRIBUIDORA || dbData.DISTRIBUIDORA.length < 2)) payload.DISTRIBUIDORA = cli.DISTRIBUIDORA;
             
-            // Atribui o dono com base no que leu na coluna 17
+            // Grava a aba baseada no código lido (se estiver vazio na tabela, garante no mínimo a sua aba)
             if (cli.DONO_REDE) payload.DONO_REDE = cli.DONO_REDE;
             else if (!dbData.DONO_REDE) payload.DONO_REDE = '76049';
 
-            // Restaura o status correto se estivesse inativo
+            // ATUALIZAÇÃO SEMPRE ATIVA - Não "some" com clientes!
             if (dbData.STATUS_CADASTRO === 'INATIVO') { payload.STATUS_CADASTRO = "ATUALIZADO"; }
             else if (!dbData.STATUS_CADASTRO) { payload.STATUS_CADASTRO = "NOVO"; }
 
             await salvarNoBanco(finalId, "SISTEMA_VARREDURA", payload);
         }
 
-        console.log(`[VARREDURA DIÁRIA] ✅ Banco de Dados Sincronizado e Atualizado com Sucesso!\n`);
+        console.log(`[VARREDURA DO MESTRE] ✅ Banco de Dados Sincronizado com Sucesso!\n`);
     } catch (e) { console.error("Erro Varredura:", e.message); } finally { if (browserIgreen) await browserIgreen.close(); }
 }
 
+// RESTANTE DO MOTOR INTACTO...
 async function fluxoProcessamentoUniversal(mediaUrl, mimeType, phone, cpfAlvo = null) {
     const localPath = path.join('/tmp', `fatura_universal_${Date.now()}.pdf`);
     let browserIgreen = null;
@@ -358,14 +350,14 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             } catch (err) { if (browserEquatorial) await browserEquatorial.close().catch(()=>{}); if (proxyUrlForPuppeteer) await closeAnonymizedProxy(proxyUrlForPuppeteer, true).catch(()=>{}); await new Promise(r => setTimeout(r, 3000)); }
         } 
         if (!pdfCapturado || !fs.existsSync(caminhoFaturaLocal)) throw new Error("FALHA_PDF_EQUATORIAL");
-        try { fs.copyFileSync(camininaFaturaLocal, path.join('/tmp', 'ultima_fatura.pdf')); } catch (e) {}
+        try { fs.copyFileSync(caminhoFaturaLocal, path.join('/tmp', 'ultima_fatura.pdf')); } catch (e) {}
 
         const pages = await browserIgreen.pages(); const pageIgreenFinal = pages[pages.length - 1]; await pageIgreenFinal.bringToFront();
         try { await pageIgreenFinal.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não') || el.textContent.includes('Fechar')); if(btn) btn.click(); }); } catch(e){}
         let searchDevolutiva = await pageIgreenFinal.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
         await searchDevolutiva.click({ clickCount: 3 }); await pageIgreenFinal.keyboard.press('Backspace'); await searchDevolutiva.type(cpf, { delay: 100 }); await pageIgreenFinal.keyboard.press('Enter'); await new Promise(r => setTimeout(r, 2000));
         await pageIgreenFinal.evaluate(() => { const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller'); scrollers.forEach(s => s.scrollLeft = 9999); }); await new Promise(r => setTimeout(r, 1500));
-        await pageIgreenFinal.evaluate((cpfBusca) => { const linhas = Array.from(document.querySelectorAll('tr, [role="row"], div[class*="MuiDataGrid-row"]')); const inline = linhas.find(row => row.textContent.replace(/\D/g, '').includes(cpfBusca)); if(inline) { const btnTresPontinhos = Array.from(inline.querySelectorAll('button, div')).find(el => el.textContent.trim() === '...'); if(btnTresPontinhos) btnTresPontinhos.click(); } }, cpf);
+        await pageIgreenFinal.evaluate((cpfBusca) => { const linhas = Array.from(document.querySelectorAll('tr, [role="row"], div[class*="MuiDataGrid-row"]')); const linhaExata = linhas.find(row => row.textContent.replace(/\D/g, '').includes(cpfBusca)); if(linhaExata) { const btnTresPontinhos = Array.from(linhaExata.querySelectorAll('button, div')).find(el => el.textContent.trim() === '...'); if(btnTresPontinhos) btnTresPontinhos.click(); } }, cpf);
         await new Promise(r => setTimeout(r, 2000)); await pageIgreenFinal.evaluate(() => { const btn = Array.from(document.querySelectorAll('span, li, div')).find(el => el.textContent.includes('Devolutivas')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 3000));
         for (let clique = 0; clique < 3; clique++) { await pageIgreenFinal.evaluate(() => { const botoesAcao = Array.from(document.querySelectorAll('button, span, a, div')).filter(el => el.textContent.trim() === 'Realizar ação' || el.textContent.includes('Realizar ação')); const btn = botoesAcao.filter(b => b.offsetParent !== null).pop() || botoesAcao[botoesAcao.length - 1]; if(btn) { btn.scrollIntoView({behavior: 'smooth', block: 'center'}); btn.click(); } }); await new Promise(r => setTimeout(r, 3000)); }
         const inputUploads = await pageIgreenFinal.$$('input[type="file"]');
