@@ -89,11 +89,11 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
     } catch (error) { throw new Error("Falha ao ler fatura."); }
 }
 
-// 🔥 MOTOR F5 (A Tática de Mestre à Prova de Erros)
+// 🔥 MOTOR COMPLETO: Rola o Mapa de Rede E o Mapa de Clientes!
 async function varreduraIgreenDiaria() {
     let browserIgreen = null;
     try {
-        console.log(`\n[VARREDURA DIÁRIA] 🕵️ Iniciando Motor com Tática F5...`);
+        console.log(`\n[VARREDURA DIÁRIA] 🕵️ Iniciando Motor Absoluto...`);
         if (!IGREEN_USER || !IGREEN_PASS) { console.log("❌ ERRO: Faltam as senhas na Railway!"); return; }
 
         browserIgreen = await puppeteer.launch({ headless: true, args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() });
@@ -109,31 +109,42 @@ async function varreduraIgreenDiaria() {
         await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.toLowerCase().includes('entrar')); if (btn) btn.click(); });
         await new Promise(r => setTimeout(r, 8000));
 
-        // 🔥 FASE 1: LISTA DE IDs DO MAPA DE REDE
-        console.log(`[VARREDURA DIÁRIA] Extraindo lista de Licenciados...`);
+        // 🔥 FASE 1: LISTA DE IDs DO MAPA DE REDE (AGORA COM ROLAGEM!)
+        console.log(`[VARREDURA DIÁRIA] Extraindo lista de Licenciados do Mapa de Rede...`);
         await pageIgreen.goto(IGREEN_REDE_URL, { waitUntil: 'networkidle2', timeout: 30000 });
         await new Promise(r => setTimeout(r, 5000));
-        await pageIgreen.evaluate(() => { document.body.style.zoom = "0.5"; }); 
+        await pageIgreen.evaluate(() => { document.body.style.zoom = "0.3"; }); // Super zoom out
 
-        let licenciadosDaRede = await pageIgreen.evaluate(() => {
-            let idsEncontrados = [];
-            document.querySelectorAll('.MuiDataGrid-cell').forEach(cell => {
-                const val = cell.textContent.trim();
-                if (/^\d{4,6}$/.test(val)) idsEncontrados.push(val);
+        let todosOsIds = new Set();
+        // Desce o Mapa de Rede para capturar TODA A EQUIPA
+        for (let pos = 0; pos <= 10000; pos += 500) {
+            await pageIgreen.evaluate((p) => { 
+                const s = document.querySelector('.MuiDataGrid-virtualScroller'); 
+                if(s) { s.scrollTop = p; s.dispatchEvent(new Event('scroll')); } 
+            }, pos);
+            await new Promise(r => setTimeout(r, 800));
+            
+            let idsNaTela = await pageIgreen.evaluate(() => {
+                let ids = [];
+                document.querySelectorAll('.MuiDataGrid-cell').forEach(cell => {
+                    const val = cell.textContent.trim().replace(/\./g, '');
+                    if (/^\d{4,6}$/.test(val)) ids.push(val); // Captura IDs puros
+                });
+                return ids;
             });
-            return [...new Set(idsEncontrados)]; 
-        });
+            idsNaTela.forEach(id => todosOsIds.add(id));
+        }
 
+        let licenciadosDaRede = [...todosOsIds];
         if (!licenciadosDaRede || licenciadosDaRede.length === 0) licenciadosDaRede = ['76049'];
-        console.log(`[VARREDURA DIÁRIA] IDs para pesquisar: ${licenciadosDaRede.join(', ')}`);
+        console.log(`[VARREDURA DIÁRIA] Todos os IDs encontrados na Rede: ${licenciadosDaRede.join(', ')}`);
 
         let todosClientes = new Map();
 
-        // 🔥 FASE 2: LOOP DOS LICENCIADOS COM "F5" (RECARREGAMENTO TOTAL)
+        // 🔥 FASE 2: LOOP DOS LICENCIADOS COM "F5" E ROLAGEM
         for (let lic_id of licenciadosDaRede) {
-            console.log(`[VARREDURA DIÁRIA] Dando F5 e pesquisando a aba do Licenciado: ${lic_id}...`);
+            console.log(`[VARREDURA DIÁRIA] Dando F5 e pesquisando o Licenciado: ${lic_id}...`);
             
-            // 👉 O SEGREDO ESTÁ AQUI: Recarregar a página inteira apaga a pesquisa anterior!
             await pageIgreen.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
             await new Promise(r => setTimeout(r, 6000));
             await pageIgreen.evaluate(() => { document.body.style.zoom = "0.4"; }); 
@@ -142,9 +153,9 @@ async function varreduraIgreenDiaria() {
             await searchInput.click();
             await pageIgreen.keyboard.type(String(lic_id), { delay: 100 });
             await pageIgreen.keyboard.press('Enter');
-            await new Promise(r => setTimeout(r, 8000)); // Tempo para a iGreen trazer a lista deste Licenciado
+            await new Promise(r => setTimeout(r, 8000)); // Aguarda filtro
 
-            // Agora Rola a tela para capturar todos DESTE Licenciado
+            // Rolagem para capturar todos DESTE Licenciado
             for (let pos = 0; pos <= 15000; pos += 600) {
                 await pageIgreen.evaluate((p) => { 
                     const s = document.querySelector('.MuiDataGrid-virtualScroller'); 
@@ -194,7 +205,6 @@ async function varreduraIgreenDiaria() {
                         if(uc) uc = uc.replace(/\D/g, '').trim();
 
                         let uniqueKey = codigo || uc || cpf;
-                        // 🔥 CARIMBA COM O ID DE QUEM ESTÁ SENDO PESQUISADO NESTE LOOP
                         if (uniqueKey) m[uniqueKey] = { cpf, nasc, codigo, nome, tel, uc, dist, dono_rede: dono_pesquisado };
                     });
                     return m;
