@@ -20,8 +20,8 @@ const IGREEN_LOGIN_URL = "https://escritorio.igreenenergy.com.br";
 const IGREEN_MAPA_URL = "https://escritorio.igreenenergy.com.br/mapa-clientes";
 const IGREEN_REDE_URL = "https://escritorio.igreenenergy.com.br/mapa-rede";
 
-const IGREEN_USER = process.env.IGREEN_USER;
-const IGREEN_PASS = process.env.IGREEN_PASS;
+const IGREEN_USER = process.env.IGREEN_USER || "";
+const IGREEN_PASS = process.env.IGREEN_PASS || "";
 const APP_ID = 'igreen-autoflow-v4';
 
 const PROXY_IP = process.env.PROXY_IP;
@@ -89,11 +89,13 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
     } catch (error) { throw new Error("Falha ao ler fatura."); }
 }
 
-// 🔥 O MOTOR ASPIRADOR GLOBAL (Suga todos os 145 de uma vez, sem pesquisar!)
+// 🔥 MOTOR F5 (A Tática de Mestre à Prova de Erros)
 async function varreduraIgreenDiaria() {
     let browserIgreen = null;
     try {
-        console.log(`\n[VARREDURA DIÁRIA] 🕵️ Iniciando Motor Aspirador Global...`);
+        console.log(`\n[VARREDURA DIÁRIA] 🕵️ Iniciando Motor com Tática F5...`);
+        if (!IGREEN_USER || !IGREEN_PASS) { console.log("❌ ERRO: Faltam as senhas na Railway!"); return; }
+
         browserIgreen = await puppeteer.launch({ headless: true, args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() });
         const pageIgreen = await browserIgreen.newPage(); 
         await pageIgreen.setViewport({ width: 1920, height: 1080 });
@@ -107,118 +109,116 @@ async function varreduraIgreenDiaria() {
         await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.toLowerCase().includes('entrar')); if (btn) btn.click(); });
         await new Promise(r => setTimeout(r, 8000));
 
-        // 🔥 FASE 1: ACESSAR MAPA DE CLIENTES E FORÇAR MOSTRAR TODOS OS 145
-        console.log(`[VARREDURA DIÁRIA] Acessando Mapa de Clientes...`);
-        await pageIgreen.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        // 🔥 FASE 1: LISTA DE IDs DO MAPA DE REDE
+        console.log(`[VARREDURA DIÁRIA] Extraindo lista de Licenciados...`);
+        await pageIgreen.goto(IGREEN_REDE_URL, { waitUntil: 'networkidle2', timeout: 30000 });
         await new Promise(r => setTimeout(r, 5000));
         await pageIgreen.evaluate(() => { document.body.style.zoom = "0.5"; }); 
 
-        // 🧹 A VASSOURA PERFEITA: Limpa a pesquisa para liberar a rede inteira
-        let searchInput = await pageIgreen.waitForSelector('input[placeholder*="Buscar"]', { timeout: 10000 });
-        await searchInput.click({ clickCount: 3 });
-        await pageIgreen.keyboard.press('Backspace');
-        await pageIgreen.keyboard.press('Enter');
-        await new Promise(r => setTimeout(r, 6000)); // Espera a iGreen mostrar os 145
+        let licenciadosDaRede = await pageIgreen.evaluate(() => {
+            let idsEncontrados = [];
+            document.querySelectorAll('.MuiDataGrid-cell').forEach(cell => {
+                const val = cell.textContent.trim();
+                if (/^\d{4,6}$/.test(val)) idsEncontrados.push(val);
+            });
+            return [...new Set(idsEncontrados)]; 
+        });
+
+        if (!licenciadosDaRede || licenciadosDaRede.length === 0) licenciadosDaRede = ['76049'];
+        console.log(`[VARREDURA DIÁRIA] IDs para pesquisar: ${licenciadosDaRede.join(', ')}`);
 
         let todosClientes = new Map();
 
-        // Faz um "Deslize Horizontal" para garantir que a coluna "Código Licenciado" aparece
-        console.log(`[VARREDURA DIÁRIA] Lendo Colunas Escondidas...`);
-        const horizontalScrolls = [0, 500, 1000, 1500, 2000, 0];
-        for (let h of horizontalScrolls) {
-            await pageIgreen.evaluate((p) => {
-                const s = document.querySelector('.MuiDataGrid-virtualScroller');
-                if(s) { s.scrollLeft = p; s.dispatchEvent(new Event('scroll')); }
-            }, h);
-            await new Promise(r => setTimeout(r, 500));
-        }
-
-        console.log(`[VARREDURA DIÁRIA] Iniciando Pente Fino Vertical (Sugando as 145 linhas)...`);
-        
-        // Desce 500px de cada vez até 30000px para varrer tudo
-        for (let pos = 0; pos <= 30000; pos += 500) {
-            await pageIgreen.evaluate((p) => { 
-                const s = document.querySelector('.MuiDataGrid-virtualScroller'); 
-                if(s) { s.scrollTop = p; s.dispatchEvent(new Event('scroll')); } 
-            }, pos);
+        // 🔥 FASE 2: LOOP DOS LICENCIADOS COM "F5" (RECARREGAMENTO TOTAL)
+        for (let lic_id of licenciadosDaRede) {
+            console.log(`[VARREDURA DIÁRIA] Dando F5 e pesquisando a aba do Licenciado: ${lic_id}...`);
             
-            await new Promise(r => setTimeout(r, 800));
+            // 👉 O SEGREDO ESTÁ AQUI: Recarregar a página inteira apaga a pesquisa anterior!
+            await pageIgreen.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+            await new Promise(r => setTimeout(r, 6000));
+            await pageIgreen.evaluate(() => { document.body.style.zoom = "0.4"; }); 
 
-            let extraidosParciais = await pageIgreen.evaluate(() => {
-                let m = {};
-                const headers = Array.from(document.querySelectorAll('.MuiDataGrid-columnHeader'));
-                let mapaColunas = { codigo: null, nome: null, celular: null, instalacao: null, distribuidora: null, dono_rede: null };
+            let searchInput = await pageIgreen.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
+            await searchInput.click();
+            await pageIgreen.keyboard.type(String(lic_id), { delay: 100 });
+            await pageIgreen.keyboard.press('Enter');
+            await new Promise(r => setTimeout(r, 8000)); // Tempo para a iGreen trazer a lista deste Licenciado
+
+            // Agora Rola a tela para capturar todos DESTE Licenciado
+            for (let pos = 0; pos <= 15000; pos += 600) {
+                await pageIgreen.evaluate((p) => { 
+                    const s = document.querySelector('.MuiDataGrid-virtualScroller'); 
+                    if(s) { s.scrollTop = p; s.dispatchEvent(new Event('scroll')); } 
+                }, pos);
                 
-                headers.forEach(h => {
-                    const texto = h.textContent.trim().toLowerCase();
-                    const field = h.getAttribute('data-field');
-                    
-                    if ((texto === 'código' || texto === 'codigo' || texto === 'cód') && !texto.includes('licencia')) mapaColunas.codigo = field;
-                    // 🔥 COLUNA DE OURO
-                    if (texto.includes('código licencia') || texto.includes('codigo licencia') || texto.includes('licenciado')) mapaColunas.dono_rede = field;
-                    
-                    if (texto === 'nome' || texto === 'cliente' || texto.includes('nome do cliente')) mapaColunas.nome = field;
-                    if (texto === 'celular' || texto === 'telefone') mapaColunas.celular = field;
-                    if (texto.includes('instala')) mapaColunas.instalacao = field;
-                    if (texto.includes('distribuidora')) mapaColunas.distribuidora = field;
-                });
+                await new Promise(r => setTimeout(r, 800));
 
-                document.querySelectorAll('.MuiDataGrid-row').forEach(row => {
-                    const id = row.getAttribute('data-id'); if(!id) return;
-                    let textoTotal = row.textContent;
-                    let cpf = textoTotal.match(/\d{3}\.\d{3}\.\d{3}-\d{2}/)?.[0]?.replace(/\D/g, '');
+                let extraidosParciais = await pageIgreen.evaluate((dono_pesquisado) => {
+                    let m = {};
+                    const headers = Array.from(document.querySelectorAll('.MuiDataGrid-columnHeader'));
+                    let mapaColunas = { codigo: null, nome: null, celular: null, instalacao: null, distribuidora: null };
                     
-                    let nasc = null;
-                    const todasDatas = textoTotal.match(/\d{2}\/\d{2}\/\d{4}/g);
-                    if (todasDatas && todasDatas.length > 0) {
-                        let menorAno = 9999; for (let d of todasDatas) { let ano = parseInt(d.split('/')[2], 10); if (ano < menorAno) { menorAno = ano; nasc = d; } } if (menorAno > 2015) nasc = null;
-                    }
+                    headers.forEach(h => {
+                        const texto = h.textContent.trim().toLowerCase();
+                        const field = h.getAttribute('data-field');
+                        
+                        if ((texto === 'código' || texto === 'codigo' || texto === 'cód') && !texto.includes('licencia')) mapaColunas.codigo = field;
+                        if (texto === 'nome' || texto === 'cliente' || texto.includes('nome do cliente')) mapaColunas.nome = field;
+                        if (texto === 'celular' || texto === 'telefone') mapaColunas.celular = field;
+                        if (texto.includes('instala')) mapaColunas.instalacao = field;
+                        if (texto.includes('distribuidora')) mapaColunas.distribuidora = field;
+                    });
 
-                    let codigo = mapaColunas.codigo ? row.querySelector(`[data-field="${mapaColunas.codigo}"]`)?.textContent?.trim() : "";
-                    let nome = mapaColunas.nome ? row.querySelector(`[data-field="${mapaColunas.nome}"]`)?.textContent?.trim() : "";
-                    let tel = mapaColunas.celular ? row.querySelector(`[data-field="${mapaColunas.celular}"]`)?.textContent?.trim() : "";
-                    let uc = mapaColunas.instalacao ? row.querySelector(`[data-field="${mapaColunas.instalacao}"]`)?.textContent?.trim() : "";
-                    let dist = mapaColunas.distribuidora ? row.querySelector(`[data-field="${mapaColunas.distribuidora}"]`)?.textContent?.trim() : "";
-                    let dono_bruto = mapaColunas.dono_rede ? row.querySelector(`[data-field="${mapaColunas.dono_rede}"]`)?.textContent?.trim() : "";
-                    
-                    if (!tel || tel.length < 8) tel = textoTotal.match(/\(?\d{2}\)?\s?\d{4,5}-?\d{4}/)?.[0] || "";
-                    if (!uc || uc.length < 5) uc = textoTotal.match(/\b\d{8,12}\b/)?.[0] || "";
-                    if (!dist) { const dists = ["EQUATORIAL", "ENEL", "COELBA", "CPFL", "CEMIG", "COPEL", "CELESC", "RGE", "EDP", "ENERGISA", "LIGHT"]; dist = dists.find(d => textoTotal.toUpperCase().includes(d)) || ""; }
+                    document.querySelectorAll('.MuiDataGrid-row').forEach(row => {
+                        const id = row.getAttribute('data-id'); if(!id) return;
+                        let textoTotal = row.textContent;
+                        let cpf = textoTotal.match(/\d{3}\.\d{3}\.\d{3}-\d{2}/)?.[0]?.replace(/\D/g, '');
+                        
+                        let nasc = null;
+                        const todasDatas = textoTotal.match(/\d{2}\/\d{2}\/\d{4}/g);
+                        if (todasDatas && todasDatas.length > 0) {
+                            let menorAno = 9999; for (let d of todasDatas) { let ano = parseInt(d.split('/')[2], 10); if (ano < menorAno) { menorAno = ano; nasc = d; } } if (menorAno > 2015) nasc = null;
+                        }
 
-                    if(tel) tel = tel.replace(/[^\d()-\s]/g, '').trim();
-                    if(uc) uc = uc.replace(/\D/g, '').trim();
-                    
-                    // Extrai cirurgicamente os dígitos da coluna do Licenciado
-                    let dono_rede = "";
-                    if(dono_bruto) {
-                        const dono_match = dono_bruto.replace(/\./g, '').match(/\b\d{4,6}\b/);
-                        if (dono_match) dono_rede = dono_match[0];
-                    }
+                        let codigo = mapaColunas.codigo ? row.querySelector(`[data-field="${mapaColunas.codigo}"]`)?.textContent?.trim() : "";
+                        let nome = mapaColunas.nome ? row.querySelector(`[data-field="${mapaColunas.nome}"]`)?.textContent?.trim() : "";
+                        let tel = mapaColunas.celular ? row.querySelector(`[data-field="${mapaColunas.celular}"]`)?.textContent?.trim() : "";
+                        let uc = mapaColunas.instalacao ? row.querySelector(`[data-field="${mapaColunas.instalacao}"]`)?.textContent?.trim() : "";
+                        let dist = mapaColunas.distribuidora ? row.querySelector(`[data-field="${mapaColunas.distribuidora}"]`)?.textContent?.trim() : "";
+                        
+                        if (!tel || tel.length < 8) tel = textoTotal.match(/\(?\d{2}\)?\s?\d{4,5}-?\d{4}/)?.[0] || "";
+                        if (!uc || uc.length < 5) uc = textoTotal.match(/\b\d{8,12}\b/)?.[0] || "";
+                        if (!dist) { const dists = ["EQUATORIAL", "ENEL", "COELBA", "CPFL", "CEMIG", "COPEL", "CELESC", "RGE", "EDP", "ENERGISA", "LIGHT"]; dist = dists.find(d => textoTotal.toUpperCase().includes(d)) || ""; }
 
-                    let uniqueKey = codigo || uc || cpf;
-                    if (uniqueKey) m[uniqueKey] = { cpf, nasc, codigo, nome, tel, uc, dist, dono_rede };
-                });
-                return m;
-            });
+                        if(tel) tel = tel.replace(/[^\d()-\s]/g, '').trim();
+                        if(uc) uc = uc.replace(/\D/g, '').trim();
 
-            for (let uniqueKey in extraidosParciais) {
-                const extraido = extraidosParciais[uniqueKey];
-                let existente = todosClientes.get(uniqueKey) || {};
-                todosClientes.set(uniqueKey, {
-                    CODIGO_CLIENTE: extraido.codigo || existente.CODIGO_CLIENTE || "", 
-                    NOME_CLIENTE: extraido.nome || existente.NOME_CLIENTE || "", 
-                    CPF: extraido.cpf, DATA_NASCIMENTO: extraido.nasc || existente.DATA_NASCIMENTO || "", 
-                    TELEFONE: extraido.tel || existente.TELEFONE || "", UC: extraido.uc || existente.UC || "", 
-                    DISTRIBUIDORA: extraido.dist || existente.DISTRIBUIDORA || "",
-                    DONO_REDE: extraido.dono_rede || existente.DONO_REDE || ""
-                });
+                        let uniqueKey = codigo || uc || cpf;
+                        // 🔥 CARIMBA COM O ID DE QUEM ESTÁ SENDO PESQUISADO NESTE LOOP
+                        if (uniqueKey) m[uniqueKey] = { cpf, nasc, codigo, nome, tel, uc, dist, dono_rede: dono_pesquisado };
+                    });
+                    return m;
+                }, lic_id);
+
+                for (let uniqueKey in extraidosParciais) {
+                    const extraido = extraidosParciais[uniqueKey];
+                    let existente = todosClientes.get(uniqueKey) || {};
+                    todosClientes.set(uniqueKey, {
+                        CODIGO_CLIENTE: extraido.codigo || existente.CODIGO_CLIENTE || "", 
+                        NOME_CLIENTE: extraido.nome || existente.NOME_CLIENTE || "", 
+                        CPF: extraido.cpf, DATA_NASCIMENTO: extraido.nasc || existente.DATA_NASCIMENTO || "", 
+                        TELEFONE: extraido.tel || existente.TELEFONE || "", UC: extraido.uc || existente.UC || "", 
+                        DISTRIBUIDORA: extraido.dist || existente.DISTRIBUIDORA || "",
+                        DONO_REDE: extraido.dono_rede || existente.DONO_REDE || ""
+                    });
+                }
             }
         }
 
         const arrayClientes = Array.from(todosClientes.values());
-        console.log(`[VARREDURA DIÁRIA] Sucesso Total! ${arrayClientes.length} propriedades globais capturadas.`);
+        console.log(`[VARREDURA DIÁRIA] Sucesso Total! ${arrayClientes.length} propriedades capturadas.`);
         
-        // 4. INJETA NO BANCO RESSUSCITANDO OS INATIVOS
+        // 4. INJETA NO BANCO E RESSUSCITA OS INATIVOS
         for (let cli of arrayClientes) {
             let finalId = cli.CODIGO_CLIENTE || cli.UC || cli.CPF;
             let dbData = {};
@@ -246,14 +246,14 @@ async function varreduraIgreenDiaria() {
             if (cli.DONO_REDE) payload.DONO_REDE = cli.DONO_REDE;
             else if (!dbData.DONO_REDE) payload.DONO_REDE = '76049';
 
-            // 🔥 RESSUSCITA OS INATIVOS! Se ele voltar a ver, reativa!
+            // Mágica para tirar da inatividade quem foi ocultado sem querer!
             if (dbData.STATUS_CADASTRO === 'INATIVO') { payload.STATUS_CADASTRO = "ATUALIZADO"; }
             else if (!dbData.STATUS_CADASTRO) { payload.STATUS_CADASTRO = "NOVO"; }
 
             await salvarNoBanco(finalId, "SISTEMA_VARREDURA", payload);
         }
 
-        // 🔥 AUDITORIA DE INATIVOS (Agora só marca se sumir dos 145 mesmo)
+        // AUDITORIA (Só marca inativo se não estiver nos capturados globais)
         if (admin.apps.length > 0 && arrayClientes.length > 0) {
             try {
                 const codigosAtivos = new Set(arrayClientes.map(c => c.CODIGO_CLIENTE).filter(c => c));
@@ -263,18 +263,16 @@ async function varreduraIgreenDiaria() {
                 
                 leadsSnapshot.forEach(async (doc) => {
                     const dbLead = doc.data();
-                    
                     if (dbLead.CODIGO_CLIENTE && dbLead.CODIGO_CLIENTE !== '76.049') {
                         const sumiuPorCodigo = !codigosAtivos.has(dbLead.CODIGO_CLIENTE);
                         const sumiuPorUc = dbLead.UC ? !ucsAtivas.has(dbLead.UC) : true;
                         
                         if (sumiuPorCodigo && sumiuPorUc && dbLead.STATUS_CADASTRO !== 'INATIVO') {
-                            console.log(`[AUDITORIA] Cliente sumiu da iGreen, movendo para INATIVO: ${dbLead.NOME_CLIENTE}`);
                             await admin.firestore().collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').doc(doc.id).set({ STATUS_CADASTRO: 'INATIVO' }, { merge: true });
                         }
                     }
                 });
-            } catch(e) { console.error("Erro na Auditoria de Inativos:", e.message); }
+            } catch(e) {}
         }
 
         console.log(`[VARREDURA DIÁRIA] ✅ Sistema Multi-Nível Sincronizado!\n`);
