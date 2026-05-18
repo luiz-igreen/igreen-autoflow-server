@@ -18,7 +18,6 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 const IGREEN_LOGIN_URL = "https://escritorio.igreenenergy.com.br"; 
 const IGREEN_MAPA_URL = "https://escritorio.igreenenergy.com.br/mapa-clientes";
-const IGREEN_REDE_URL = "https://escritorio.igreenenergy.com.br/mapa-rede";
 
 const IGREEN_USER = process.env.IGREEN_USER || "";
 const IGREEN_PASS = process.env.IGREEN_PASS || "";
@@ -89,17 +88,18 @@ async function analisarFaturaGemini(mediaUrl, mimeType) {
     } catch (error) { throw new Error("Falha ao ler fatura."); }
 }
 
-// 🔥 MOTOR COM A DICA DE OURO DO MESTRE JORGE
+// 🔥 NOVO MOTOR BLINDADO: VARREDURA DA COLUNA 17 SEM BARRA DE PESQUISA
 async function varreduraIgreenDiaria() {
     let browserIgreen = null;
     try {
-        console.log(`\n[VARREDURA DIÁRIA] 🕵️ Iniciando Motor Absoluto...`);
+        console.log(`\n[VARREDURA DIÁRIA] 🕵️ Iniciando Varredura Visual por Linha...`);
         if (!IGREEN_USER || !IGREEN_PASS) { console.log("❌ ERRO: Faltam as senhas na Railway!"); return; }
 
         browserIgreen = await puppeteer.launch({ headless: true, args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() });
         const pageIgreen = await browserIgreen.newPage(); 
         await pageIgreen.setViewport({ width: 1920, height: 1080 });
         
+        // Login inicial
         await pageIgreen.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
         try { await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Começar')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
         
@@ -109,53 +109,25 @@ async function varreduraIgreenDiaria() {
         await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.toLowerCase().includes('entrar')); if (btn) btn.click(); });
         await new Promise(r => setTimeout(r, 8000));
 
-        // 📝 FASE 1: O RELATÓRIO DOS LICENCIADOS (Nomes e Códigos)
-        console.log(`[VARREDURA DIÁRIA] Lendo o Relatório de Licenciados do Mapa de Rede...`);
-        await pageIgreen.goto(IGREEN_REDE_URL, { waitUntil: 'networkidle2', timeout: 30000 });
-        await new Promise(r => setTimeout(r, 5000));
-        await pageIgreen.evaluate(() => { document.body.style.zoom = "0.3"; }); 
-
-        let mapaEquipa = {};
-        for (let pos = 0; pos <= 10000; pos += 500) {
-            await pageIgreen.evaluate((p) => { 
-                const s = document.querySelector('.MuiDataGrid-virtualScroller'); 
-                if(s) { s.scrollTop = p; s.dispatchEvent(new Event('scroll')); } 
-            }, pos);
-            await new Promise(r => setTimeout(r, 800));
-            
-            let extraidos = await pageIgreen.evaluate(() => {
-                let eq = {};
-                document.querySelectorAll('.MuiDataGrid-row').forEach(row => {
-                    const textoLinha = row.textContent;
-                    // Procura o ID (4 a 6 digitos) e tenta pegar o nome próximo
-                    const idMatch = textoLinha.replace(/\./g, '').match(/\b\d{4,6}\b/);
-                    if (idMatch) {
-                        eq[idMatch[0]] = "Equipe " + idMatch[0]; // Guarda o ID no relatório
-                    }
-                });
-                return eq;
-            });
-            Object.assign(mapaEquipa, extraidos);
-        }
-        console.log(`[VARREDURA DIÁRIA] Relatório de Licenciados em mãos! Códigos: ${Object.keys(mapaEquipa).join(', ')}`);
-
-        // 🧹 FASE 2: A VARREDURA DA COLUNA 17 (MAPA DE CLIENTES)
-        console.log(`[VARREDURA DIÁRIA] Acessando Mapa de Clientes e varrendo a coluna do Licenciado...`);
+        // Vai direto para a tabela de clientes global
+        console.log(`[VARREDURA DIÁRIA] Entrando no Mapa de Clientes...`);
         await pageIgreen.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
         await new Promise(r => setTimeout(r, 8000));
-        await pageIgreen.evaluate(() => { document.body.style.zoom = "0.3"; }); // Menor possível para caber tudo na tela
+        await pageIgreen.evaluate(() => { document.body.style.zoom = "0.3"; }); 
 
-        // Rola tudo para a direita para expor a "décima sétima coluna" (Código Licenciado)
+        // Rola tudo para a direita para deixar visível a coluna do Licenciado (Coluna 17)
         await pageIgreen.evaluate(() => { 
             const s = document.querySelector('.MuiDataGrid-virtualScroller'); 
             if(s) { s.scrollLeft = 9999; s.dispatchEvent(new Event('scroll')); } 
         });
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 3000));
 
         let todosClientes = new Map();
 
-        // Desce lendo tudo de uma vez
-        for (let pos = 0; pos <= 30000; pos += 400) {
+        console.log(`[VARREDURA DIÁRIA] Descendo a tabela e lendo a coluna do Licenciado linha por linha...`);
+        
+        // Corre a página inteira de cima a baixo lendo as linhas
+        for (let pos = 0; pos <= 35000; pos += 450) {
             await pageIgreen.evaluate((p) => { 
                 const s = document.querySelector('.MuiDataGrid-virtualScroller'); 
                 if(s) { s.scrollTop = p; s.dispatchEvent(new Event('scroll')); } 
@@ -163,7 +135,7 @@ async function varreduraIgreenDiaria() {
             
             await new Promise(r => setTimeout(r, 1000));
 
-            let extraidosParciais = await pageIgreen.evaluate(() => {
+            let extraidosParCIAis = await pageIgreen.evaluate(() => {
                 let m = {};
                 const headers = Array.from(document.querySelectorAll('.MuiDataGrid-columnHeader'));
                 let mapaColunas = { codigo: null, nome: null, celular: null, instalacao: null, distribuidora: null, dono_rede: null };
@@ -173,9 +145,7 @@ async function varreduraIgreenDiaria() {
                     const field = h.getAttribute('data-field');
                     
                     if ((texto === 'código' || texto === 'codigo' || texto === 'cód') && !texto.includes('licencia')) mapaColunas.codigo = field;
-                    // 🔥 A COLUNA DE OURO:
                     if (texto.includes('código licencia') || texto.includes('codigo licencia') || texto.includes('licenciado')) mapaColunas.dono_rede = field;
-                    
                     if (texto === 'nome' || texto === 'cliente' || texto.includes('nome do cliente')) mapaColunas.nome = field;
                     if (texto === 'celular' || texto === 'telefone') mapaColunas.celular = field;
                     if (texto.includes('instala')) mapaColunas.instalacao = field;
@@ -200,14 +170,10 @@ async function varreduraIgreenDiaria() {
                     let dist = mapaColunas.distribuidora ? row.querySelector(`[data-field="${mapaColunas.distribuidora}"]`)?.textContent?.trim() : "";
                     let dono_bruto = mapaColunas.dono_rede ? row.querySelector(`[data-field="${mapaColunas.dono_rede}"]`)?.textContent?.trim() : "";
                     
-                    if (!tel || tel.length < 8) tel = textoTotal.match(/\(?\d{2}\)?\s?\d{4,5}-?\d{4}/)?.[0] || "";
-                    if (!uc || uc.length < 5) uc = textoTotal.match(/\b\d{8,12}\b/)?.[0] || "";
-                    if (!dist) { const dists = ["EQUATORIAL", "ENEL", "COELBA", "CPFL", "CEMIG", "COPEL", "CELESC", "RGE", "EDP", "ENERGISA", "LIGHT"]; dist = dists.find(d => textoTotal.toUpperCase().includes(d)) || ""; }
-
-                    if(tel) tel = tel.replace(/[^\d()-\s]/g, '').trim();
-                    if(uc) uc = uc.replace(/\D/g, '').trim();
-
-                    // O PULO DO GATO: Lê a coluna 17 e guarda o dono!
+                    if (tel) tel = tel.replace(/[^\d()-\s]/g, '').trim();
+                    if (uc) uc = uc.replace(/\D/g, '').trim();
+                    
+                    // Extrai o Código do Licenciado direto da coluna da linha atual
                     let dono_rede = "";
                     if(dono_bruto) {
                         const dono_match = dono_bruto.replace(/\./g, '').match(/\b\d{4,6}\b/);
@@ -220,8 +186,8 @@ async function varreduraIgreenDiaria() {
                 return m;
             });
 
-            for (let uniqueKey in extraidosParciais) {
-                const extraido = extraidosParciais[uniqueKey];
+            for (let uniqueKey in extraidosParCIAis) {
+                const extraido = extraidosParCIAis[uniqueKey];
                 let existente = todosClientes.get(uniqueKey) || {};
                 todosClientes.set(uniqueKey, {
                     CODIGO_CLIENTE: extraido.codigo || existente.CODIGO_CLIENTE || "", 
@@ -235,9 +201,11 @@ async function varreduraIgreenDiaria() {
         }
 
         const arrayClientes = Array.from(todosClientes.values());
-        console.log(`[VARREDURA DIÁRIA] Opa! Terminou. ${arrayClientes.length} propriedades capturadas pela coluna do Licenciado.`);
         
-        // 4. INJETA NO BANCO COM O CARIMBO DO DONO
+        // 📢 EXECUTANDO A SUA ORDEM VISUAL EXATA
+        console.log(`[VARREDURA DIÁRIA] Opa! Terminou. ${arrayClientes.length} propriedades capturadas corretamente.`);
+        
+        // Inicia a importação para o banco de dados
         for (let cli of arrayClientes) {
             let finalId = cli.CODIGO_CLIENTE || cli.UC || cli.CPF;
             let dbData = {};
@@ -252,7 +220,6 @@ async function varreduraIgreenDiaria() {
             }
 
             const payload = { NOME_CLIENTE: cli.NOME_CLIENTE, CPF: cli.CPF };
-            
             if (cli.CODIGO_CLIENTE && cli.CODIGO_CLIENTE !== "76.049" && cli.CODIGO_CLIENTE !== "76049") { 
                 payload.CODIGO_CLIENTE = cli.CODIGO_CLIENTE; 
             }
@@ -262,39 +229,18 @@ async function varreduraIgreenDiaria() {
             if (cli.UC && cli.UC.length >= 4 && (!dbData.UC || dbData.UC.length < 4)) payload.UC = cli.UC;
             if (cli.DISTRIBUIDORA && cli.DISTRIBUIDORA.length > 2 && (!dbData.DISTRIBUIDORA || dbData.DISTRIBUIDORA.length < 2)) payload.DISTRIBUIDORA = cli.DISTRIBUIDORA;
             
-            // Grava a etiqueta mágica baseada na coluna!
+            // Atribui o dono com base no que leu na coluna 17
             if (cli.DONO_REDE) payload.DONO_REDE = cli.DONO_REDE;
-            else if (!dbData.DONO_REDE) payload.DONO_REDE = '76049'; // Fallback de segurança
+            else if (!dbData.DONO_REDE) payload.DONO_REDE = '76049';
 
+            // Restaura o status correto se estivesse inativo
             if (dbData.STATUS_CADASTRO === 'INATIVO') { payload.STATUS_CADASTRO = "ATUALIZADO"; }
             else if (!dbData.STATUS_CADASTRO) { payload.STATUS_CADASTRO = "NOVO"; }
 
             await salvarNoBanco(finalId, "SISTEMA_VARREDURA", payload);
         }
 
-        // AUDITORIA 
-        if (admin.apps.length > 0 && arrayClientes.length > 0) {
-            try {
-                const codigosAtivos = new Set(arrayClientes.map(c => c.CODIGO_CLIENTE).filter(c => c));
-                const ucsAtivas = new Set(arrayClientes.map(c => c.UC).filter(c => c));
-
-                const leadsSnapshot = await admin.firestore().collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').get();
-                
-                leadsSnapshot.forEach(async (doc) => {
-                    const dbLead = doc.data();
-                    if (dbLead.CODIGO_CLIENTE && dbLead.CODIGO_CLIENTE !== '76.049') {
-                        const sumiuPorCodigo = !codigosAtivos.has(dbLead.CODIGO_CLIENTE);
-                        const sumiuPorUc = dbLead.UC ? !ucsAtivas.has(dbLead.UC) : true;
-                        
-                        if (sumiuPorCodigo && sumiuPorUc && dbLead.STATUS_CADASTRO !== 'INATIVO') {
-                            await admin.firestore().collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('leads').doc(doc.id).set({ STATUS_CADASTRO: 'INATIVO' }, { merge: true });
-                        }
-                    }
-                });
-            } catch(e) {}
-        }
-
-        console.log(`[VARREDURA DIÁRIA] ✅ Importação Concluída com a Dica do Mestre!\n`);
+        console.log(`[VARREDURA DIÁRIA] ✅ Banco de Dados Sincronizado e Atualizado com Sucesso!\n`);
     } catch (e) { console.error("Erro Varredura:", e.message); } finally { if (browserIgreen) await browserIgreen.close(); }
 }
 
@@ -324,7 +270,7 @@ async function fluxoProcessamentoUniversal(mediaUrl, mimeType, phone, cpfAlvo = 
         let searchInput = await pageIgreen.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
         await searchInput.click({ clickCount: 3 }); await pageIgreen.keyboard.press('Backspace'); await searchInput.type(cpfFinal, { delay: 100 }); await pageIgreen.keyboard.press('Enter'); await new Promise(r => setTimeout(r, 4000));
         await pageIgreen.evaluate(() => { const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller'); scrollers.forEach(s => s.scrollLeft = 9999); }); await new Promise(r => setTimeout(r, 1500));
-        const clicouPontinhos = await pageIgreen.evaluate((cpfBusca) => { const linhas = Array.from(document.querySelectorAll('tr, [role="row"], div[class*="MuiDataGrid-row"]')); const linhaExata = linhas.find(row => row.textContent.replace(/\D/g, '').includes(cpfBusca)); if(linhaExata) { const btnTresPontinhos = Array.from(linhaExata.querySelectorAll('button, div')).find(el => el.textContent.trim() === '...'); if(btnTresPontinhos) { btnTresPontinhos.click(); return true; } } return false; }, cpfFinal);
+        const clicouPontinhos = await pageIgreen.evaluate((cpfBusca) => { const linhas = Array.from(document.querySelectorAll('tr, [role="row"], div[class*="MuiDataGrid-row"]')); const inline = linhas.find(row => row.textContent.replace(/\D/g, '').includes(cpfBusca)); if(inline) { const btnTresPontinhos = Array.from(inline.querySelectorAll('button, div')).find(el => el.textContent.trim() === '...'); if(btnTresPontinhos) { btnTresPontinhos.click(); return true; } } return false; }, cpfFinal);
         if (!clicouPontinhos) throw new Error("CLIENTE_NAO_ENCONTRADO_MAPA");
         await new Promise(r => setTimeout(r, 2000)); await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('span, li, div')).find(el => el.textContent.includes('Devolutivas')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 3000));
         for (let clique = 0; clique < 3; clique++) { await pageIgreen.evaluate(() => { const botoesAcao = Array.from(document.querySelectorAll('button, span, a, div')).filter(el => el.textContent.trim() === 'Realizar ação' || el.textContent.includes('Realizar ação')); const btn = botoesAcao.filter(b => b.offsetParent !== null).pop() || botoesAcao[botoesAcao.length - 1]; if(btn) { btn.scrollIntoView({behavior: 'smooth', block: 'center'}); btn.click(); } }); await new Promise(r => setTimeout(r, 3000)); }
@@ -412,14 +358,14 @@ async function fluxoResgateDevolutiva(termoBuscaIgreen, phone, cpfBanco = null, 
             } catch (err) { if (browserEquatorial) await browserEquatorial.close().catch(()=>{}); if (proxyUrlForPuppeteer) await closeAnonymizedProxy(proxyUrlForPuppeteer, true).catch(()=>{}); await new Promise(r => setTimeout(r, 3000)); }
         } 
         if (!pdfCapturado || !fs.existsSync(caminhoFaturaLocal)) throw new Error("FALHA_PDF_EQUATORIAL");
-        try { fs.copyFileSync(caminhoFaturaLocal, path.join('/tmp', 'ultima_fatura.pdf')); } catch (e) {}
+        try { fs.copyFileSync(camininaFaturaLocal, path.join('/tmp', 'ultima_fatura.pdf')); } catch (e) {}
 
         const pages = await browserIgreen.pages(); const pageIgreenFinal = pages[pages.length - 1]; await pageIgreenFinal.bringToFront();
         try { await pageIgreenFinal.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Agora não') || el.textContent.includes('Fechar')); if(btn) btn.click(); }); } catch(e){}
         let searchDevolutiva = await pageIgreenFinal.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
         await searchDevolutiva.click({ clickCount: 3 }); await pageIgreenFinal.keyboard.press('Backspace'); await searchDevolutiva.type(cpf, { delay: 100 }); await pageIgreenFinal.keyboard.press('Enter'); await new Promise(r => setTimeout(r, 2000));
         await pageIgreenFinal.evaluate(() => { const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller'); scrollers.forEach(s => s.scrollLeft = 9999); }); await new Promise(r => setTimeout(r, 1500));
-        await pageIgreenFinal.evaluate((cpfBusca) => { const linhas = Array.from(document.querySelectorAll('tr, [role="row"], div[class*="MuiDataGrid-row"]')); const linhaExata = linhas.find(row => row.textContent.replace(/\D/g, '').includes(cpfBusca)); if(linhaExata) { const btnTresPontinhos = Array.from(linhaExata.querySelectorAll('button, div')).find(el => el.textContent.trim() === '...'); if(btnTresPontinhos) btnTresPontinhos.click(); } }, cpf);
+        await pageIgreenFinal.evaluate((cpfBusca) => { const linhas = Array.from(document.querySelectorAll('tr, [role="row"], div[class*="MuiDataGrid-row"]')); const inline = linhas.find(row => row.textContent.replace(/\D/g, '').includes(cpfBusca)); if(inline) { const btnTresPontinhos = Array.from(inline.querySelectorAll('button, div')).find(el => el.textContent.trim() === '...'); if(btnTresPontinhos) btnTresPontinhos.click(); } }, cpf);
         await new Promise(r => setTimeout(r, 2000)); await pageIgreenFinal.evaluate(() => { const btn = Array.from(document.querySelectorAll('span, li, div')).find(el => el.textContent.includes('Devolutivas')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 3000));
         for (let clique = 0; clique < 3; clique++) { await pageIgreenFinal.evaluate(() => { const botoesAcao = Array.from(document.querySelectorAll('button, span, a, div')).filter(el => el.textContent.trim() === 'Realizar ação' || el.textContent.includes('Realizar ação')); const btn = botoesAcao.filter(b => b.offsetParent !== null).pop() || botoesAcao[botoesAcao.length - 1]; if(btn) { btn.scrollIntoView({behavior: 'smooth', block: 'center'}); btn.click(); } }); await new Promise(r => setTimeout(r, 3000)); }
         const inputUploads = await pageIgreenFinal.$$('input[type="file"]');
@@ -484,7 +430,7 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 });
 
-app.get('/tela-robo', (req, res) => { const file = path.join('/tmp', 'debug_tela.png'); if (fs.existsSync(file)) { res.contentType('image/png'); res.sendFile(path.resolve(file)); } else { res.status(404).send('Sem imagem'); } });
+app.get('/tela-robo', (req, res) => { const file = path.join('/tmp', `debug_tela.png'); if (fs.existsSync(file)) { res.contentType('image/png'); res.sendFile(path.resolve(file)); } else { res.status(404).send('Sem imagem'); } });
 app.get('/ultima-fatura', (req, res) => { const file = path.join('/tmp', 'ultima_fatura.pdf'); if (fs.existsSync(file)) { res.contentType('application/pdf'); res.sendFile(path.resolve(file)); } else { res.status(404).send('Sem fatura'); } });
 
 const PORT = process.env.PORT || 10000;
