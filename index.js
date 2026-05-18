@@ -75,11 +75,11 @@ async function salvarNoBanco(docId, phone, dadosExtras) {
     }
 }
 
-// 🔥 TESTE EXCLUSIVO: Sem barra de pesquisa, lendo apenas a Coluna 17 para o 77044
+// 🔥 TESTE EXCLUSIVO DA DICA DE OURO: Procurando EXATAMENTE "77.044" (Com o ponto!)
 async function varreduraIgreenDiaria() {
     let browserIgreen = null;
     try {
-        console.log(`\n[TESTE DE OURO DO MESTRE] 🕵️ Iniciando varredura EXCLUSIVA para o Licenciado 77044...`);
+        console.log(`\n[TESTE COM PONTO] 🕵️ Varredura EXCLUSIVA procurando EXATAMENTE o texto "77.044" na Coluna 17...`);
         if (!IGREEN_USER || !IGREEN_PASS) { console.log("❌ ERRO: Faltam as senhas na Railway!"); return; }
 
         browserIgreen = await puppeteer.launch({ headless: true, args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() });
@@ -95,12 +95,13 @@ async function varreduraIgreenDiaria() {
         await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.toLowerCase().includes('entrar')); if (btn) btn.click(); });
         await new Promise(r => setTimeout(r, 8000));
 
-        console.log(`[TESTE DE OURO DO MESTRE] Entrando no Mapa de Clientes...`);
+        // VAI DIRETO PARA O MAPA DE CLIENTES (Sem usar barra de pesquisa)
+        console.log(`[TESTE COM PONTO] Entrando no Mapa de Clientes...`);
         await pageIgreen.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
         await new Promise(r => setTimeout(r, 8000));
         await pageIgreen.evaluate(() => { document.body.style.zoom = "0.3"; }); 
 
-        // Rola tudo para a direita para deixar visível a coluna do Licenciado (Coluna 17)
+        // Rola para a direita para expor a coluna do Licenciado
         await pageIgreen.evaluate(() => { 
             const s = document.querySelector('.MuiDataGrid-virtualScroller'); 
             if(s) { s.scrollLeft = 9999; s.dispatchEvent(new Event('scroll')); } 
@@ -109,7 +110,7 @@ async function varreduraIgreenDiaria() {
 
         let todosClientes = new Map();
 
-        console.log(`[TESTE DE OURO DO MESTRE] Descendo a lista e capturando o Código de Licenciado de cada linha...`);
+        console.log(`[TESTE COM PONTO] Descendo a tabela... Procurando linhas que tenham o Licenciado "77.044"...`);
         
         for (let pos = 0; pos <= 40000; pos += 500) {
             await pageIgreen.evaluate((p) => { 
@@ -141,33 +142,23 @@ async function varreduraIgreenDiaria() {
                     let textoTotal = row.textContent;
                     let cpf = textoTotal.match(/\d{3}\.\d{3}\.\d{3}-\d{2}/)?.[0]?.replace(/\D/g, '');
                     
-                    let nasc = null;
-                    const todasDatas = textoTotal.match(/\d{2}\/\d{2}\/\d{4}/g);
-                    if (todasDatas && todasDatas.length > 0) {
-                        let menorAno = 9999; for (let d of todasDatas) { let ano = parseInt(d.split('/')[2], 10); if (ano < menorAno) { menorAno = ano; nasc = d; } } if (menorAno > 2015) nasc = null;
-                    }
-
                     let codigo = mapaColunas.codigo ? row.querySelector(`[data-field="${mapaColunas.codigo}"]`)?.textContent?.trim() : "";
                     let nome = mapaColunas.nome ? row.querySelector(`[data-field="${mapaColunas.nome}"]`)?.textContent?.trim() : "";
                     let tel = mapaColunas.celular ? row.querySelector(`[data-field="${mapaColunas.celular}"]`)?.textContent?.trim() : "";
                     let uc = mapaColunas.instalacao ? row.querySelector(`[data-field="${mapaColunas.instalacao}"]`)?.textContent?.trim() : "";
                     let dist = mapaColunas.distribuidora ? row.querySelector(`[data-field="${mapaColunas.distribuidora}"]`)?.textContent?.trim() : "";
+                    
+                    // Pegando o dono bruto EXATAMENTE como está na tela da iGreen (Com ponto e tudo)
                     let dono_bruto = mapaColunas.dono_rede ? row.querySelector(`[data-field="${mapaColunas.dono_rede}"]`)?.textContent?.trim() : "";
                     
                     if (tel) tel = tel.replace(/[^\d()-\s]/g, '').trim();
                     if (uc) uc = uc.replace(/\D/g, '').trim();
                     
-                    let dono_rede = "";
-                    if(dono_bruto) {
-                        const dono_match = dono_bruto.replace(/\./g, '').match(/\b\d{4,6}\b/);
-                        if (dono_match) dono_rede = dono_match[0];
-                    }
-
                     let uniqueKey = codigo || uc || cpf;
                     
-                    // 🔥 FILTRO EXCLUSIVO DO TESTE: Só guarda se for o Licenciado 77044
-                    if (uniqueKey && dono_rede === '77044') { 
-                        m[uniqueKey] = { cpf, nasc, codigo, nome, tel, uc, dist, dono_rede };
+                    // 🔥 A INSTRUÇÃO DO MESTRE: Exige que o texto na tela tenha o "77.044" com o ponto!
+                    if (uniqueKey && dono_bruto && dono_bruto.includes('77.044')) { 
+                        m[uniqueKey] = { cpf, codigo, nome, tel, uc, dist, dono_rede: '77.044' };
                     }
                 });
                 return m;
@@ -179,9 +170,8 @@ async function varreduraIgreenDiaria() {
                 todosClientes.set(uniqueKey, {
                     CODIGO_CLIENTE: extraido.codigo || existente.CODIGO_CLIENTE || "", 
                     NOME_CLIENTE: extraido.nome || existente.NOME_CLIENTE || "", 
-                    CPF: extraido.cpf, DATA_NASCIMENTO: extraido.nasc || existente.DATA_NASCIMENTO || "", 
-                    TELEFONE: extraido.tel || existente.TELEFONE || "", UC: extraido.uc || existente.UC || "", 
-                    DISTRIBUIDORA: extraido.dist || existente.DISTRIBUIDORA || "",
+                    CPF: extraido.cpf, TELEFONE: extraido.tel || existente.TELEFONE || "", 
+                    UC: extraido.uc || existente.UC || "", DISTRIBUIDORA: extraido.dist || existente.DISTRIBUIDORA || "",
                     DONO_REDE: extraido.dono_rede || existente.DONO_REDE || ""
                 });
             }
@@ -189,8 +179,9 @@ async function varreduraIgreenDiaria() {
 
         const arrayClientes = Array.from(todosClientes.values());
         
-        console.log(`[TESTE DE OURO DO MESTRE] Opa! Terminou. ${arrayClientes.length} propriedades encontradas exclusivamente para a equipe 77044.`);
+        console.log(`[TESTE COM PONTO] Opa! Terminou. A leitura visual encontrou ${arrayClientes.length} propriedades exatas com o Licenciado 77.044.`);
         
+        // Envia para o banco de dados
         for (let cli of arrayClientes) {
             let finalId = cli.CODIGO_CLIENTE || cli.UC || cli.CPF;
             let dbData = {};
@@ -205,16 +196,13 @@ async function varreduraIgreenDiaria() {
             }
 
             const payload = { NOME_CLIENTE: cli.NOME_CLIENTE, CPF: cli.CPF };
-            if (cli.CODIGO_CLIENTE && cli.CODIGO_CLIENTE !== "76.049" && cli.CODIGO_CLIENTE !== "76049") { 
-                payload.CODIGO_CLIENTE = cli.CODIGO_CLIENTE; 
-            }
-
-            if (cli.DATA_NASCIMENTO) payload.DATA_NASCIMENTO = cli.DATA_NASCIMENTO;
-            if (cli.TELEFONE && cli.TELEFONE.length >= 8 && (!dbData.TELEFONE || dbData.TELEFONE.length < 8)) payload.TELEFONE = cli.TELEFONE;
-            if (cli.UC && cli.UC.length >= 4 && (!dbData.UC || dbData.UC.length < 4)) payload.UC = cli.UC;
-            if (cli.DISTRIBUIDORA && cli.DISTRIBUIDORA.length > 2 && (!dbData.DISTRIBUIDORA || dbData.DISTRIBUIDORA.length < 2)) payload.DISTRIBUIDORA = cli.DISTRIBUIDORA;
+            if (cli.CODIGO_CLIENTE) payload.CODIGO_CLIENTE = cli.CODIGO_CLIENTE; 
+            if (cli.TELEFONE && cli.TELEFONE.length >= 8) payload.TELEFONE = cli.TELEFONE;
+            if (cli.UC && cli.UC.length >= 4) payload.UC = cli.UC;
+            if (cli.DISTRIBUIDORA && cli.DISTRIBUIDORA.length > 2) payload.DISTRIBUIDORA = cli.DISTRIBUIDORA;
             
-            payload.DONO_REDE = cli.DONO_REDE;
+            // Salvamos no banco como 77044 (sem ponto) para que o Dashboard consiga ler corretamente
+            payload.DONO_REDE = '77044'; 
 
             if (dbData.STATUS_CADASTRO === 'INATIVO') { payload.STATUS_CADASTRO = "ATUALIZADO"; }
             else if (!dbData.STATUS_CADASTRO) { payload.STATUS_CADASTRO = "NOVO"; }
@@ -222,7 +210,7 @@ async function varreduraIgreenDiaria() {
             await salvarNoBanco(finalId, "SISTEMA_VARREDURA", payload);
         }
 
-        console.log(`[TESTE DE OURO DO MESTRE] ✅ Teste Concluído!\n`);
+        console.log(`[TESTE COM PONTO] ✅ Teste concluído com sucesso e gravado no Banco de Dados!\n`);
     } catch (e) { console.error("Erro Varredura:", e.message); } finally { if (browserIgreen) await browserIgreen.close(); }
 }
 
