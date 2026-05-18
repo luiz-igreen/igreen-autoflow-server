@@ -75,20 +75,31 @@ async function salvarNoBanco(docId, phone, dadosExtras) {
     }
 }
 
-// 🔥 MOTOR BLINDADO DA SUA DICA: ZERA BARRA DE PESQUISA, LÊ SÓ A COLUNA 17
+async function analisarFaturaGemini(mediaUrl, mimeType) {
+    try {
+        const response = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
+        if (!response.data || response.data.length === 0) throw new Error("Ficheiro vazio.");
+        const base64Data = Buffer.from(response.data, 'binary').toString('base64');
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+        const promptText = `Extraia os dados desta fatura de energia em formato JSON. Chaves: "NOME_CLIENTE", "CPF", "MASCARA_CPF", "DATA_NASCIMENTO", "UC", "CONTA_MES", "VENCIMENTO", "VALOR_FATURA", "CEP", "ENDERECO", "ENDERECO_NUMERO", "ENDERECO_COMPLEMENTO", "ESTADO", "DISTRIBUIDORA", "MEDIA_CONSUMO". Retorne string vazia se não encontrar.`;
+        const payload = { contents: [{ parts: [ { text: promptText }, { inline_data: { mime_type: mimeType === 'application/pdf' ? 'application/pdf' : 'image/jpeg', data: base64Data } } ] }], generationConfig: { responseMimeType: "application/json" } };
+        const result = await axios.post(geminiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
+        return JSON.parse(result.data.candidates[0].content.parts[0].text);
+    } catch (error) { throw new Error("Falha ao ler fatura."); }
+}
+
+// 🔥 NOVO MOTOR BLINDADO: VARREDURA DA COLUNA 17 SEM BARRA DE PESQUISA
 async function varreduraIgreenDiaria() {
     let browserIgreen = null;
     try {
-        // 👇 A MENSAGEM QUE PROVA QUE O CÓDIGO ATUALIZOU 👇
         console.log(`\n[VARREDURA DO MESTRE] 🕵️ Ignorando barra de pesquisa e lendo a Coluna 17...`);
-        
         if (!IGREEN_USER || !IGREEN_PASS) { console.log("❌ ERRO: Faltam as senhas na Railway!"); return; }
 
         browserIgreen = await puppeteer.launch({ headless: true, args: CHROME_ARGS, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath() });
         const pageIgreen = await browserIgreen.newPage(); 
         await pageIgreen.setViewport({ width: 1920, height: 1080 });
         
-        // Faz o login
+        // Login inicial
         await pageIgreen.goto(IGREEN_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
         try { await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent.includes('Começar')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 2000)); } catch(e){}
         
@@ -98,13 +109,13 @@ async function varreduraIgreenDiaria() {
         await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.toLowerCase().includes('entrar')); if (btn) btn.click(); });
         await new Promise(r => setTimeout(r, 8000));
 
-        // Vai direto e APENAS para o Mapa de Clientes
+        // Vai direto para a tabela de clientes global
         console.log(`[VARREDURA DO MESTRE] Entrando no Mapa de Clientes...`);
         await pageIgreen.goto(IGREEN_MAPA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
         await new Promise(r => setTimeout(r, 8000));
         await pageIgreen.evaluate(() => { document.body.style.zoom = "0.3"; }); 
 
-        // Passo OBRIGATÓRIO: Rola a tabela toda para a DIREITA para enxergar a coluna 17
+        // Rola tudo para a direita para deixar visível a coluna do Licenciado (Coluna 17)
         await pageIgreen.evaluate(() => { 
             const s = document.querySelector('.MuiDataGrid-virtualScroller'); 
             if(s) { s.scrollLeft = 9999; s.dispatchEvent(new Event('scroll')); } 
@@ -235,7 +246,6 @@ async function varreduraIgreenDiaria() {
     } catch (e) { console.error("Erro Varredura:", e.message); } finally { if (browserIgreen) await browserIgreen.close(); }
 }
 
-// RESTANTE DO MOTOR INTACTO...
 async function fluxoProcessamentoUniversal(mediaUrl, mimeType, phone, cpfAlvo = null) {
     const localPath = path.join('/tmp', `fatura_universal_${Date.now()}.pdf`);
     let browserIgreen = null;
@@ -262,7 +272,7 @@ async function fluxoProcessamentoUniversal(mediaUrl, mimeType, phone, cpfAlvo = 
         let searchInput = await pageIgreen.waitForSelector('input[placeholder*="Buscar"]', { timeout: 15000 });
         await searchInput.click({ clickCount: 3 }); await pageIgreen.keyboard.press('Backspace'); await searchInput.type(cpfFinal, { delay: 100 }); await pageIgreen.keyboard.press('Enter'); await new Promise(r => setTimeout(r, 4000));
         await pageIgreen.evaluate(() => { const scrollers = document.querySelectorAll('.MuiDataGrid-virtualScroller'); scrollers.forEach(s => s.scrollLeft = 9999); }); await new Promise(r => setTimeout(r, 1500));
-        const clicouPontinhos = await pageIgreen.evaluate((cpfBusca) => { const linhas = Array.from(document.querySelectorAll('tr, [role="row"], div[class*="MuiDataGrid-row"]')); const inline = linhas.find(row => row.textContent.replace(/\D/g, '').includes(cpfBusca)); if(inline) { const btnTresPontinhos = Array.from(inline.querySelectorAll('button, div')).find(el => el.textContent.trim() === '...'); if(btnTresPontinhos) { btnTresPontinhos.click(); return true; } } return false; }, cpfFinal);
+        const clicouPontinhos = await pageIgreen.evaluate((cpfBusca) => { const linhas = Array.from(document.querySelectorAll('tr, [role="row"], div[class*="MuiDataGrid-row"]')); const linhaExata = linhas.find(row => row.textContent.replace(/\D/g, '').includes(cpfBusca)); if(linhaExata) { const btnTresPontinhos = Array.from(linhaExata.querySelectorAll('button, div')).find(el => el.textContent.trim() === '...'); if(btnTresPontinhos) { btnTresPontinhos.click(); return true; } } return false; }, cpfFinal);
         if (!clicouPontinhos) throw new Error("CLIENTE_NAO_ENCONTRADO_MAPA");
         await new Promise(r => setTimeout(r, 2000)); await pageIgreen.evaluate(() => { const btn = Array.from(document.querySelectorAll('span, li, div')).find(el => el.textContent.includes('Devolutivas')); if(btn) btn.click(); }); await new Promise(r => setTimeout(r, 3000));
         for (let clique = 0; clique < 3; clique++) { await pageIgreen.evaluate(() => { const botoesAcao = Array.from(document.querySelectorAll('button, span, a, div')).filter(el => el.textContent.trim() === 'Realizar ação' || el.textContent.includes('Realizar ação')); const btn = botoesAcao.filter(b => b.offsetParent !== null).pop() || botoesAcao[botoesAcao.length - 1]; if(btn) { btn.scrollIntoView({behavior: 'smooth', block: 'center'}); btn.click(); } }); await new Promise(r => setTimeout(r, 3000)); }
@@ -422,7 +432,7 @@ app.post('/webhook/igreen', async (req, res) => {
     }
 });
 
-app.get('/tela-robo', (req, res) => { const file = path.join('/tmp', `debug_tela.png'); if (fs.existsSync(file)) { res.contentType('image/png'); res.sendFile(path.resolve(file)); } else { res.status(404).send('Sem imagem'); } });
+app.get('/tela-robo', (req, res) => { const file = path.join('/tmp', `debug_tela.png`); if (fs.existsSync(file)) { res.contentType('image/png'); res.sendFile(path.resolve(file)); } else { res.status(404).send('Sem imagem'); } });
 app.get('/ultima-fatura', (req, res) => { const file = path.join('/tmp', 'ultima_fatura.pdf'); if (fs.existsSync(file)) { res.contentType('application/pdf'); res.sendFile(path.resolve(file)); } else { res.status(404).send('Sem fatura'); } });
 
 const PORT = process.env.PORT || 10000;
@@ -437,4 +447,4 @@ async function validateBrowser() {
 app.get('/', (req, res) => res.status(200).send('Sistema iGreen Online e Blindado!'));
 validateBrowser().then(() => { app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Porta ${PORT}`)); });
 
-// --- FIM DO CÓDIGO ---
+// --- FIM DO CÓDIGO ---    
